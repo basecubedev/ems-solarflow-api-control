@@ -18,7 +18,9 @@ import {
   fieldMatches,
   levelled,
   liveEdits,
-  overrideTargets,
+  installedDevices,
+  withFreshOperating,
+  operatingValue,
   restartNeeded,
   sameAsSaved,
   safetyBlocks,
@@ -167,22 +169,16 @@ test("every previewed change is shown, grouped by whether it needs a restart", (
   assert.deepEqual(changeGroups(null), []);
 });
 
-test("only the dashboard's overrides are reset, a device by its opaque identity", () => {
-  const targets = overrideTargets({
-    "system.max_total_power": { source: "dashboard_override" },
-    "winter.enabled": { source: "dashboard_override" },
-    "system.enabled": { source: "config" },
-    devices: {
-      INV_1: { enabled: { source: "dashboard_override", physical_identity_token: "opaque:v1:abc" }, max_power: { source: "config" } },
-      INV_2: { enabled: { source: "dashboard_override", physical_identity_token: "raw-serial" } },
-    },
-  });
-  assert.deepEqual(targets, [
-    { scope: "system", key: "max_total_power" },
-    { scope: "section", section: "winter", key: "enabled" },
-    { scope: "device", name: "INV_1", key: "enabled", physical_identity_token: "opaque:v1:abc" },
-    { scope: "device", name: "INV_2", key: "enabled" },
-  ]);
+test("the operating value below a limit is read from the answer, a device's by its name", () => {
+  const operating = { "system.max_total_power": 900, devices: { WR1: { max_power: 500, control: false }, WR2: { max_power: null, control: true } } };
+  assert.equal(operatingValue(operating, "system.max_total_power"), 900);
+  assert.equal(operatingValue(operating, "system.loop_interval"), null);
+  assert.equal(operatingValue(operating, "max_power", "WR1"), 500);
+  assert.equal(operatingValue(operating, "control", "WR1"), false);
+  assert.equal(operatingValue(operating, "max_power", "WR2"), null);
+  assert.equal(operatingValue(operating, "max_power", "WR9"), null);
+  assert.equal(operatingValue(null, "system.max_total_power"), null);
+  assert.equal(operatingValue({ devices: { WR1: { max_power: 500 } } }, "max_power"), null);
 });
 
 test("the search finds a field by label, description or path, ignoring case", () => {
@@ -269,6 +265,47 @@ test("a change written at once is built on the config as it is now and applied w
   assert.deepEqual(sent[1][1].draft.devices.map((device) => device.name), ["INV_1", "Balkon"]);
   assert.deepEqual(sent[1][1].draft.features, { "winter.enabled": true });
   assert.deepEqual([sent[1][1].revision, sent[1][1].confirm, sent[1][1].backup], ["r2", true, true]);
+});
+
+test("a reviewed draft is saved only once the config has been read back", async () => {
+  const { applyAndRead } = await import("../src/lib/settings.js");
+  let release;
+  const read = new Promise((resolve) => (release = resolve));
+  const steps = [];
+  const answer = applyAndRead(
+    async () => {
+      steps.push("apply");
+      return { ok: true, backup: "b1" };
+    },
+    () => {
+      steps.push("reload");
+      return read;
+    },
+  ).then((outcome) => {
+    steps.push("answer");
+    return outcome;
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(steps, ["apply", "reload"]);
+  release();
+  const outcome = await answer;
+  assert.deepEqual(steps, ["apply", "reload", "answer"]);
+  assert.deepEqual(outcome.applied.result, { ok: true, backup: "b1" });
+  assert.equal(typeof outcome.applied.at, "number");
+  assert.equal(outcome.error, undefined);
+});
+
+test("a refused or failed apply still reads the config back, and a failed read hides no save", async () => {
+  const { applyAndRead } = await import("../src/lib/settings.js");
+  const reads = [];
+  const reload = async () => reads.push("reload");
+  const refusal = { ok: false, error: "config_changed" };
+  assert.deepEqual(await applyAndRead(async () => refusal, reload), { error: refusal });
+  const failure = new Error("offline");
+  assert.deepEqual(await applyAndRead(async () => Promise.reject(failure), reload), { error: failure });
+  assert.equal(reads.length, 2);
+  const saved = await applyAndRead(async () => ({ ok: true }), async () => Promise.reject(new Error("read failed")));
+  assert.deepEqual(saved.applied.result, { ok: true });
 });
 
 test("a change written at once is refused when the config moved on, and nothing is applied", async () => {
@@ -403,7 +440,6 @@ test("the departures list every saved value and live override away from its defa
       { path: "devices[].winter_policy", type: "select", level: "advanced", options: ["auto", "off"], default: "auto" },
     ] }],
   };
-  const live = (effective, config) => ({ source: "dashboard_override", effective_value: effective, config_value: config });
   const config = {
     catalog,
     draft: {
@@ -423,36 +459,28 @@ test("the departures list every saved value and live override away from its defa
         { original_name: "WR3", name: "WR3", min_soc: 15 },
       ],
     },
-    overrides: {
-      "system.deadband": live(2, 10),
-      "system.min_output_limit": live(50, 35),
-      "winter.months": { source: "config", effective_value: "11,12", config_value: "11,12" },
-      devices: { WR2: { min_soc: live(25, 15) }, WR3: { min_soc: live(15, 15) } },
-    },
   };
-  const shown = departures(config).map((group) => [group.id, group.rows.map((row) => [row.field.path, row.value, row.live?.effective_value, row.standard, row.tab, row.search])]);
+  const shown = departures(config).map((group) => [group.id, group.rows.map((row) => [row.field.path, row.value, row.standard, row.tab, row.search])]);
   assert.deepEqual(shown, [
     ["section:system", [
-      ["system.allow_hardware_writes", false, undefined, true, "safety", "system.allow_hardware_writes"],
-      ["system.deadband", 10, 2, 2, "expert", "system.deadband"],
-      ["system.min_output_limit", undefined, 50, 35, "safety", "system.min_output_limit"],
+      ["system.allow_hardware_writes", false, true, "safety", "system.allow_hardware_writes"],
+      ["system.deadband", 10, 2, "expert", "system.deadband"],
     ]],
-    ["section:winter", [["winter.enabled", true, undefined, false, "features", ""]]],
-    ["section:battery_care", [["battery_care.points", 5, undefined, 3, "features", "battery_care.points"]]],
-    ["device:0", [["devices[].min_soc", 20, undefined, 15, "devices", ""]]],
-    ["device:1", [["devices[].min_soc", undefined, 25, 15, "devices", ""]]],
+    ["section:winter", [["winter.enabled", true, false, "features", ""]]],
+    ["section:battery_care", [["battery_care.points", 5, 3, "features", "battery_care.points"]]],
+    ["device:0", [["devices[].min_soc", 20, 15, "devices", ""]]],
   ]);
   assert.equal(departures(config)[3].device.name, "WR1");
 });
 
 test("a config at its defaults, or one that holds nothing, departs from none", () => {
-  const atDefaults = { catalog: { feature_sections: [system, winter] }, draft: { features: { "system.allow_hardware_writes": true, "winter.enabled": false, "winter.months": "1, 11, 12" }, devices: [] }, overrides: {} };
+  const atDefaults = { catalog: { feature_sections: [system, winter] }, draft: { features: { "system.allow_hardware_writes": true, "winter.enabled": false, "winter.months": "1, 11, 12" }, devices: [] } };
   assert.deepEqual(departures(atDefaults), []);
   assert.deepEqual(departures({ catalog: { feature_sections: [system, winter] }, draft: { features: {} } }), []);
   assert.deepEqual(departures(null), []);
 });
 
-test("a connection the catalogue marks is never a departure, saved or running", () => {
+test("a connection the catalogue marks is never a departure", () => {
   const dashboard = {
     id: "dashboard",
     path: "dashboard",
@@ -467,7 +495,6 @@ test("a connection the catalogue marks is never a departure, saved or running", 
   const config = {
     catalog,
     draft: { features: { "dashboard.port": 8081, "dashboard.history_hours": 72 }, devices: [{ original_name: "WR1", name: "WR1", min_soc: 15, port: 8080 }] },
-    overrides: { "dashboard.port": { source: "dashboard_override", effective_value: 9090, config_value: 8081 } },
   };
   const shown = departures(config).map((group) => [group.id, group.rows.map((row) => row.field.path)]);
   assert.deepEqual(shown, [["section:dashboard", ["dashboard.history_hours"]]]);
@@ -490,19 +517,17 @@ test("a device's departures name its card, and only a card that holds the tuning
       { path: "devices[].legacy", type: "number", level: "deprecated", default: 1 },
     ] }],
   };
-  const live = (effective, source = "dashboard_override") => ({ source, effective_value: effective, config_value: 15 });
   const config = {
     catalog,
     draft: {
       features: { "winter.enabled": true },
       devices: [
         { original_name: "Hyper", name: "Hyper", kind: "zendure_mqtt", min_soc: 30, legacy: 4 },
-        { original_name: "Piko", name: "Piko", kind: "external_mqtt" },
-        { original_name: "DTU", name: "DTU", kind: "opendtu_http" },
+        { original_name: "Piko", name: "Piko", kind: "external_mqtt", min_soc: 40 },
+        { original_name: "DTU", name: "DTU", kind: "opendtu_http", min_soc: 40 },
         { original_name: "WR", name: "WR" },
       ],
     },
-    overrides: { devices: { Piko: { min_soc: live(40) }, DTU: { min_soc: live(40) }, WR: { min_soc: live(40, "config") } } },
   };
   const groups = departures(config);
   assert.deepEqual(groups.map((group) => [group.id, group.rows.map((row) => [row.field.path, row.device, row.section, row.search])]), [
@@ -514,4 +539,23 @@ test("a device's departures name its card, and only a card that holds the tuning
   assert.equal(departureMatches(groups[1], groups[1].rows[0], "min_soc"), true);
   assert.equal(departureMatches(groups[0], groups[0].rows[0], "hyp"), false);
   assert.equal(departureMatches(groups[0], groups[0].rows[0], ""), true);
+});
+
+test("a device's operating values are no sign that the saved config changed", () => {
+  const before = [{ name: "WR1", max_power: 800, pv_priority_factor: 1.0, operating_base: { pv_priority_factor: 1.0 } }, { name: "New" }];
+  const after = [{ name: "WR1", max_power: 800, pv_priority_factor: 2.0, operating_base: { pv_priority_factor: 2.0 } }, { name: "New" }];
+  assert.deepEqual(installedDevices(before), installedDevices(after));
+  assert.deepEqual(installedDevices(before), [{ name: "WR1", max_power: 800 }, { name: "New" }]);
+  assert.notDeepEqual(installedDevices([{ ...before[0], max_power: 600 }]), installedDevices([before[0]]));
+  assert.equal(installedDevices(null), null);
+});
+
+test("stored device edits show what the EMS runs now and keep what was changed here", () => {
+  const stored = [{ original_name: "WR1", name: "WR1", ip: "10.0.0.9", pv_priority_factor: 1.0, ac_discharge_enabled: true, operating_base: { pv_priority_factor: 1.0, ac_discharge_enabled: false } }];
+  const loaded = [{ original_name: "WR1", name: "WR1", ip: "10.0.0.5", pv_priority_factor: 2.0, ac_discharge_enabled: false, operating_base: { pv_priority_factor: 2.0, ac_discharge_enabled: false } }];
+  assert.deepEqual(withFreshOperating(stored, loaded), [
+    { original_name: "WR1", name: "WR1", ip: "10.0.0.9", pv_priority_factor: 2.0, ac_discharge_enabled: true, operating_base: { pv_priority_factor: 2.0, ac_discharge_enabled: false } },
+  ]);
+  assert.deepEqual(withFreshOperating([{ name: "New" }], loaded), [{ name: "New" }]);
+  assert.equal(withFreshOperating(null, loaded), null);
 });

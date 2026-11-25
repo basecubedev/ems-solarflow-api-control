@@ -78,6 +78,14 @@ SECTION_FIELDS = {
     },
 }
 
+CAP_PAIRED_SYSTEM_KEYS = frozenset({"max_total_power"})
+INSTALLATION_DEVICE_KEYS = frozenset({"enabled", "max_power"})
+OPERATION_SETTING_PATHS = frozenset(
+    {f"system.{key}" for key in SYSTEM_FIELDS if key not in CAP_PAIRED_SYSTEM_KEYS}
+    | {f"{section}.{key}" for section, fields in SECTION_FIELDS.items() for key in fields}
+)
+OPERATION_DEVICE_KEYS = frozenset(key for key in DEVICE_FIELDS if key not in INSTALLATION_DEVICE_KEYS)
+
 
 class RuntimeWriteError(ValueError):
     pass

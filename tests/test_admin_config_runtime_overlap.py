@@ -278,25 +278,25 @@ def test_every_overlap_key_defaults_to_what_the_ems_applies(tmp_path, system):
         DEVICE_FIELDS,
         SECTION_FIELDS,
         SYSTEM_FIELDS,
-        config_effective_value,
     )
 
     config = _config_silent_on_every_overlap_key(**system)
     seeded = _runtime_the_ems_seeds(tmp_path, config)
 
+    shown = compute_overlap_provenance(config, {})
     differing = []
     for key in SYSTEM_FIELDS:
-        admin = config_effective_value(config, "system", None, key)
+        admin = shown["system." + key]["config_value"]
         if admin != seeded["system"].get(key):
             differing.append(("system." + key, admin, seeded["system"].get(key)))
     for section, fields in SECTION_FIELDS.items():
         for key in fields:
-            admin = config_effective_value(config, "section", section, key)
+            admin = shown[section + "." + key]["config_value"]
             ems = seeded.get(section, {}).get(key)
             if admin != ems:
                 differing.append((section + "." + key, admin, ems))
     for key in DEVICE_FIELDS:
-        admin = config_effective_value(config, "device", "WR1", key)
+        admin = shown["devices"]["WR1"][key]["config_value"]
         ems = seeded["devices"]["WR1"].get(key)
         if admin != ems:
             differing.append(("devices[]." + key, admin, ems))
@@ -320,8 +320,6 @@ def test_every_overlap_key_defaults_to_what_the_ems_applies(tmp_path, system):
 def test_a_grid_target_shows_as_the_ems_reads_it(key):
     """A hand-entered 250 W is out of range, and the EMS aims for 0 W; the Admin must not show 250 as in effect."""
 
-    from admin.config_runtime_overlap import config_effective_value
-
     config = _config()
     config["system"][key] = 250
     prov = compute_overlap_provenance(config, {"system": {key: -10}})
@@ -330,4 +328,3 @@ def test_a_grid_target_shows_as_the_ems_reads_it(key):
     assert prov[f"system.{key}"]["config_value"] == 0
     assert prov[f"system.{key}"]["effective_value"] == -10
     assert stale[f"system.{key}"]["effective_value"] == 0
-    assert config_effective_value(config, "system", None, key) == 0

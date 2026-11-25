@@ -118,11 +118,11 @@ test("the menu marks the assistant amber while EMS is not installed, quietly whi
 });
 
 test("the device counts are the ones the config summary sends", () => {
-  const summary = CONFIG_SERVER.match(/def _summary\(config, draft\):[\s\S]*?\n\n\n/);
+  const summary = CONFIG_SERVER.match(/def _summary\(config, draft, runtime_enabled=None\):[\s\S]*?\n\n\n/);
   assert.ok(summary, "admin/maintenance_config.py _summary is not found");
   assert.match(summary[0], /"device_count": len\(controlled\)/);
   assert.match(summary[0], /"dashboard_enabled": /);
-  assert.match(summary[0], /"control": _control_state\(config\)/);
+  assert.match(summary[0], /"control": _control_state\(config, runtime_enabled\)/);
   assert.match(CONFIG_SERVER, /"placeholder_fields": /);
 });
 

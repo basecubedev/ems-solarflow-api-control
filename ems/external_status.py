@@ -106,6 +106,47 @@ _TRUSTED_IDENTITY_KEYS = frozenset(
 )
 
 
+def configured_device_names(context: Any) -> list[str]:
+    """The device names a config, or a set of redaction contexts, gives, in order."""
+
+    names: list[str] = []
+
+    def visit(node: Any) -> None:
+        if isinstance(node, Mapping):
+            devices = node.get("devices")
+            if isinstance(devices, list):
+                for device in devices:
+                    name = device.get("name") if isinstance(device, Mapping) else None
+                    if isinstance(name, str) and name and name not in names:
+                        names.append(name)
+            for child in node.values():
+                visit(child)
+        elif isinstance(node, list):
+            for child in node:
+                visit(child)
+
+    visit(context)
+    return names
+
+
+def _names_a_trusted_device(match: re.Match[str], trusted_device_names: frozenset[str]) -> bool:
+    """Whether a ``device=`` label's whole value is a configured device's name."""
+
+    if re.match(r"[A-Za-z_]+", match.group("label")).group(0).casefold() != "device":
+        return False
+    text = match.string
+    start = match.start("value")
+    for name in trusted_device_names:
+        end = start + len(name)
+        if (
+            text.startswith(name, start)
+            and end >= match.end("value")
+            and (end == len(text) or not (text[end].isalnum() or text[end] in "_-.:"))
+        ):
+            return True
+    return False
+
+
 def mask_route_identifier(value: Any) -> Any:
     """Mask an account-scoped identifier while retaining a short display hint."""
 
@@ -513,6 +554,7 @@ def mask_external_mqtt_string(
     *,
     sensitive_values: frozenset[str] = frozenset(),
     cloud_scoped: bool = False,
+    trusted_device_names: frozenset[str] = frozenset(),
 ) -> str:
     """Mask known cloud identifiers and, in Cloud scope, cloud topic routes.
 
@@ -551,7 +593,9 @@ def mask_external_mqtt_string(
     )
     safe = _EMBEDDED_ROUTE_LABEL.sub(
         lambda match: (
-            f"{match.group('label')}{match.group('quote')}"
+            match.group(0)
+            if _names_a_trusted_device(match, trusted_device_names)
+            else f"{match.group('label')}{match.group('quote')}"
             f"{mask_route_identifier(match.group('value'))}{match.group('quote')}"
         ),
         safe,
@@ -620,11 +664,16 @@ def sanitize_external_mqtt_status(
                 )
         return safe
 
+    trusted_device_names = frozenset(
+        name for name in configured_device_names(sensitive_context) if name not in credential_values
+    )
+
     def safe_string(raw: str, *, cloud_scoped: bool = False) -> str:
         return mask_external_mqtt_string(
             redact_credentials(raw),
             sensitive_values=frozenset(sensitive_values),
             cloud_scoped=cloud_scoped,
+            trusted_device_names=trusted_device_names,
         )
 
     def safe_mapping_key(raw: str, *, cloud_scoped: bool = False) -> str:
@@ -632,6 +681,7 @@ def sanitize_external_mqtt_status(
             redact_credentials(raw, mapping_key=True),
             sensitive_values=frozenset(sensitive_values),
             cloud_scoped=cloud_scoped,
+            trusted_device_names=trusted_device_names,
         )
 
     def scrub(node: Any, *, cloud: bool = False, key: str = "") -> Any:
@@ -689,6 +739,7 @@ def sanitize_external_mqtt_status(
 
 
 __all__ = [
+    "configured_device_names",
     "mask_external_mqtt_string",
     "mask_mqtt_topic",
     "mask_route_identifier",

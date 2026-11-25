@@ -163,8 +163,9 @@ Full `emsctl.py` reference: [cli.md](../cli.md).
 `config.json` contains static installation and safety settings.
 
 The configured runtime-state file, `data/runtime-state.json` in new generated
-configs, contains temporary runtime/operator values and can override some
-defaults from `config.json` after the first start.
+configs, holds the operating settings, the values an operator changes while
+the EMS runs; once a live start has moved them, `config.json` no longer holds
+them.
 
 Important runtime fields:
 
@@ -228,14 +229,19 @@ changing group membership.
 
 ### Reset runtime state
 
-```bash
-rm data/runtime-state.json
-```
+`data/runtime-state.json` is the only place the operating settings live: control
+on or off, the loop interval, the grid targets, winter mode, AC charging and
+battery care, and each device's PV priority and AC charging and discharging
+permissions ([runtime-state.md](runtime-state.md)). Deleting it does not reset
+them to your saved settings: the EMS recreates it with the built-in defaults,
+so control comes back on and every device may discharge again. Change a value
+on the dashboard or in the Admin's **Settings & devices** instead, and restore
+a backup to go back to an earlier state. If you must remove the file, stop the
+EMS, keep a copy, and set every operating value again after the next start.
 
-Do this only while the EMS is stopped. On next start, EMS recreates the
-configured runtime-state file from `config.json` defaults. Older root-level
-`runtime-state.json` files from previous setups are no longer required after
-switching to `data/runtime-state.json` and may be removed manually.
+Older root-level `runtime-state.json` files from previous setups are no longer
+required after switching to `data/runtime-state.json` and may be removed
+manually.
 
 Relevant events:
 

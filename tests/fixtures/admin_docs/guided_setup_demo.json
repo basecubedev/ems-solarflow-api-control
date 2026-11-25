@@ -1229,7 +1229,7 @@
           {
             "path": "devices[].max_power",
             "label": "Device output limit",
-            "description": "Maximum output this inverter may provide.",
+            "description": "Maximum output this inverter may provide. Max power on the dashboard stops here; without a value of its own, the fallback device limit applies.",
             "type": "number",
             "level": "normal",
             "scope": "both",

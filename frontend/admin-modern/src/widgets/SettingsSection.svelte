@@ -6,8 +6,8 @@
   import SettingField from "./SettingField.svelte";
   import CatalogText from "./CatalogText.svelte";
   import { t, catalogText } from "../i18n/i18n.svelte.js";
-  import { AUTOMATIC_FEATURES, FEATURE_IDS, FEATURE_LOOKS, SECTION_LOOK, fieldMatches, levelled, liveOverride, sharedRisk, switchPath, switchedOn } from "../lib/settings.js";
-  import { settings, setValue } from "../state/settings.svelte.js";
+  import { AUTOMATIC_FEATURES, FEATURE_IDS, FEATURE_LOOKS, SECTION_LOOK, fieldMatches, levelled, sharedRisk, switchPath, switchedOn } from "../lib/settings.js";
+  import { settings, setValue, operatingLine } from "../state/settings.svelte.js";
 
   /** values and onset: another draft's feature values and its setter, as Guided Setup has them. */
   let { section, query = "", values: given = null, onset = null, startOpen = false } = $props();
@@ -15,7 +15,7 @@
   let toggled = $state(null);
   const open = $derived(toggled ?? startOpen);
   const values = $derived(given || settings.draft?.features || {});
-  const overrides = $derived(given ? null : settings.saved?.overrides);
+  const operating = $derived(given ? null : settings.saved?.operating);
   const set = (field, value) => (onset ? onset(field, value) : setValue(field, value));
   const own = $derived(switchPath(section));
   const on = $derived(switchedOn(section, values));
@@ -34,7 +34,7 @@
   {#if risk}<p class="note warn"><Icon name="triangle-alert" />{t(`settings.risk.${risk}.shared`)}</p>{/if}
   <div class="fields">
     {#each list as field (field.path)}
-      <SettingField {field} value={values[field.path]} live={liveOverride(overrides, field.path)} hideRisk={Boolean(risk)} type={field.secret ? "password" : ""} onchange={(value) => set(field, value)} />
+      <SettingField {field} value={values[field.path]} operating={operatingLine(operating, field.path)} hideRisk={Boolean(risk)} type={field.secret ? "password" : ""} onchange={(value) => set(field, value)} />
     {/each}
   </div>
 {/snippet}
@@ -61,7 +61,6 @@
       {:else if AUTOMATIC_FEATURES.includes(section.id)}
         <span title={t("settings.featureAutoHint")}><Status tone="c-acc" text={t("settings.featureAuto")} /></span>
       {/if}
-      {#if own && liveOverride(overrides, own)}<span class="badge live">{t("settings.overridden")}</span>{/if}
       <Icon name={expanded ? "chevron-up" : "chevron-down"} size="sm" />
     </button>
   </div>
@@ -93,6 +92,5 @@
   .body[hidden] { display: none; }
   .fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--s4) var(--s5); }
   .level summary { cursor: pointer; font-size: 13px; font-weight: 600; margin-bottom: var(--s3); }
-  .live { color: var(--m-accent); }
   @container content (max-width: 720px) { .fields { grid-template-columns: minmax(0, 1fr); } }
 </style>

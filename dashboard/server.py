@@ -347,39 +347,18 @@ def _without_catalogue_defaults(payload):
     return {**payload, "_limits": kept}
 
 
-def _external_context_device_names(context):
-    names = []
-
-    def visit(node):
-        if isinstance(node, dict):
-            devices = node.get("devices")
-            if isinstance(devices, list):
-                for device in devices:
-                    name = device.get("name") if isinstance(device, dict) else None
-                    if isinstance(name, str) and name and name not in names:
-                        names.append(name)
-            for child in node.values():
-                visit(child)
-        elif isinstance(node, list):
-            for child in node:
-                visit(child)
-
-    visit(context)
-    return names
-
-
 def _external_device_aliases(server, config_context=None, payload=None):
     """Return collision-free browser aliases for configured device names."""
 
     with _EXTERNAL_IDENTITY_LOCK:
-        from ems.external_status import sanitize_external_mqtt_status
+        from ems.external_status import configured_device_names, sanitize_external_mqtt_status
 
         context = (
             config_context
             if isinstance(config_context, dict)
             else _external_mqtt_config_context(server)
         )
-        trusted_names = _external_context_device_names(context)
+        trusted_names = configured_device_names(context)
         names = list(trusted_names)
         uncertain_names = set()
         forced_names = set()

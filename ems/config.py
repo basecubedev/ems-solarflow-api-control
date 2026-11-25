@@ -1005,7 +1005,7 @@ def default_safe_config():
             "max_device_power": 800,
             "deadband": 2,
             "runtime_state_path": "runtime-state.json",
-            "min_output_limit": 0,
+            "min_output_limit": 35,
             "grid_target_discharge_w": 0,
             "grid_target_charge_w": 0,
             "loop_interval": 5,
@@ -1846,9 +1846,9 @@ def build_config_upgrade_plan(
     if refresh_defaults and _template_defaults_revision(base_dir) >= DEFAULTS_REVISION:
         migrated_config, refreshed_defaults = refresh_config_defaults(migrated_config, template)
     upgraded = _merge_template_upgrade_view(
-        template,
+        without_operating_values(template),
         migrated_config,
-        device_defaults,
+        without_operating_values({"devices": [device_defaults]})["devices"][0],
     )
     upgraded["config_schema_version"] = latest_schema
 
@@ -2113,6 +2113,233 @@ def _refresh_startup_config_defaults(raw_config, path, base_dir, *, backup, back
     return written
 
 
+def normalize_startup_config_switches(raw_config, path, base_dir, *, backup, backup_factory, emit_message):
+    """The config with its spelled switches written as booleans, before EMS starts.
+
+    A switch spelled as text is written as the boolean the EMS already read
+    from it (``ems.spelled_switches``), behind the same backup as an
+    auto-upgrade, so the file shows what runs. With none, nothing is written.
+    Only once the old-defaults refresh has recorded its revision: it tells a
+    value set by hand from one left as shipped by its type too, so a text
+    switch rewritten before it ran would look left as shipped and be moved.
+    """
+
+    from ems.spelled_switches import normalize_spelled_switches
+
+    normalized, changes = normalize_spelled_switches(raw_config)
+    if not changes:
+        return raw_config
+    if not _config_writable(path):
+        emit_message(logging.INFO, "Switch rewrite skipped: config.json is not writable.")
+        return raw_config
+    try:
+        with open(path) as handle:
+            text = handle.read()
+        layout = _own_layout(text)
+        unchanged = _same_config(json.loads(text), raw_config)
+    except (OSError, ValueError) as exc:
+        emit_message(logging.WARNING, f"Switch rewrite skipped: {exc}")
+        return raw_config
+    if not unchanged:
+        emit_message(logging.INFO, "Switch rewrite skipped: config.json changed while the EMS started.")
+        return raw_config
+    written = _write_startup_config(
+        raw_config,
+        normalized,
+        path,
+        base_dir,
+        label="Switch rewrite",
+        layout=layout,
+        backup=backup,
+        backup_factory=backup_factory,
+        emit_message=emit_message,
+        unwritable_level=logging.INFO,
+        expected_text=text,
+    )
+    if written is None:
+        return raw_config
+    emit_message(
+        logging.WARNING,
+        "Config switches written as text were rewritten as the value EMS read from them:\n  "
+        + "\n  ".join(describe_refreshed_defaults(changes)),
+    )
+    return written
+
+
+def move_startup_operating_values(runtime_data, persist, *, path=None, base_dir=None, emit_message=None, loaded=True):
+    """Move the operating values still in ``config.json`` into the runtime state, once.
+
+    docs/developer/settings-operation-store.md: an operating value lives in
+    ``runtime-state.json`` only, except for a device the EMS does not build,
+    whose config entry keeps it. The starting EMS has filled ``runtime_data``
+    with every one, its runtime value where one was set, the config's as its
+    own readers took it otherwise; ``persist`` writes that to disk, and then
+    each value the runtime state holds for a built device leaves the config,
+    behind the same backup as an auto-upgrade. A value the file held
+    differently is named: at the first move as information, since the
+    dashboard's changes never reached the file before; after it as a warning,
+    since only a hand edit puts one there (``OPERATING_VALUES_MOVED_KEY`` in
+    the runtime state records the first move). Only at a live start that may
+    write the config (``START_MAY_MOVE_OPERATING_VALUES``), only when the
+    runtime state was read (``loaded``) and could be saved, and only while the
+    file is still what this start read. Answers the moved paths.
+    """
+
+    if not START_MAY_MOVE_OPERATING_VALUES:
+        return []
+    path = path or config_path()
+    base_dir = base_dir or BASE_DIR or os.getcwd()
+    emit_message = emit_message or _emit_startup_config_message
+    if not loaded:
+        emit_message(logging.WARNING, "Operating values move skipped: runtime-state.json could not be read.")
+        return []
+    try:
+        with open(path) as handle:
+            text = handle.read()
+        raw_config = json.loads(text)
+    except (OSError, ValueError) as exc:
+        emit_message(logging.WARNING, f"Operating values move skipped: {exc}")
+        return []
+    if not isinstance(raw_config, dict):
+        return []
+    if STARTED_RAW_CONFIG is not None and not _same_config(raw_config, STARTED_RAW_CONFIG):
+        emit_message(logging.INFO, "Operating values move skipped: config.json changed since the EMS read it.")
+        return []
+    remaining, moved, dropped = _without_operating_values(raw_config, runtime_data)
+    if not moved:
+        return []
+    if not _config_writable(path):
+        emit_message(logging.INFO, "Operating values move skipped: config.json is not writable.")
+        return []
+    try:
+        persist()
+    except OSError as exc:
+        emit_message(logging.WARNING, f"Operating values move skipped: runtime-state.json could not be written ({exc}).")
+        return []
+    upgrade_config = normalize_config_upgrade_config(raw_config.get("config_upgrade", {}))
+    written = _write_startup_config(
+        raw_config,
+        remaining,
+        path,
+        base_dir,
+        label="Operating values move",
+        layout=_own_layout(text),
+        backup=upgrade_config["backup_before_apply"],
+        backup_factory=None,
+        emit_message=emit_message,
+        unwritable_level=logging.INFO,
+        expected_text=text,
+    )
+    if written is None:
+        return []
+    emit_message(
+        logging.INFO,
+        "Operating values moved from config.json to runtime-state.json, where the "
+        "dashboard and the Admin change them:\n  " + "\n  ".join(moved),
+    )
+    if dropped:
+        emit_message(
+            logging.WARNING if runtime_data.get(OPERATING_VALUES_MOVED_KEY) else logging.INFO,
+            "Operating values in config.json differ from the ones the EMS runs; the running "
+            "values are kept, change them on the dashboard or in the Admin:\n  "
+            + "\n  ".join(f"{path}: config.json {before!r}, running {after!r}" for path, before, after in dropped),
+        )
+    if not runtime_data.get(OPERATING_VALUES_MOVED_KEY):
+        runtime_data[OPERATING_VALUES_MOVED_KEY] = True
+        try:
+            persist()
+        except OSError:
+            pass
+    return moved
+
+
+def without_operating_values(data):
+    """``data``, a config or the template, without any operating value.
+
+    The template still names them, as the starting values of a config written
+    by hand that the first live start moves; the config upgrade never adds one
+    back, and diagnose does not miss one.
+    """
+
+    from ems.runtime_commands import OPERATION_DEVICE_KEYS, OPERATION_SETTING_PATHS
+
+    stripped = copy.deepcopy(data)
+    if not isinstance(stripped, dict):
+        return stripped
+    for setting in OPERATION_SETTING_PATHS:
+        section, _, key = setting.partition(".")
+        block = stripped.get(section)
+        if isinstance(block, dict):
+            block.pop(key, None)
+    for device in stripped.get("devices") if isinstance(stripped.get("devices"), list) else []:
+        if isinstance(device, dict):
+            for key in OPERATION_DEVICE_KEYS:
+                device.pop(key, None)
+    return stripped
+
+
+def _without_operating_values(raw_config, runtime_data):
+    """``raw_config`` without the operating values the runtime state holds for it: ``(config, moved paths, dropped)``.
+
+    A device the EMS does not build keeps its own: it has no runtime entry.
+    A value the runtime state holds in a form the EMS cannot read stays in
+    the config too, since the EMS falls back to it.
+    ``dropped`` names each moved value the config held differently from the
+    runtime state, ``(path, config value, running value)``: the running one
+    is kept, so a value edited into the file by hand does not take effect.
+    """
+
+    from ems.runtime_commands import DEVICE_FIELDS, OPERATION_DEVICE_KEYS, OPERATION_SETTING_PATHS, SECTION_FIELDS, SYSTEM_FIELDS
+
+    remaining = copy.deepcopy(raw_config)
+    runtime_data = runtime_data if isinstance(runtime_data, dict) else {}
+    moved = []
+    dropped = []
+    for setting in sorted(OPERATION_SETTING_PATHS):
+        section, _, key = setting.partition(".")
+        block = remaining.get(section)
+        held = runtime_data.get(section)
+        field = SYSTEM_FIELDS.get(key) if section == "system" else SECTION_FIELDS.get(section, {}).get(key)
+        if isinstance(block, dict) and key in block and isinstance(held, dict) and key in held and _readable(held[key], field):
+            if _values_differ(block[key], held[key]):
+                dropped.append((setting, block[key], held[key]))
+            del block[key]
+            moved.append(setting)
+    devices = remaining.get("devices") if isinstance(remaining.get("devices"), list) else []
+    built = {id(entry) for entry in http_control_device_configs(devices) + mqtt_control_device_configs(devices)}
+    runtime_devices = runtime_data.get("devices") if isinstance(runtime_data.get("devices"), dict) else {}
+    for index, device in enumerate(devices):
+        if id(device) not in built:
+            continue
+        held = runtime_devices.get(str(device.get("name") or "").strip())
+        if not isinstance(held, dict):
+            continue
+        for key in sorted(OPERATION_DEVICE_KEYS):
+            if key in device and key in held and _readable(held[key], DEVICE_FIELDS.get(key)):
+                if _values_differ(device[key], held[key]):
+                    dropped.append((f"devices[{index}].{key}", device[key], held[key]))
+                del device[key]
+                moved.append(f"devices[{index}].{key}")
+    return remaining, moved, dropped
+
+
+def _readable(value, field):
+    """Whether the EMS reads ``value`` as itself; one it cannot read falls back to the config's, which stays."""
+
+    kind = field[0] if isinstance(field, tuple) and field else None
+    if kind == "bool":
+        return isinstance(value, bool)
+    if kind in ("int", "float"):
+        return isinstance(value, (int, float)) and not isinstance(value, bool)
+    if kind == "enum":
+        return isinstance(value, str) and value in (field[1] or ())
+    return True
+
+
+def _values_differ(before, after):
+    return before != after or isinstance(before, bool) is not isinstance(after, bool)
+
+
 def _same_config(left, right):
     """Whether two parsed configs are the same JSON, NaN included."""
 
@@ -2125,6 +2352,14 @@ def _config_writable(path):
     return os.access(path, os.W_OK) and os.access(os.path.dirname(path) or ".", os.W_OK)
 
 
+def _own_layout(text):
+    """The layout of a config ``text``, each list item its own rather than the first item's."""
+
+    layout = _extract_template_layout(text)
+    layout["list_item_objects"] = {}
+    return layout
+
+
 def _own_layout_with_defaults_revision(text):
     """The layout of a config ``text``, with the revision beside the schema version.
 
@@ -2133,8 +2368,7 @@ def _own_layout_with_defaults_revision(text):
     item its own rather than the first item's.
     """
 
-    layout = _extract_template_layout(text)
-    layout["list_item_objects"] = {}
+    layout = _own_layout(text)
     root = layout.get("objects", {}).get(())
     if root and CONFIG_REVISION_KEY not in root["keys"] and "config_schema_version" in root["keys"]:
         root["keys"].insert(root["keys"].index("config_schema_version") + 1, CONFIG_REVISION_KEY)
@@ -2185,6 +2419,16 @@ def perform_startup_config_upgrade(
 
     if refresh_defaults:
         raw_config = _refresh_startup_config_defaults(
+            raw_config,
+            path,
+            base_dir,
+            backup=upgrade_config["backup_before_apply"],
+            backup_factory=backup_factory,
+            emit_message=emit_message,
+        )
+
+    if refresh_defaults and stored_revision(raw_config, CONFIG_REVISION_KEY) >= DEFAULTS_REVISION:
+        raw_config = normalize_startup_config_switches(
             raw_config,
             path,
             base_dir,
@@ -2286,6 +2530,9 @@ def _write_startup_config(
 
 
 ARGS = None
+START_MAY_MOVE_OPERATING_VALUES = False
+STARTED_RAW_CONFIG = None
+OPERATING_VALUES_MOVED_KEY = "operating_values_moved"
 BASE_DIR = None
 CONFIG = None
 LOADED_DEVICES = []
@@ -2375,7 +2622,7 @@ def load_config(args=None, base_dir=None):
     not part of what this EMS runs (ems/history/confirmed_retention.py).
     """
 
-    global LOADED_DEVICES, SETTINGS_READ_AT
+    global LOADED_DEVICES, SETTINGS_READ_AT, START_MAY_MOVE_OPERATING_VALUES, STARTED_RAW_CONFIG
     LOADED_DEVICES = []
     args = args or ARGS
     base_dir = base_dir or BASE_DIR or os.getcwd()
@@ -2392,18 +2639,31 @@ def load_config(args=None, base_dir=None):
         print("config.json missing. Please create it from template.")
         sys.exit(1)
 
+    may_refresh = _start_may_refresh_defaults(args, raw_config)
     raw_config = perform_startup_config_upgrade(
         raw_config,
         path,
         base_dir,
-        refresh_defaults=_start_may_refresh_defaults(args, raw_config),
+        refresh_defaults=may_refresh,
     )
+    START_MAY_MOVE_OPERATING_VALUES = (
+        may_refresh
+        and normalize_config_upgrade_config(raw_config.get("config_upgrade", {}))["on_startup"] != "disabled"
+        and stored_revision(raw_config, CONFIG_REVISION_KEY) >= DEFAULTS_REVISION
+    )
+    STARTED_RAW_CONFIG = copy.deepcopy(raw_config)
     LOADED_DEVICES = device_fingerprints(raw_config)
     runtime_config = apply_runtime_config_defaults(raw_config)
     return apply_template_placeholder_safety(
         runtime_config,
         emit_message=_emit_startup_config_message,
     )
+
+
+def _allocation_switch(value):
+    """An allocation switch: its words as ``safe_bool`` reads them, anything else by its truth, as before."""
+
+    return safe_bool(value, bool(value))
 
 
 def _start_may_refresh_defaults(args, raw_config):
@@ -2504,14 +2764,8 @@ def initialize(args, base_dir):
     if args.simulate or args.replay:
         LOG_LEVEL = "debug"
 
-    REDISTRIBUTE_CLAMPED_POWER = CONFIG["system"].get(
-        "redistribute_clamped_power",
-        True
-    )
-    PV_KWP_WEIGHTING = CONFIG["system"].get(
-        "pv_kwp_weighting",
-        True
-    )
+    REDISTRIBUTE_CLAMPED_POWER = _allocation_switch(CONFIG["system"].get("redistribute_clamped_power", True))
+    PV_KWP_WEIGHTING = _allocation_switch(CONFIG["system"].get("pv_kwp_weighting", True))
     PV_CHARGE_BALANCE_ENABLED = safe_bool(
         CONFIG["system"].get("pv_charge_balance_enabled", True),
         True
@@ -2534,10 +2788,7 @@ def initialize(args, base_dir):
             minimum=0.0
         )
     )
-    BATTERY_KWH_WEIGHTING = CONFIG["system"].get(
-        "battery_kwh_weighting",
-        True
-    )
+    BATTERY_KWH_WEIGHTING = _allocation_switch(CONFIG["system"].get("battery_kwh_weighting", True))
     SOC_RECONCILE_INTERVAL = CONFIG["system"].get(
         "soc_reconcile_interval",
         10

@@ -169,8 +169,40 @@ removes it when the backup ends, so `data/` needs room for the databases once
 more while it runs. Neither the system temp folder, which in the Admin
 Console's container is a small RAM disk that a grown dashboard database does
 not fit, nor the backup folder, which the appliance hands to its backup
-account, is used for this. A backup whose process is killed half-way leaves
-that folder behind; it is safe to delete once no backup is running.
+account, is used for this. The archive itself is written in a hidden
+`.ems-backup-part-…` folder in the backup folder and moved out of it whole,
+and an archive taken back through the Admin Console arrives in a
+`.ems-backup-import-…` folder there. A restore writes each file it puts back
+in a hidden `.ems-restore-part-…` folder beside that file and moves it into
+place from there, so the move stays atomic; a live database is copied in from
+there through SQLite instead.
+
+Each of these folders holds a claim file that its process keeps locked until
+the folder is removed, and the claim is removed after everything else in it.
+A backup, upload or restore whose process is killed half-way leaves its folder
+behind, plaintext database copies included; the next backup or upload then
+removes every such folder whose lock is free and that belongs to the account it
+runs as, beside the databases it snapshots and in the backup folder, and the
+next restore those beside each file it writes (a file it skips as unchanged is
+not written, so the folder beside it waits for a later restore, or for the next
+database backup when it sits beside a database). A process removes its own
+folder by the files it put there; anything else in it keeps the folder for
+that sweep, and a folder that was not empty when it was made, or that shows
+another owner than the claim the process then made in it, such as a directory
+someone moved in under its name, is refused untouched. Nothing is removed
+recursively: a folder holding a directory stays. A process killed while it
+makes its folder, before anything is written into it, or in the last step of
+removing it can leave an empty folder, or one holding only an unfinished
+claim, which stays. A folder whose backup or restore still runs keeps its lock
+and stays, and so does anything it cannot prove a killed one's: a folder
+without a valid claim, one another account owns or whose claim it wrote, and
+the loose `tmp….part`, `tmp….tar.gz`
+and `.import-….part` files that releases before these folders left in the
+backup folder, and the loose `.restore-…` files they left beside a restored
+file. Those are safe to delete by hand once no backup or restore is running.
+On a filesystem without file locks, which some network shares are, the
+folders carry no claim: backups and restores work there as before, and a
+killed one's folder is not swept.
 
 ## Should I use password protection?
 

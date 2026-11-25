@@ -27,7 +27,7 @@ page tells one EMS from the next.
 
 import json
 
-from admin.config_runtime_overlap import resolve_runtime_state_path
+from admin.config_runtime_overlap import read_runtime_state, resolve_runtime_state_path
 from admin.install_context import detect_install_context
 from ems.device_fingerprints import FINGERPRINT_VERSION, device_fingerprints
 from ems.diagnostics import diagnose_live_snapshot, diagnose_loop_interval
@@ -105,7 +105,7 @@ def _fresh_snapshot(context, config):
         runtime_path = resolve_runtime_state_path(context, config)
     except (OSError, TypeError, ValueError):
         return None
-    live = diagnose_live_snapshot(str(runtime_path), diagnose_loop_interval(config, {}))
+    live = diagnose_live_snapshot(str(runtime_path), diagnose_loop_interval(config, read_runtime_state(runtime_path)))
     return live["data"] if live["status"] == "fresh" and isinstance(live["data"], dict) else None
 
 

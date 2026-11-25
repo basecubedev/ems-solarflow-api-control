@@ -1420,7 +1420,8 @@ _SECTIONS = [
             _field(
                 "devices[].max_power",
                 "Device output limit",
-                "Maximum output this inverter may provide.",
+                "Maximum output this inverter may provide. Max power on the dashboard stops here; "
+                "without a value of its own, the fallback device limit applies.",
                 "number",
                 unit="W",
                 minimum=0,

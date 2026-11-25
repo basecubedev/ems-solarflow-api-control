@@ -489,6 +489,7 @@ def diagnose_device_template(item, template_device):
 
 
 def diagnose_missing_template_keys(config_data, template_data):
+    template_data = config_mod.without_operating_values(template_data)
     missing = []
 
     def walk(current, template, prefix):
@@ -903,22 +904,6 @@ def diagnose_git_info(checks):
         diagnose_add(checks, "project", "ok", "git_clean", "Git working tree is clean")
 
 
-def diagnose_truthy(value, default=True):
-    """Read a config flag the way the runtime does.
-
-    ``diagnose_bool`` answers whether a value *is* a boolean, which is a
-    different question: used as a truth test it reads ``1`` as "not enabled".
-    """
-
-    if value is None:
-        return default
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        return value.strip().lower() in ("1", "true", "yes", "on")
-    return bool(value)
-
-
 def diagnose_template_placeholders(checks, config_data):
     paths = config_mod.stored_config_placeholder_paths(config_data)
     if paths is None:
@@ -940,7 +925,7 @@ def diagnose_template_placeholders(checks, config_data):
     )
 
 
-def diagnose_config_plausibility(checks, args, config_data):
+def diagnose_config_plausibility(checks, args, config_data, runtime_data=None):
     if not isinstance(config_data, dict):
         return
 
@@ -965,13 +950,17 @@ def diagnose_config_plausibility(checks, args, config_data):
             )
 
     min_output_limit = diagnose_float(system.get("min_output_limit"))
-    if min_output_limit is None or min_output_limit < 0:
+    if "min_output_limit" not in system:
+        pass
+    elif min_output_limit is None or min_output_limit < 0:
         diagnose_add(checks, "config", "error", "system_min_output_limit_invalid", "system.min_output_limit must be numeric and non-negative")
     else:
         diagnose_add(checks, "config", "ok", "system_min_output_limit_valid", "system.min_output_limit is numeric and non-negative")
 
     loop_interval = diagnose_float(system.get("loop_interval"))
-    if loop_interval is None or loop_interval <= 0:
+    if "loop_interval" not in system:
+        pass
+    elif loop_interval is None or loop_interval <= 0:
         diagnose_add(checks, "config", "error", "system_loop_interval_invalid", "system.loop_interval must be numeric and > 0")
     else:
         diagnose_add(checks, "config", "ok", "system_loop_interval_valid", "system.loop_interval is numeric and > 0")
@@ -992,14 +981,14 @@ def diagnose_config_plausibility(checks, args, config_data):
         diagnose_add(checks, "config", "error", "energy_savings_not_object", "energy_savings must be an object")
     elif not isinstance(dashboard_config, dict):
         diagnose_add(checks, "config", "error", "dashboard_not_object", "dashboard must be an object")
-    elif diagnose_truthy(energy_savings.get("enabled", True)):
+    elif config_mod.safe_bool(energy_savings.get("enabled", True), True):
         write_interval = diagnose_float(dashboard_config.get("write_interval_seconds", 5))
         max_sample_delta = diagnose_float(
             energy_savings.get("max_sample_delta_seconds", 20)
         )
         # The controller can only write on a loop tick, so a 16 s write
         # interval on a 5 s loop stores a sample every 20 s, not every 16.
-        loop_tick = diagnose_float(system.get("loop_interval"))
+        loop_tick = diagnose_loop_interval(config_data, runtime_data or {})
         if write_interval is not None and loop_tick and loop_tick > 0:
             # Zero or anything below one tick means "every loop", which is a
             # tick apart, not nothing apart.
@@ -4569,9 +4558,9 @@ def diagnose_collect(args):
         else:
             diagnose_add(checks, "config", "ok", "config_keys_complete", "config.json contains all template keys")
 
-    diagnose_config_plausibility(checks, args, config_data)
-
     runtime_path = resolve_runtime_path(args, config_data)
+    diagnose_config_plausibility(checks, args, config_data, diagnose_control_load_runtime(runtime_path)[0])
+
     diagnose_parent_path(checks, "project", "runtime_state", runtime_path, "runtime-state path", check_write=True, missing_level="warning")
     battery_full_charge_report = diagnose_battery_full_charge_assist_report(
         config_data, diagnose_control_load_runtime(runtime_path)[0]

@@ -387,7 +387,13 @@ its counts, and do not run `analyze` outside the launcher.
 
 A stale index is an agent's to fix, not to work around: re-running the analysis
 through `scripts/gitnexus-project` is pre-authorized and needs no separate
-instruction. Report that it was refreshed and against which revision.
+instruction. Report that it was refreshed and against which revision. An agent
+keeps the index current for the code it relies on before it uses `impact`,
+`detect_changes` or `query`, and refreshes it unasked (owner, 2026-11-25). The
+one limit is concurrency: two agents never refresh at the same time. An agent
+normally works alone; when another agent instance works on the code in
+parallel, the owner says so in the task, and the refresh is then left to the
+agent the owner names, or else to the one that was there first.
 
 If GitNexus is unavailable, stale or fails, do not pretend it was used. Perform
 a manual blast-radius review with symbol/reference searches; inspect callers,
@@ -449,8 +455,17 @@ git stash list
 ```
 
 Preserve unrelated work. Never use `git reset --hard`, `git clean -fd`, a force
-checkout over user changes, unrelated stash mutation, history rewriting, or a
-push without explicit instruction.
+checkout over user changes, unrelated stash mutation, history rewriting beyond
+the folding below, or a push without explicit instruction.
+
+Task work happens in a worktree of its own. The main checkout is what the code
+tools read, so an agent working alone keeps it current (owner, 2026-11-25): it
+may switch it to `main` and fast-forward it to `origin/main`, but only with a
+clean `git status`, never over uncommitted work, never touching a stash, and
+not while a process reads from it, such as a local Admin test server or a
+browser suite serving its built assets.
+When the owner announces a parallel agent, neither of them changes the main
+checkout.
 
 A file that is copied aside so it can be put back — a stylesheet perturbed to
 prove a contract bites, a config swapped to measure a baseline — is copied to a
@@ -467,8 +482,18 @@ logical, in English, and have no Co-Author trailers. Use test-before-fix commits
 when explicitly required.
 
 Commits are folded by theme: one finished change per commit, with its tests and
-documentation. A correction found in review is folded into the commit it
-corrects before the branch is pushed, never stacked on top as a separate fix.
+documentation. A correction found in review, and any later fix that belongs to
+an existing commit of the branch, is folded into the commit it corrects, never
+stacked on top as a separate fix. Folding is allowed after a push as well: the
+branch is then pushed with `git push --force-with-lease=<branch>:<old head>`,
+never a bare `--force`, and never onto `main`. A pull request that conflicts
+with `main` is brought up to date the same way, its commits put onto
+`origin/main` in a worktree of their own, not `main` merged into it.
+
+Branch names are `<type>/<topic>` with no date: `fix/appliance-package-index`,
+not `fix/appliance-package-index-2026-11-02`. The commits already carry the
+date. A pushed branch is renamed only while it has no pull request, because
+deleting the old remote name closes one.
 
 Do not commit generated reports, local state, traces, screenshots, temporary
 archives, secrets or unintended scratch files. After commit, run

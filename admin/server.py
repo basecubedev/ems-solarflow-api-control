@@ -18,7 +18,6 @@ import hmac
 import json
 import os
 import shutil
-import tempfile
 import threading
 import uuid
 from dataclasses import dataclass, field
@@ -163,9 +162,9 @@ from admin.maintenance_config import (
     trusted_selection_conflicts_with_stored_device,
 )
 from admin.running_pair_health import RunningPairHealthCheck
+from admin.operation_settings import write_operation_changes
 from admin.runtime_convergence import (
     mirror_changed_keys_to_runtime,
-    reset_targets_to_config,
 )
 from admin.mdns import MdnsProvider
 from admin.mqtt_broker import (
@@ -286,11 +285,10 @@ from dashboard.api_paths import is_ems_api_path
 from dashboard.console_address import CONSOLE_IDENTITY, CONSOLE_PATH
 from dashboard.static_files import SHARED_ROOT_FILES, build_static_asset_index, lookup_static_asset, modern_asset_path, modern_redirect
 from ems import backup as backup_mod
+from ems import backup_staging
 from ems.device_identity import (
     PHYSICAL_IDENTITY_ALIAS_TOKENS_FIELD,
     PHYSICAL_IDENTITY_TOKEN_FIELD,
-    broker_sources_from_config,
-    resolve_inverter_identity,
 )
 from ems.external_status import (
     mask_external_mqtt_string,
@@ -1967,9 +1965,6 @@ class AdminHandler(BaseHTTPRequestHandler):
             return
         if path == "/api/admin/maintenance/config/apply":
             self._handle_maintenance_config_apply()
-            return
-        if path == "/api/admin/maintenance/config/reset-runtime":
-            self._handle_maintenance_reset_runtime()
             return
         if path == "/api/admin/maintenance/zendure-mqtt/migration-apply":
             self._handle_zendure_mqtt_migration_apply()
@@ -3749,111 +3744,12 @@ class AdminHandler(BaseHTTPRequestHandler):
                     500,
                 )
             result["runtime_sync"] = self._mirror_runtime_after_apply(prepared)
+            result["operating_sync"] = self._write_operating_after_apply(prepared)
+            result["changed"] = bool(result.get("changed")) or bool(result["operating_sync"].get("applied"))
             result["analytics_retention"] = self._record_confirmed_retention(prepared)
         result["validation"] = prepared["validation"]
         result["diff"] = prepared["diff"]
         return result, 200
-
-    def _handle_maintenance_reset_runtime(self):
-        if self._reject_unrelated_transition_write():
-            return
-        body = self._read_json_body(MAX_CONFIG_PREVIEW_BODY_BYTES)
-        if body is None:
-            return
-        if not isinstance(body, dict) or set(body) - {"targets", "confirm"}:
-            self._send_json({"error": "expected a JSON object"}, status=400)
-            return
-        if body.get("confirm") is not True:
-            self._send_json({"error": "confirmation_required"}, status=400)
-            return
-        targets = body.get("targets")
-        if not isinstance(targets, list) or not targets:
-            self._send_json({"error": "targets must be a non-empty list"}, status=400)
-            return
-        context = self.server.config_apply.install_context_provider()
-        try:
-            config = json.loads(Path(context.config_path).read_bytes())
-        except (OSError, ValueError):
-            self._send_json({"error": "current config could not be read"}, status=409)
-            return
-        if not isinstance(config, dict):
-            self._send_json({"error": "current config is invalid"}, status=409)
-            return
-        targets, identity_error = self._resolve_runtime_reset_device_targets(
-            config, targets
-        )
-        if identity_error is not None:
-            self._send_json({"error": identity_error}, status=409)
-            return
-        try:
-            summary = reset_targets_to_config(context, config, targets)
-        except Exception as exc:
-            self._send_json({"error": f"reset failed: {exc}"}, status=500)
-            return
-        self._send_json(
-            self._sanitize_external_mqtt_payload(
-                {"ok": True, "runtime_sync": summary}
-            ),
-            status=200,
-        )
-
-    def _resolve_runtime_reset_device_targets(self, config, targets):
-        """Resolve browser-safe device targets through server-issued tokens.
-
-        A configured Cloud route may be part of a device display name.  That
-        name is masked in Maintenance payloads and cannot identify the runtime
-        entry on its own.  Opaque tokens are keyed by the Admin and are resolved
-        only against the current installed config; ambiguous/stale evidence
-        fails closed instead of selecting a similarly named device.
-        """
-
-        sources = broker_sources_from_config(config)
-        by_token = {}
-        ambiguous = set()
-        devices = config.get("devices")
-        for device in devices if isinstance(devices, list) else []:
-            if not isinstance(device, dict):
-                continue
-            identity = resolve_inverter_identity(
-                device,
-                broker_sources=sources,
-                token_key=self.server.identity_token_key,
-            )
-            name = str(device.get("name") or "").strip()
-            token = identity.opaque_token if identity is not None else None
-            if not name or token is None:
-                continue
-            if token in by_token and by_token[token] != name:
-                ambiguous.add(token)
-            else:
-                by_token[token] = name
-
-        resolved = []
-        for target in targets:
-            if not isinstance(target, dict) or target.get("scope") != "device":
-                resolved.append(target)
-                continue
-            token = target.get(PHYSICAL_IDENTITY_TOKEN_FIELD)
-            if token is None:
-                # Backward-compatible raw-name requests remain valid for local
-                # devices and older open tabs. Masked Cloud names are not guessed.
-                resolved.append(target)
-                continue
-            if (
-                not isinstance(token, str)
-                or not token.startswith("opaque:v1:")
-                or token in ambiguous
-                or token not in by_token
-            ):
-                return None, (
-                    "device identity is stale or ambiguous; reload Maintenance "
-                    "before resetting live overrides"
-                )
-            resolved_target = dict(target)
-            resolved_target["name"] = by_token[token]
-            resolved_target.pop(PHYSICAL_IDENTITY_TOKEN_FIELD, None)
-            resolved.append(resolved_target)
-        return resolved, None
 
     def _mirror_runtime_after_apply(self, prepared):
         """Mirror changed overlapping whitelisted keys into runtime-state.
@@ -3872,6 +3768,26 @@ class AdminHandler(BaseHTTPRequestHandler):
             )
         except Exception as exc:
             return {"applied": [], "skipped": [], "warnings": [f"runtime sync skipped: {exc}"]}
+
+    def _write_operating_after_apply(self, prepared):
+        """Write the operating settings the apply changed into the runtime state.
+
+        They live there only (docs/developer/settings-operation-store.md), so
+        the runtime state is created where the EMS has not yet. Best-effort
+        like the mirror: the config is saved, and a value the write refuses is
+        named in the answer.
+        """
+
+        targets = prepared.pop("operating_targets", None) or []
+        try:
+            context = self.server.config_apply.install_context_provider()
+            return write_operation_changes(context, json.loads(prepared["payload"]), targets)
+        except Exception as exc:
+            return {
+                "applied": [],
+                "skipped": [{"path": target[0], "reason": f"operating_write_failed: {exc}"} for target in targets],
+                "warnings": [f"operating values not written: {exc}"],
+            }
 
     def _record_confirmed_retention(self, prepared):
         """Record the bucket retentions this confirmed apply set.
@@ -5209,10 +5125,11 @@ class AdminHandler(BaseHTTPRequestHandler):
     def _handle_backup_import(self):
         """Take an archive back, so a re-flashed machine can be restored.
 
-        The upload is streamed into the backup directory as a temporary file and
-        only adopted once it verifies. Every refusal removes that file before it
-        answers, so a caller that reads the directory the moment it gets the
-        reply never sees a leftover.
+        The upload is streamed into a claimed staging folder in the backup
+        directory and only adopted once it verifies. Every refusal removes that
+        folder before it answers, so a caller that reads the directory the
+        moment it gets the reply never sees a leftover; one a killed upload left
+        is swept by the next import or backup (``ems.backup_staging``).
         """
 
         if self._reject_unrelated_transition_write():
@@ -5236,24 +5153,22 @@ class AdminHandler(BaseHTTPRequestHandler):
             return
 
         os.makedirs(backup_dir, exist_ok=True)
-        handle = tempfile.NamedTemporaryFile(
-            dir=backup_dir, prefix=".import-", suffix=".part", delete=False
+        backup_staging.sweep_abandoned(
+            backup_dir, (backup_staging.ARCHIVE_PARTS, backup_staging.IMPORT_UPLOADS)
         )
-        temp_path = handle.name
         result = None
         error = None
-        try:
-            if self._copy_body(handle, length):
-                handle.close()
-                result = service.import_backup(name, temp_path)
-            else:
-                error = "the upload ended early"
-        except BackupRestoreError as exc:
-            error = str(exc)
-        finally:
-            handle.close()
-            if os.path.exists(temp_path):
-                os.remove(temp_path)
+        with backup_staging.claim_staging(backup_dir, backup_staging.IMPORT_UPLOADS) as staging:
+            temp_path = staging.new_file("upload.part")
+            try:
+                with open(temp_path, "wb") as handle:
+                    complete = self._copy_body(handle, length)
+                if complete:
+                    result = service.import_backup(name, temp_path)
+                else:
+                    error = "the upload ended early"
+            except BackupRestoreError as exc:
+                error = str(exc)
         if error is not None:
             self._send_json({"ok": False, "error": error}, status=400)
             return

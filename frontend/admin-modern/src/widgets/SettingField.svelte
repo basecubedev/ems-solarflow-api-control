@@ -2,7 +2,7 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script>
   import { t, catalogText, optionText } from "../i18n/i18n.svelte.js";
-  import { RISKS, choices, defaultHint, departedDefault, nameableDefault, previewValue, shownValue } from "../lib/settings.js";
+  import { RISKS, choices, defaultHint, departedDefault, nameableDefault, shownValue } from "../lib/settings.js";
 
   /**
    * lang "catalog": the label, help and unit are the settings catalogue's, in
@@ -12,8 +12,10 @@
    * page's), for a field whose label and help come from different places.
    * A number the browser cannot read changes nothing, so a typo is never taken
    * for an emptied field, which would take the default.
+   * operating, when given, is the line naming the operating value the EMS runs
+   * below this limit, or beside this activation: { text, hint }.
    */
-  let { field, value, live = null, hideRisk = false, defaultValue = undefined, lang = "catalog", descriptionLang = undefined, placeholder = "", type = "", disabled = false, onchange } = $props();
+  let { field, value, operating = null, hideRisk = false, defaultValue = undefined, lang = "catalog", descriptionLang = undefined, placeholder = "", type = "", disabled = false, onchange } = $props();
 
   let unreadable = $state(false);
   const uid = $props.id();
@@ -80,10 +82,10 @@
   {/if}
   {#if unreadable}<p class="form-error" role="alert">{t("common.unreadableNumber")}</p>{/if}
   {#if description}<p class="desc" lang={description.lang}>{description.text}</p>{/if}
-  {#if risk || live || departedText}
+  {#if risk || operating || departedText}
     <p class="badges">
       {#if risk}<span class="badge risk" title={t(`settings.risk.${risk}.hint`)}>{t(`settings.risk.${risk}`)}</span>{/if}
-      {#if live}<span class="badge live" title={t("settings.edit.liveHint", { live: previewValue(live.effective_value), saved: previewValue(live.config_value) })}>{t("settings.edit.live", { value: previewValue(live.effective_value) })}</span>{/if}
+      {#if operating}<span class="badge operating num" title={operating.hint} data-testid="operating-value">{operating.text}</span>{/if}
       {#if departedText}<span class="badge default">{t("settings.edit.defaultBadge", { value: departedText })}</span>{/if}
     </p>
   {/if}
@@ -98,5 +100,6 @@
   .badges { display: flex; flex-wrap: wrap; gap: var(--s2); margin: 0; }
   .risk { color: var(--m-warn); }
   .badge.default { color: var(--m-muted); background: transparent; box-shadow: inset 0 0 0 1px var(--m-line-strong); }
+  .badge.operating { color: var(--m-accent); }
   .live { color: var(--m-accent); }
 </style>

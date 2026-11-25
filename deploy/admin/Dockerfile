@@ -107,6 +107,7 @@ COPY ems/device_identity.py ./ems/device_identity.py
 COPY ems/external_status.py ./ems/external_status.py
 COPY ems/backup.py ./ems/backup.py
 COPY ems/backup_crypto.py ./ems/backup_crypto.py
+COPY ems/backup_staging.py ./ems/backup_staging.py
 COPY ems/influx_setup.py ./ems/influx_setup.py
 # The bundled InfluxDB pin and version order the Admin reads.
 COPY ems/influx_image.py ./ems/influx_image.py
@@ -184,7 +185,7 @@ COPY ems/schedule_store.py ./ems/schedule_store.py
 COPY dashboard/https.py ./dashboard/https.py
 # Maintenance asks before a change joins or parts a consumer's recorded values
 # (admin.consumer_history); it reads them, never writes, through the store
-# that owns them, which imports nothing beyond the standard library at load.
+# that owns them; a store it opens reads its switch with ems.config, copied above.
 COPY dashboard/sqlite_store.py ./dashboard/sqlite_store.py
 COPY LICENSE THIRD_PARTY_LICENSES.md ./
 

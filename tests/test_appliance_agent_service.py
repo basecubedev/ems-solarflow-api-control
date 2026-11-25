@@ -56,7 +56,8 @@ def host(package):
         container.install_package(package)
         if not container.wait_for_unit(AGENT_UNIT):
             pytest.fail(f"the agent did not start:\n{container.journal(AGENT_UNIT)}")
-        container.wait_for_path(SOCKET_PATH)
+        if not container.wait_for_path(SOCKET_PATH):
+            pytest.fail(f"the agent opened no socket:\n{container.journal(AGENT_UNIT)}")
         yield container
     finally:
         container.stop()
@@ -119,7 +120,7 @@ def test_the_running_agent_fetches_the_release_index_over_https(host):
 def test_an_unreachable_release_index_is_reported_not_guessed(host):
     host.set_appliance_option("release_index_url", "https://127.0.0.1:18099/nothing.json")
     host.run(["systemctl", "restart", AGENT_UNIT], timeout=180)
-    assert host.wait_for_path(SOCKET_PATH)
+    assert host.wait_for_path(SOCKET_PATH), host.journal(AGENT_UNIT)
     try:
         payload = json.loads(host.agent_call({"operation": "admin.releases"}).stdout.strip())
         assert payload["ok"] is True
@@ -256,7 +257,7 @@ def test_operations_survive_an_agent_restart(host):
 
 def test_the_runtime_socket_is_recreated_with_its_ownership_after_a_restart(host):
     host.run(["systemctl", "restart", AGENT_UNIT], timeout=180)
-    assert host.wait_for_path(SOCKET_PATH)
+    assert host.wait_for_path(SOCKET_PATH), host.journal(AGENT_UNIT)
     assert host.stat(RUNTIME_DIR)["mode"] == "750"
     assert host.stat(SOCKET_PATH)["mode"] == "660"
     assert json.loads(host.agent_call({"operation": "status.get"}).stdout)["ok"] is True

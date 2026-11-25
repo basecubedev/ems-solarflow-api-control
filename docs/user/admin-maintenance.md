@@ -326,14 +326,15 @@ This page edits an existing installation.
   setting and one bar at the foot of the page that counts your unsaved
   changes. Switching a tab never reloads and never discards unsaved changes;
   they also survive a reload, and **Discard** drops them.
-- **Customized** lists, read-only, every saved setting that differs from this
-  release's defaults and every value the Dashboard runs instead of a default,
-  grouped by feature and device, each with **Saved**, **Running** and
-  **Default**; **Show** takes you to the field, a device's in its opened card.
+- **Customized** lists, read-only, every setting that differs from this
+  release's defaults, an operating setting as EMS runs it, grouped by feature
+  and device, each with its value and **Default**; **Show** takes you to the
+  field, a device's in its opened card.
   Connections, values that describe the installation (a device's power limit,
   PV size, battery size) and passwords are never listed.
 - **Safety** holds the switches that decide whether EMS may change your
-  inverters, with nothing hidden behind a disclosure. They are **on by
+  inverters and the limits it never goes above, with nothing hidden behind a
+  disclosure. They are **on by
   default**: a fresh installation controls your inverters without you enabling
   anything, and the switches exist to stop it. A switch your settings file does
   not mention is shown at that default; nothing is written until you change it.
@@ -346,19 +347,28 @@ This page edits an existing installation.
   writes it. A value its field cannot hold — text in a number field, a switch
   that is neither true nor false, a number outside the field's range — is
   refused by name instead of being saved as text, read as *off* or cut to a
-  whole number; a value you did not change is left as it is stored. Saving
-  writes `config.json` and additionally mirrors the whitelisted overlapping
-  values it changed (system power/loop limits, winter enable, and per-device
-  enabled/max power/PV priority) into `data/runtime-state.json` so the change
-  goes live immediately instead of waiting for an EMS restart. A device you
-  switch off, or turn telemetry-only while it keeps its serial number, is taken
-  out of control at once; one you switch back on keeps the values set for it on
-  the Dashboard, except those you changed here. Saving still never moves
-  `data/` history,
-  `docker-compose.yml`, or databases. Fields that also
-  carry a live override set from the Dashboard show **Running: …** with the
-  effective value, and **Put saved values back** makes the live EMS use the
-  saved values again. A field whose value differs from its default shows
+  whole number; a value you did not change is left as it is stored. The
+  operating settings (control on or off, loop interval, standby floor, grid
+  targets, winter mode, AC charging and battery care on or off and its values,
+  and per device PV priority and AC charging and discharging) live in
+  `data/runtime-state.json`, where the Dashboard changes them too: they show
+  the value EMS runs, and saving writes those you changed here there, live at
+  once, never into `config.json`; a value the Dashboard or a schedule changed
+  after the page loaded stays. A switched-off device that ran keeps its values
+  there for when it runs again, and saving changes them there; a device that
+  never ran (just added) keeps them in `config.json` until it runs. Saving
+  writes the rest into `config.json`.
+  The power limits are hard limits: **Maximum system output** (Safety) and
+  each device's **Device output limit** (Devices), with **Fallback device
+  limit** for a device without its own. Below each, **Operating value: …**
+  names the power EMS runs, changed on the Dashboard and never above the
+  limit; lowering a limit below it lowers it at once, raising a limit leaves
+  it. A device's **Enabled** is its activation; **Control off on the
+  Dashboard** beside it says that EMS reads and shows the device but does not
+  write to it. A device you switch off, or turn telemetry-only while it keeps
+  its serial number, is taken out of control at once; one you switch back on
+  is controlled again. Saving still never moves `data/` history,
+  `docker-compose.yml`, or databases. A field whose value differs from its default shows
   **Default: …**, for information only, except values that describe the
   installation, such as power limits and battery size. An emptied field names
   in grey the value it falls back to, and saving makes that the value the EMS
@@ -509,6 +519,11 @@ This page edits an existing installation.
   status and support data retain trusted physical serials and useful non-secret
   context, but remove credentials and expose only masked shapes for Cloud route,
   product and topic identifiers — never their full account-scoped values.
+  The names your configuration gives the devices stay readable, in log lines
+  (`device=<name>`) too, whatever transport a device uses. A name that is or
+  contains a Cloud route is masked like the route; so is a Cloud device's name
+  while its route is missing from the configuration, and the name after
+  `device=` in log lines while no readable configuration is known.
 
   **Search my network** searches all three sources, like the setup flow: the
   local network (mDNS refresh plus network scans), local MQTT brokers (a fresh

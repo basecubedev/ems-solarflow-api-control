@@ -920,7 +920,7 @@ def test_db_snapshots_are_staged_beside_each_database(tmp_path, monkeypatch):
     staged = []
 
     def recording_copy(src_path, dst_path):
-        staged.append((src_path, dst_path))
+        staged.append((src_path, os.path.realpath(dst_path)))
         real_copy(src_path, dst_path)
 
     monkeypatch.setattr(backup, "_sqlite_backup_copy", recording_copy)
@@ -943,7 +943,7 @@ def test_a_failed_db_snapshot_leaves_no_staging_behind(tmp_path, monkeypatch):
     staged_into = []
 
     def failing_copy(src_path, dst_path):
-        staged_into.append(dst_path)
+        staged_into.append(os.path.realpath(dst_path))
         Path(dst_path).write_bytes(b"partial")
         raise backup.BackupError(f"SQLite backup failed for {src_path}: disk full")
 

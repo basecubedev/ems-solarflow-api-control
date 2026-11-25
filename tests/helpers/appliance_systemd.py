@@ -360,8 +360,9 @@ class SystemdContainer:
             self.run(["sleep", "1"], timeout=30)
         return False
 
-    def wait_for_path(self, path, attempts=30):
-        """Type=simple reports active at exec, so wait for the socket itself."""
+    def wait_for_path(self, path, attempts=90):
+        """Type=simple reports active at exec, so wait for the socket itself;
+        a shared CI runner can take longer than half a minute to bring it up."""
 
         for _ in range(attempts):
             if self.exists(path):

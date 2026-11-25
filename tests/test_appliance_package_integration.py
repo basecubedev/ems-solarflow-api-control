@@ -267,7 +267,7 @@ def test_socket_permissions_survive_an_agent_restart(host):
 def test_socket_permissions_survive_a_web_restart(host):
     host.run(["systemctl", "restart", WEB_UNIT], timeout=120)
     assert host.wait_for_unit(WEB_UNIT)
-    assert host.wait_for_path(SOCKET_PATH)
+    assert host.wait_for_path(SOCKET_PATH), host.journal(AGENT_UNIT)
     assert host.stat(RUNTIME_DIR)["group"] == APPLIANCE_GROUP
     assert host.agent_socket_reachable(user=WEB_USER).returncode == 0
 
@@ -535,7 +535,7 @@ def test_a_package_upgrade_preserves_state_and_permissions(host, package, tmp_pa
     assert host.stat(f"{STATE_DIR}/agent")["owner"] == "root"
     assert host.stat(f"{STATE_DIR}/web")["owner"] == WEB_USER
     assert host.wait_for_unit(AGENT_UNIT)
-    assert host.wait_for_path(SOCKET_PATH)
+    assert host.wait_for_path(SOCKET_PATH), host.journal(AGENT_UNIT)
     assert host.agent_socket_reachable(user=WEB_USER).returncode == 0
     assert host.shell("dpkg-query -W -f='${Version}' ems-appliance-manager").stdout == "0.1.1"
 
@@ -570,7 +570,7 @@ def test_the_package_migrates_a_legacy_shared_layout(host, package):
     assert "v0.9.9" in host.shell(f"cat {STATE_DIR}/agent/known-good/history.json").stdout
 
     host.shell(f"systemctl start {AGENT_UNIT} {WEB_UNIT}", timeout=120)
-    assert host.wait_for_path(SOCKET_PATH)
+    assert host.wait_for_path(SOCKET_PATH), host.journal(AGENT_UNIT)
 
 
 def test_a_legacy_password_never_overwrites_the_shared_one(host, package):

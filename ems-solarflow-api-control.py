@@ -369,6 +369,10 @@ def main():
         build_runtime_defaults(devices),
         cfg.config_path(),
         cfg.runtime_defaults_revision(),
+        placeholder_start=bool(cfg.template_placeholder_paths(cfg.CONFIG)),
+    )
+    cfg.move_startup_operating_values(
+        runtime_state.data, runtime_state.save_atomic, loaded=not runtime_state.load_failed
     )
     runtime_validation = LiveValidationContext(cfg.config_path(), cfg.CONFIG, runtime_state)
     schedule_zone = local_zone()
@@ -569,6 +573,7 @@ def main():
         read_only_devices=read_only_devices,
         winter_store=None if cfg.SIMULATION_MODE else build_winter_store(),
         scheduler=scheduler,
+        power_limits=runtime_validation,
     )
     pv_input_watch = None
     if not cfg.SIMULATION_MODE and not getattr(args, "replay", None):

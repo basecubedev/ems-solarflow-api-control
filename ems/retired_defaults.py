@@ -27,6 +27,10 @@ rather than set to today's 0: both mean no limit now, but a release before
 2026-11-13 reads 0 as no charging at all and null as its own 1200 W, so a
 rollback keeps charging.
 
+A switch written as text is rewritten as a boolean once the file records the
+current revision (``ems.spelled_switches``), so a later revision that retires
+a switch's default cannot tell such a switch from one left as shipped.
+
 Import-side-effect-free.
 """
 

@@ -38,7 +38,7 @@
   const ems = $derived(emsFact(overview));
   const emsService = $derived(serviceView(system.plan.data, "ems"));
   const analytics = $derived(serviceView(system.plan.data, "influxdb"));
-  const control = $derived(controlView(system.config.data?.summary?.control, system.config.data?.overrides));
+  const control = $derived(controlView(system.config.data?.summary?.control, system.config.data?.operating));
   const lastBackup = $derived(latestBackup(system.backups.data));
   const dashboard = $derived(dashboardHref(overview?.links?.dashboard_url));
   const dashboardHere = $derived(dashboardPage(overview?.links?.dashboard_url));
@@ -128,7 +128,6 @@
       tone={control.tone}
       label={t("overview.tile.control")}
       value={t(`control.short.${control.status}`)}
-      sub={control.live ? t("settings.overridden") : ""}
       testid="tile-control"
     />
     <LinkTile
@@ -146,7 +145,7 @@
     {#snippet actions()}<a class="btn secondary small" href={`${href("settings")}/safety`}>{t("control.change")}</a>{/snippet}
     <StaleNote resource={system.config} />
     {#if system.config.data?.status === "ok"}
-      <ControlState control={system.config.data.summary?.control} overrides={system.config.data.overrides} />
+      <ControlState control={system.config.data.summary?.control} operating={system.config.data.operating} />
     {:else if system.config.error}
       <Empty error {...errorView(system.config.error, t)} />
     {:else if system.config.data}

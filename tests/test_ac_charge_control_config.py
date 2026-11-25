@@ -57,11 +57,13 @@ def test_devices_may_charge_and_discharge_by_default():
 def test_an_existing_config_gains_charging_on_upgrade():
     """This one does change behaviour, and the name says so.
 
-    A config.json written before the feature existed has neither key. The
-    upgrade fills both in as enabled, so after it the installation charges from
-    surplus without a further step. That is the owner's decision; it is pinned
-    here because it is exactly the kind of default that must never move by
-    accident.
+    A config.json written before the feature existed has neither switch. Both
+    are operating values (docs/developer/settings-operation-store.md): the
+    upgrade leaves them out of the file, and the EMS reads a file without them
+    as on and seeds the runtime state so, so after the upgrade the installation
+    charges from surplus without a further step. That is the owner's decision;
+    it is pinned here because it is exactly the kind of default that must never
+    move by accident.
     """
 
     old = {
@@ -72,11 +74,10 @@ def test_an_existing_config_gains_charging_on_upgrade():
 
     upgraded = build_config_upgrade_plan(old)["upgraded_config"]
 
-    assert upgraded["ac_charge_control"]["enabled"] is True
+    assert "enabled" not in upgraded["ac_charge_control"]
+    assert cfg.normalize_ac_charge_control_config(upgraded["ac_charge_control"])["enabled"] is True
     device = upgraded["devices"][0]
-    assert device["ac_discharge_enabled"] is True
-    assert device["ac_charge_enabled"] is True
-    # The operator's own values survive untouched.
+    assert "ac_discharge_enabled" not in device and "ac_charge_enabled" not in device
     assert device["max_power"] == 800
 
 
