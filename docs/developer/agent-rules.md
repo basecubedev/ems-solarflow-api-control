@@ -490,6 +490,11 @@ never a bare `--force`, and never onto `main`. A pull request that conflicts
 with `main` is brought up to date the same way, its commits put onto
 `origin/main` in a worktree of their own, not `main` merged into it.
 
+Branch names are `<type>/<topic>` with no date: `fix/appliance-package-index`,
+not `fix/appliance-package-index-2026-11-02`. The commits already carry the
+date. A pushed branch is renamed only while it has no pull request, because
+deleting the old remote name closes one.
+
 Do not commit generated reports, local state, traces, screenshots, temporary
 archives, secrets or unintended scratch files. After commit, run
 `git status --short` and `git log --oneline -5`. The tree SHOULD be clean unless
