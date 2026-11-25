@@ -789,25 +789,25 @@ def test_the_overview_does_not_name_a_battery_the_ems_does_not_command():
 
 
 def test_the_admin_reads_a_hand_edited_distance_as_the_ems_does():
-    from admin.config_runtime_overlap import compute_overlap_provenance, config_effective_value
+    from admin.config_runtime_overlap import compute_overlap_provenance
 
     config = {"battery_care": {"winter_full_points": 80}}
     provenance = compute_overlap_provenance(config, {"battery_care": {"winter_full_points": 50}})
     assert provenance["battery_care.winter_full_points"]["source"] == "config"
-    assert config_effective_value(config, "section", "battery_care", "winter_full_points") == 50
+    assert compute_overlap_provenance(config, {})["battery_care.winter_full_points"]["config_value"] == 50
 
 
 def test_the_admin_reads_a_hand_edited_minimum_discharge_as_the_ems_does():
-    from admin.config_runtime_overlap import config_effective_value
+    from admin.config_runtime_overlap import compute_overlap_provenance
 
     for written, read in ((9000, BATTERY_CARE_MAX_WATTS), (-20, 0), ("x", 50), (80, 80)):
         config = {"battery_care": {"min_discharge_w": written}}
-        assert config_effective_value(config, "section", "battery_care", "min_discharge_w") == read
+        assert compute_overlap_provenance(config, {})["battery_care.min_discharge_w"]["config_value"] == read
         assert normalize_battery_care_config(config["battery_care"])["min_discharge_w"] == read
 
 
 def test_the_admin_reads_a_hand_edited_pv_margin_as_the_ems_does():
-    from admin.config_runtime_overlap import config_effective_value
+    from admin.config_runtime_overlap import compute_overlap_provenance
 
     cases = {
         "pv_margin_percent": ((150, BATTERY_CARE_MAX_PERCENT), (-5, 0), ("x", 20), (25, 25)),
@@ -816,7 +816,7 @@ def test_the_admin_reads_a_hand_edited_pv_margin_as_the_ems_does():
     for key, pairs in cases.items():
         for written, read in pairs:
             config = {"battery_care": {key: written}}
-            assert config_effective_value(config, "section", "battery_care", key) == read
+            assert compute_overlap_provenance(config, {})[f"battery_care.{key}"]["config_value"] == read
             assert normalize_battery_care_config(config["battery_care"])[key] == read
 
 

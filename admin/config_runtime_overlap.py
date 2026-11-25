@@ -29,7 +29,7 @@ from ems.runtime_commands import (
 from ems import config as cfg
 from ems.config_catalog import device_common_defaults
 from ems.read_only_devices import is_read_only_device_config
-from ems.runtime_state import owned_runtime_device, runtime_state_path_under
+from ems.runtime_state import PARKED_DEVICES_KEY, owned_runtime_device, parked_key, parked_values, runtime_state_path_under
 
 _EMS_DEFAULTS = cfg.default_runtime_config()
 _SYSTEM_DEFAULTS = {key: _EMS_DEFAULTS["system"].get(key) for key in SYSTEM_FIELDS}
@@ -393,6 +393,27 @@ def _entry(config_value, runtime_section, key, value_type, default):
     }
 
 
+def parked_for(device, runtime_data):
+    """The values the runtime state parked for a device it does not build: those it gets back when built again."""
+
+    group = device_group(device)
+    if group is None:
+        return {}
+    identity = group[1] if group[0] == "serial" else None
+    parked = runtime_data.get(PARKED_DEVICES_KEY)
+    values = parked_values(parked, _device_name(device), identity)
+    if identity is not None and isinstance(parked, dict) and parked_key(_device_name(device), identity) not in parked:
+        return {key: value for key, value in values.items() if key not in device}
+    return values
+
+
+def parked_identity(device):
+    """The serial a device's parked values are kept under, None for a device without one."""
+
+    group = device_group(device)
+    return group[1] if group is not None and group[0] == "serial" else None
+
+
 def compute_overlap_provenance(config, runtime_data):
     """Effective value + provenance for every overlapping whitelisted key.
 
@@ -451,6 +472,8 @@ def compute_overlap_provenance(config, runtime_data):
             continue
         entry_name = runtime_entry_for(device, config, runtime_devices)
         runtime_device = runtime_devices.get(entry_name)
+        if entry_name is None:
+            runtime_device = parked_for(device, runtime_data) or None
         built = device_state(config, device_group(device))[1] if entry_name is not None else None
         entries = {}
         effective = _effective_values(device, config)
@@ -482,40 +505,6 @@ def _config_device(config, name):
         if isinstance(device, dict) and str(device.get("name") or "").strip() == name:
             return device
     return None
-
-
-def config_effective_value(config, kind, holder, key):
-    """The value the EMS uses for an overlapping key with no runtime override.
-
-    Returns a coerced scalar (the installed config value, or the EMS default when
-    the config is silent), or ``None`` when the key is not a known overlapping
-    key. Reset-to-config writes this value so a cleared override cannot fall back
-    to a stale in-memory config value.
-    """
-
-    if kind == "system" and key in SYSTEM_FIELDS:
-        raw = _config_get(config, ["system", key])
-        default = _SYSTEM_DEFAULTS.get(key)
-        value_type = SYSTEM_FIELDS[key][0]
-    elif kind == "section" and holder in SECTION_FIELDS and key in SECTION_FIELDS[holder]:
-        raw = _config_get(config, [holder, key])
-        default = _SECTION_DEFAULTS.get(holder, {}).get(key)
-        value_type = SECTION_FIELDS[holder][key][0]
-    elif kind == "device" and key in DEVICE_FIELDS:
-        device = _config_device(config, holder)
-        raw = device.get(key) if isinstance(device, dict) else None
-        if isinstance(device, dict) and key != "enabled":
-            raw = _effective_values(device, config)[key]
-        default = _device_defaults(config, device).get(key)
-        value_type = DEVICE_FIELDS[key][0]
-    else:
-        return None
-    if kind == "section" and raw is not None and (holder, key) in _EMS_SECTION_READS:
-        raw = _EMS_SECTION_READS[(holder, key)](raw)
-    if kind == "system" and raw is not None and key in _EMS_SYSTEM_READS:
-        raw = _EMS_SYSTEM_READS[key](raw)
-    effective = raw if raw is not None else default
-    return _coerce(effective, value_type)
 
 
 def overlap_provenance_for_context(context, config):

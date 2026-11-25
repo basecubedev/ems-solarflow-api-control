@@ -30,8 +30,8 @@
   import { t, tn, catalogText } from "../i18n/i18n.svelte.js";
   import { system, ensure, reload } from "../state/system.svelte.js";
   import { inEffectAfter } from "../lib/services.js";
-  import { settings, setValue, setHardwareValues, discard, discardHardware, previewDraft, applyDraft, applyNow, resetOverrides } from "../state/settings.svelte.js";
-  import { EDIT_TABS, changeGroups, departureMatches, departures, restartNeeded, fieldMatches, levelled, liveOverride, openHistory, previewValue, safetyBlocks, sharedRisk, tabSections } from "../lib/settings.js";
+  import { settings, setValue, setHardwareValues, discard, discardHardware, previewDraft, applyDraft, applyNow, operatingLine } from "../state/settings.svelte.js";
+  import { EDIT_TABS, changeGroups, departureMatches, departures, operatingSkipped, restartNeeded, fieldMatches, levelled, openHistory, previewValue, safetyBlocks, sharedRisk, tabSections } from "../lib/settings.js";
   import { errorView } from "../lib/errors.js";
   import { href } from "../app/router.svelte.js";
 
@@ -50,7 +50,6 @@
   const shownText = (text) => catalogText(text).text;
   let backup = $state(true);
   let confirmApply = $state(false);
-  let confirmReset = $state(false);
 
   const config = $derived(system.config.data);
   const ok = $derived(config?.status === "ok");
@@ -209,6 +208,7 @@
   const canApply = $derived(settings.reviewed && preview?.changed === true && !settings.applying && !openHistory(preview).length);
   const applied = $derived(settings.applied);
   const needsRestart = $derived(restartNeeded(applied?.diff, applied?.result));
+  const notTaken = $derived(operatingSkipped(applied?.result));
   const restartWaits = $derived(needsRestart && inEffectAfter(system.plan.data, system.plan.askedAt, applied?.at ?? 0) !== true);
   const rollback = $derived(settings.applyError?.payload?.credential_rollback || settings.applyError?.credential_rollback || null);
 
@@ -266,7 +266,7 @@
     {#if risk}<p class="note warn"><Icon name="triangle-alert" />{t(`settings.risk.${risk}.shared`)}</p>{/if}
     <div class="fields">
       {#each block.fields as field (field.path)}
-        <SettingField {field} value={values[field.path]} live={liveOverride(config.overrides, field.path)} hideRisk={Boolean(risk)} onchange={(value) => setValue(field, value)} />
+        <SettingField {field} value={values[field.path]} operating={operatingLine(config.operating, field.path)} hideRisk={Boolean(risk)} onchange={(value) => setValue(field, value)} />
       {/each}
     </div>
   </div>
@@ -290,15 +290,6 @@
     <button class="icon-btn" type="button" onclick={() => reload("config")} disabled={system.config.loading} aria-label={t("common.refresh")} title={t("common.refresh")}><Icon name="refresh-cw" /></button>
   </div>
 
-  {#if settings.overrides.length}
-    <div class="note span-12 live-note" role="note">
-      <Icon name="info" />
-      <span>{tn("settings.edit.overrides", settings.overrides.length)}</span>
-      <button class="btn secondary small" type="button" onclick={() => (confirmReset = true)} disabled={settings.resetting} data-testid="reset-overrides"><Icon name="rotate-ccw" size="sm" />{settings.resetting ? t("settings.edit.resetting") : t("settings.edit.reset")}</button>
-    </div>
-    {#if settings.resetError}<div class="span-12">{@render failure(settings.resetError)}</div>{/if}
-  {/if}
-
   {#if tab === "features" || tab === "expert"}
     {@const list = matchingSections(tab)}
     <Card icon={TAB_LOOKS[tab].icon} tone={TAB_LOOKS[tab].tone} title={t(`settings.tab.${tab}`)} subtitle={t(`settings.tab.${tab}.sub`)} span="span-12">
@@ -316,7 +307,7 @@
     </Card>
   {:else if tab === "safety"}
     <Card icon="toggle-right" tone="c-out" title={t("control.title")} subtitle={t("control.sub")} span="span-4">
-      <ControlState control={config.summary?.control} overrides={config.overrides} />
+      <ControlState control={config.summary?.control} operating={config.operating} />
     </Card>
     <Card icon="shield-check" tone="c-soc" title={t("settings.tab.safety")} subtitle={t("settings.tab.safety.sub")} span="span-8">
       {#if blocks.length}
@@ -410,9 +401,10 @@
         {:else}
           <p><Icon name="circle-check" size="sm" /> {applied.result?.backup_path ? t("settings.edit.appliedBackup") : t("settings.edit.appliedNoBackup")}</p>
           {#if applied.result?.backup_path}<p class="muted small num" lang="en">{applied.result.backup_path}</p>{/if}
+          {#if notTaken.length}<p class="note warn" data-testid="operating-skipped"><Icon name="triangle-alert" />{t("settings.edit.operatingSkipped", { paths: notTaken.join(", ") })}</p>{/if}
           {#if needsRestart}
             <RestartEms needed={restartWaits} since={applied.at} settled={t("settings.edit.inEffect")} />
-          {:else}
+          {:else if !notTaken.length}
             <p class="muted">{t("settings.edit.liveNow")}</p>
           {/if}
         {/if}
@@ -439,19 +431,9 @@
   onconfirm={() => { confirmApply = false; applyDraft({ backup }); }}
   oncancel={() => (confirmApply = false)}
 />
-<ConfirmDialog
-  open={confirmReset}
-  title={t("settings.edit.resetTitle")}
-  lines={[tn("settings.edit.resetLine", settings.overrides.length)]}
-  confirmLabel={t("settings.edit.reset")}
-  onconfirm={() => { confirmReset = false; resetOverrides(); }}
-  oncancel={() => (confirmReset = false)}
-/>
 
 <style>
   .toolbar { display: flex; align-items: center; gap: var(--s3); flex-wrap: wrap; }
-  .live-note { align-items: center; flex-wrap: wrap; }
-  .live-note span { flex: 1 1 240px; }
   .sections, .blocks { display: flex; flex-direction: column; gap: var(--s3); }
   .block { display: flex; flex-direction: column; gap: var(--s2); }
   .block + .block { border-top: 1px solid var(--m-line); padding-top: var(--s4); }

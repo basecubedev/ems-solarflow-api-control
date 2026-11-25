@@ -3,7 +3,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { CONTROL_LADDER, CONTROL_STATUSES, CONTROL_TRANSPORTS, controlView } from "../src/lib/control.js";
+import { CONTROL_STATUSES, CONTROL_TRANSPORTS, controlView } from "../src/lib/control.js";
 
 const SERVER = readFileSync(new URL("../../../admin/maintenance_config.py", import.meta.url), "utf8");
 
@@ -39,38 +39,26 @@ test("transports say whether they may write and how many devices use them", () =
     envelope: { total_output_w: 1600, device_output_w: 800, soc_min: 10, soc_max: 100, soc_uniform: false },
   });
   assert.deepEqual(view.transports.map((entry) => [entry.gate, entry.state, entry.devices]), [["api", "writing", 2], ["mqtt_local", "idle", 0], ["mqtt_zendure", "blocked", 1]]);
-  assert.deepEqual(view.envelope, { totalW: 1600, deviceW: 800, socMin: 10, socMax: 100, socUniform: false });
+  assert.deepEqual(view.envelope, { totalW: 1600, totalLimitW: 1600, deviceW: 800, socMin: 10, socMax: 100, socUniform: false });
   assert.deepEqual(view.notes.map((note) => note.key), ["control.note.placeholders", "control.note.singleController", "control.note.stateReconciliation", "control.note.provenance"]);
   assert.equal(view.notes[0].vars.fields, "devices[0].ip");
 });
 
 test("an envelope that is not a number is not shown as one", () => {
   const view = controlView({ status: "disabled", envelope: { total_output_w: "1600", device_output_w: null, soc_min: true } });
-  assert.deepEqual(view.envelope, { totalW: null, deviceW: null, socMin: null, socMax: null, socUniform: true });
+  assert.deepEqual(view.envelope, { totalW: null, totalLimitW: null, deviceW: null, socMin: null, socMax: null, socUniform: true });
 });
 
-test("the status ladder here is the server's, in the server's order", () => {
-  const body = SERVER.slice(SERVER.indexOf("def _control_state"));
-  const ladder = [...body.slice(0, body.indexOf("\ndef ", 10)).matchAll(/status = "([a-z_]+)"/g)].map((match) => match[1]);
-  assert.deepEqual(ladder, [...CONTROL_LADDER]);
-});
-
-test("control switched off in the dashboard reads as off, and a limit changed there is the one shown", () => {
+test("the total shown is the operating value the EMS runs, never above its limit", () => {
   const control = { status: "may_control", enabled: true, transports: [{ control_gate: "api", armed: true, device_count: 2 }], envelope: { total_output_w: 1600 } };
-  const off = controlView(control, { "system.enabled": { config_value: true, effective_value: false, source: "dashboard_override" }, "system.max_total_power": { effective_value: 800, source: "dashboard_override" } });
-  assert.deepEqual([off.status, off.live, off.envelope.totalW], ["disabled", true, 800]);
-  assert.ok(off.notes.some((note) => note.key === "control.note.live"));
-  assert.ok(!off.notes.some((note) => note.key === "control.note.provenance"));
-  const on = controlView({ ...control, status: "disabled", enabled: false }, { "system.enabled": { effective_value: true, source: "dashboard_override" } });
-  assert.equal(on.status, "may_control");
-  const filed = controlView(control, { "system.enabled": { effective_value: true, source: "config" } });
-  assert.deepEqual([filed.status, filed.live, filed.envelope.totalW], ["may_control", false, 1600]);
-  assert.equal(controlView({ status: "unknown" }, { "system.enabled": { effective_value: true, source: "dashboard_override" } }).status, "unknown");
+  assert.deepEqual([controlView(control, { "system.max_total_power": 800 }).envelope.totalW, controlView(control, { "system.max_total_power": 800 }).envelope.totalLimitW], [800, 1600]);
+  assert.equal(controlView(control, { "system.max_total_power": 2400 }).envelope.totalW, 1600);
+  assert.equal(controlView(control, {}).envelope.totalW, 1600);
+  assert.equal(controlView({ ...control, status: "disabled" }, { "system.max_total_power": 800 }).status, "disabled");
 });
 
-test("a device switched in the dashboard at runtime is noted, since the counts come from the file", () => {
+test("a device whose control is off on the dashboard is noted, since the counts come from the file", () => {
   const control = { status: "may_control", enabled: true, transports: [{ control_gate: "api", armed: true, device_count: 1 }], envelope: {} };
-  const view = controlView(control, { devices: { Terrace: { enabled: { effective_value: false, source: "dashboard_override" } } } });
-  assert.ok(view.notes.some((note) => note.key === "control.note.devicesLive"));
-  assert.ok(!controlView(control, { devices: { Terrace: { enabled: { effective_value: true, source: "config" } } } }).notes.some((note) => note.key === "control.note.devicesLive"));
+  assert.ok(controlView(control, { devices: { Terrace: { max_power: 800, control: false } } }).notes.some((note) => note.key === "control.note.devicesOff"));
+  assert.ok(!controlView(control, { devices: { Terrace: { max_power: 800, control: true } } }).notes.some((note) => note.key === "control.note.devicesOff"));
 });

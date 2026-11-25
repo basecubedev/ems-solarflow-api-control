@@ -133,6 +133,7 @@ nav = [
     { "Agent rules" = "developer/agent-rules.md" },
     { "Code intelligence" = "developer/code-intelligence.md" },
     { "Review coverage" = "developer/review-coverage.md" },
+    { "Settings stores" = "developer/settings-operation-store.md" },
     { "Developer setup" = "developer/developer-setup.md" },
     { "Development notes" = "developer/development.md" },
     { "Developer notes" = "developer/developer.md" },

@@ -402,10 +402,10 @@ python3 emsctl.py device WR1 ac-discharge on
 
 `off` ends a running discharge on the next cycle and keeps the device at `0`,
 below `min_output_limit` and through the night/minSoc idle too; it may still
-charge from surplus. Like every runtime value it wins over `config.json`: a
-device entry edited by hand to `false` while runtime state says `on` keeps
-discharging, and the EMS warns once per run as `ac_discharge_config_overridden`
-(also after `ac-discharge on` over such an entry, which is then intended).
+charge from surplus. The switch lives in `runtime-state.json` only. A value in
+a device entry of `config.json` seeds it only where the runtime state holds
+none yet; otherwise the next live start keeps the running value, removes the
+file's and warns that it was not taken (docs/developer/settings-operation-store.md).
 
 ## Config Discovery
 

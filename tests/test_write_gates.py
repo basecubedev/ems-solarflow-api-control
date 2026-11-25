@@ -276,18 +276,15 @@ class WriteGateTest(unittest.TestCase):
                 self.assertEqual(written.get("WR1"), 0)
                 self.assertTrue(any("event=ac_discharge_runtime_value_invalid" in line for line in logs.output))
 
-    def test_a_runtime_switch_over_a_device_entry_that_forbids_discharge_is_named_once(self):
+    def test_the_runtime_switch_is_the_one_discharge_permission_and_is_not_warned_about(self):
         controller = EMSController(devices=[device("WR1", ac_discharge_enabled=False)], shelly=ShellyStub(0), sleep_enabled=False)
         controller.runtime_state = RuntimeStateStub(devices={"WR1": {"ac_discharge_enabled": True}})
 
         with self.assertLogs(level=logging.WARNING) as logs:
             self.assertTrue(controller.device_may_discharge(controller.devices[0]))
-            self.assertTrue(controller.device_may_discharge(controller.devices[0]))
             logging.getLogger().warning("end")
 
-        said = [line for line in logs.output if "event=ac_discharge_config_overridden" in line]
-        self.assertEqual(len(said), 1)
-        self.assertIn("ac-discharge on|off", said[0])
+        self.assertEqual(logs.output, ["WARNING:root:end"])
 
     def test_runtime_disabled_device_receives_no_write(self):
         disabled = device("WR1")

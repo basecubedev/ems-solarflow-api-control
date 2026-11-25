@@ -122,8 +122,9 @@ are read-only:
    above zero while the EMS commands a charge is the proof.
 3. **Does the EMS complain?** `event=ac_charge_not_delivered` is the negative
    result: the command was accepted and nothing flowed for six cycles. If it
-   fires repeatedly, the catalogue row is wrong for that model — set
-   `ac_charge_enabled` to `false` for the device and please report it.
+   fires repeatedly, the catalogue row is wrong for that model — switch AC
+   charging off for the device (dashboard, or `emsctl.py device NAME ac-charge
+   off`) and please report it.
 4. **What does the device say about itself?**
 
    ```bash
@@ -249,12 +250,11 @@ input at 0 W ends the EMS's charge by its setpoint alone on the local API —
 is not moved out and back; over MQTT, where nothing keeps that role, it is the
 exit to idle.
 
-Both switches live in [runtime-state](technical/runtime-state.md), which the
-EMS seeds from `config.json` when it loads it. The Dashboard therefore shows
-the value the EMS applies, the same value the Admin's **Features** tab on
-**Settings & devices** shows until an operator flips a switch at runtime. The
-Admin edits `config.json` and mirrors the flag into runtime-state on **Save and
-apply**; it never reads the runtime switch back into the config.
+Both switches are operating values and live in
+[runtime-state](technical/runtime-state.md) only. A value in `config.json` seeds
+it only where the runtime state holds none yet; otherwise the next live start
+keeps the running value, removes the file's and warns that it was not taken. The Dashboard and the Admin's
+**Settings & devices** show and change the same value, the one the EMS applies.
 
 ## Safety
 
@@ -480,8 +480,8 @@ slack.
 
 `ac_charge_not_delivered` names the device, so this is diagnosable rather than
 silent — but until you act on it the fleet charges at part of its capacity. Turn
-`ac_charge_enabled` off for that device and please report it, so the catalogue
-row can be corrected.
+AC charging off for that device on the dashboard (or `emsctl.py device NAME
+ac-charge off`) and please report it, so the catalogue row can be corrected.
 
 It is not dropped from the allocation automatically on purpose. Doing that needs
 a signal that a device is not charging, and both available witnesses can be
@@ -640,5 +640,5 @@ enabled from the catalogue rather than from a measurement. It fires once when a
 commanded charge has produced no measured AC input for six consecutive cycles,
 and carries the model and its `charge_evidence`. It **changes nothing** — the
 charge keeps being commanded. If it repeats on your hardware, that model's
-catalogue row is likely wrong; turn `ac_charge_enabled` off for the device and
-please report it.
+catalogue row is likely wrong; turn AC charging off for the device on the
+dashboard (or `emsctl.py device NAME ac-charge off`) and please report it.

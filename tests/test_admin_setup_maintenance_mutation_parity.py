@@ -183,7 +183,7 @@ def test_scalar_feature_paths_coerce_identically():
     setup_config = {"winter": {}, "dashboard": {}}
     maintenance_config_dict = {"winter": {}, "dashboard": {}}
     features = {
-        "winter.enabled": "true",
+        "dashboard.enabled": "true",
         "winter.months": "10, 11, 12",
         "dashboard.port": "9090",
     }

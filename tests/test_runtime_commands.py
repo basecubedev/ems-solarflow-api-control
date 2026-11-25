@@ -518,4 +518,4 @@ def test_the_ems_hands_the_live_context_itself_to_every_reader():
         for keyword in node.keywords
         if isinstance(keyword.value, ast.Name) and keyword.value.id == "runtime_validation"
     ]
-    assert sorted(handed) == ["runtime_validation", "validation_context", "validation_context"]
+    assert sorted(handed) == ["power_limits", "runtime_validation", "validation_context", "validation_context"]

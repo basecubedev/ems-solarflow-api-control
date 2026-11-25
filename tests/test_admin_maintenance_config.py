@@ -134,27 +134,59 @@ def test_load_never_exposes_secret_feature_values(tmp_path):
         assert all(field["path"] != "influxdb.token" for field in section["fields"])
 
 
-def test_load_surfaces_runtime_override_provenance(tmp_path):
+def test_load_shows_operating_values_as_the_ems_runs_them(tmp_path):
+    """An operating value has one value, the runtime one; a hard limit stays the
+    config's, with the operating value below it named apart."""
+
     data = _config()
     data["system"]["loop_interval"] = 3
     _write_config(tmp_path, data)
     (tmp_path / "runtime-state.json").write_text(
-        json.dumps({"system": {"loop_interval": 5}}), encoding="utf-8"
+        json.dumps({
+            "system": {"loop_interval": 5, "max_total_power": 900},
+            "devices": {"WR1": {"identity": "AAA", "max_power": 500, "enabled": False}},
+        }),
+        encoding="utf-8",
     )
     result = load_maintenance_config(base_dir=str(tmp_path))
-    overrides = result["overrides"]
-    assert overrides["system.loop_interval"]["config_value"] == 3
-    assert overrides["system.loop_interval"]["effective_value"] == 5
-    assert overrides["system.loop_interval"]["source"] == "dashboard_override"
-    assert overrides["system.max_total_power"]["source"] == "config"
-    assert result["draft"]["features"]["system.loop_interval"] == 3
+    assert result["draft"]["features"]["system.loop_interval"] == 5
+    assert result["draft"]["features"]["system.max_total_power"] == data["system"]["max_total_power"]
+    assert result["operating"]["system.max_total_power"] == 900
+    assert result["operating"]["devices"]["WR1"] == {"max_power": 500, "control": False}
+    assert result["operating"]["devices"]["WR2"]["control"] is None
+    assert "overrides" not in result
 
 
-def test_load_without_runtime_file_marks_all_config(tmp_path):
-    _write_config(tmp_path, _config())
+@pytest.mark.parametrize(("config_enabled", "runtime_enabled", "status"), [
+    (True, False, "disabled"),
+    (False, True, "may_control"),
+    (True, None, "may_control"),
+    (False, None, "disabled"),
+])
+def test_the_control_summary_shows_control_as_the_ems_runs_it(tmp_path, config_enabled, runtime_enabled, status):
+    """Control on or off is an operating value: the EMS takes the runtime value
+    before the config's, and the summary shows what it takes."""
+
+    data = _config()
+    data["system"].update({"enabled": config_enabled, "dry_run": False})
+    _write_config(tmp_path, data)
+    if runtime_enabled is not None:
+        (tmp_path / "runtime-state.json").write_text(
+            json.dumps({"system": {"enabled": runtime_enabled}}), encoding="utf-8"
+        )
+
+    control = load_maintenance_config(base_dir=str(tmp_path))["summary"]["control"]
+
+    assert control["enabled"] is (runtime_enabled if runtime_enabled is not None else config_enabled)
+    assert control["status"] == status
+
+
+def test_load_without_runtime_file_names_the_operating_values_the_ems_would_seed(tmp_path):
+    data = _config()
+    _write_config(tmp_path, data)
     result = load_maintenance_config(base_dir=str(tmp_path))
-    overrides = result["overrides"]
-    assert overrides["system.max_total_power"]["source"] == "config"
+    assert result["operating"]["system.max_total_power"] == data["system"]["max_total_power"]
+    assert result["operating"]["devices"]["WR1"] == {"max_power": 800, "control": None}
 
 
 def test_preview_ignores_runtime_override(tmp_path):
@@ -525,10 +557,14 @@ def test_preview_missing_config_is_clear_status(tmp_path):
 def test_feature_change_is_coerced_and_diffed(tmp_path):
     _write_config(tmp_path, _config())
     draft = load_maintenance_config(base_dir=str(tmp_path))["draft"]
-    draft["features"]["winter.enabled"] = True
+    draft["features"]["winter.winter_min_soc"] = 35
+    draft["features"]["winter.enabled"] = not draft["features"]["winter.enabled"]
     preview = preview_maintenance_config(draft, base_dir=str(tmp_path))
-    assert preview["preview"]["winter"]["enabled"] is True
-    assert any(c["path"] == "winter.enabled" for c in preview["diff"]["changes"])
+    rows = {c["path"]: c for bucket in ("changes", "added") for c in preview["diff"][bucket]}
+    assert preview["preview"]["winter"]["winter_min_soc"] == 35
+    assert rows["winter.winter_min_soc"]["applies_live"] is False
+    assert rows["winter.enabled"]["applies_live"] is True
+    assert preview["preview"]["winter"].get("enabled") == _config()["winter"].get("enabled")
 
 
 def test_zendure_mqtt_enabled_feature_path_is_ignored(tmp_path):
@@ -1573,7 +1609,10 @@ def _convergence_service(tmp_path):
     )
 
 
-def test_apply_mirrors_changed_overlapping_key_to_runtime(tmp_path, monkeypatch):
+def test_apply_writes_a_changed_operating_value_to_the_runtime_state_only(tmp_path, monkeypatch):
+    """An operating value lives in runtime-state.json; the apply writes it there
+    and leaves config.json as it is (docs/developer/settings-operation-store.md)."""
+
     data = _config()
     data["system"]["loop_interval"] = 3
     _write_config(tmp_path, data)
@@ -1598,17 +1637,37 @@ def test_apply_mirrors_changed_overlapping_key_to_runtime(tmp_path, monkeypatch)
 
     assert status == 200
     assert payload["ok"] is True
-    assert payload["runtime_sync"]["applied"] == ["system.loop_interval"]
+    assert payload["changed"] is True
+    assert payload["operating_sync"]["applied"] == ["system.loop_interval"]
     assert json.loads(runtime_path.read_text())["system"]["loop_interval"] == 7
-    assert (
-        json.loads((tmp_path / "config" / "config.json").read_text())["system"][
-            "loop_interval"
-        ]
-        == 7
-    )
+    assert json.loads((tmp_path / "config" / "config.json").read_text())["system"]["loop_interval"] == 3
 
 
-def test_apply_succeeds_when_runtime_file_absent(tmp_path, monkeypatch):
+def test_apply_writes_a_device_operating_value_to_its_runtime_entry_only(tmp_path, monkeypatch):
+    _write_config(tmp_path, _config())
+    runtime_path = _seed_runtime_state(tmp_path)
+    loaded = load_maintenance_config(base_dir=str(tmp_path))
+    item = next(device for device in loaded["draft"]["devices"] if device["name"] == "WR1")
+    item["pv_priority_factor"] = 1.5
+    monkeypatch.setenv("EMS_INSTALL_DIR", str(tmp_path))
+    srv, base = _server(config_apply=_convergence_service(tmp_path))
+    try:
+        status, payload = _post(
+            f"{base}/api/admin/maintenance/config/apply",
+            {"draft": loaded["draft"], "revision": loaded["revision"], "confirm": True, "backup": True},
+        )
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    assert status == 200 and payload["ok"] is True
+    assert payload["operating_sync"]["applied"] == ["devices[0].pv_priority_factor"]
+    assert json.loads(runtime_path.read_text())["devices"]["WR1"]["pv_priority_factor"] == 1.5
+    saved = json.loads((tmp_path / "config" / "config.json").read_text())["devices"][0]
+    assert "pv_priority_factor" not in saved
+
+
+def test_an_operating_change_creates_the_runtime_state_where_the_ems_has_not(tmp_path, monkeypatch):
     data = _config()
     data["system"]["loop_interval"] = 3
     _write_config(tmp_path, data)
@@ -1632,15 +1691,90 @@ def test_apply_succeeds_when_runtime_file_absent(tmp_path, monkeypatch):
 
     assert status == 200
     assert payload["ok"] is True
-    assert payload["runtime_sync"]["applied"] == []
-    assert payload["runtime_sync"]["skipped"][0]["reason"] == "runtime_state_absent"
-    assert not (tmp_path / "runtime-state.json").exists()
-    assert (
-        json.loads((tmp_path / "config" / "config.json").read_text())["system"][
-            "loop_interval"
-        ]
-        == 7
-    )
+    assert payload["operating_sync"]["applied"] == ["system.loop_interval"]
+    created = json.loads((tmp_path / "runtime-state.json").read_text())
+    assert created["system"]["loop_interval"] == 7
+    assert created["defaults_revision"] == 0
+    assert json.loads((tmp_path / "config" / "config.json").read_text())["system"]["loop_interval"] == 3
+
+
+def test_a_created_runtime_state_records_the_configs_defaults_revision(tmp_path, monkeypatch):
+    """Its first EMS start then takes no value set here for an old default it would refresh."""
+
+    from ems.config import DEFAULTS_REVISION
+
+    data = _config()
+    data["config_defaults_revision"] = DEFAULTS_REVISION
+    _write_config(tmp_path, data)
+    loaded = load_maintenance_config(base_dir=str(tmp_path))
+    loaded["draft"]["features"]["system.loop_interval"] = 3
+    monkeypatch.setenv("EMS_INSTALL_DIR", str(tmp_path))
+    srv, base = _server(config_apply=_convergence_service(tmp_path))
+    try:
+        status, payload = _post(
+            f"{base}/api/admin/maintenance/config/apply",
+            {"draft": loaded["draft"], "revision": loaded["revision"], "confirm": True, "backup": True},
+        )
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    assert status == 200 and payload["operating_sync"]["applied"] == ["system.loop_interval"]
+    assert json.loads((tmp_path / "runtime-state.json").read_text())["defaults_revision"] == DEFAULTS_REVISION
+
+
+def test_a_page_loaded_before_a_change_elsewhere_puts_back_no_operating_value(tmp_path):
+    """The dashboard, the scheduler or emsctl changed values after the page loaded; a save of another field keeps them."""
+
+    _write_config(tmp_path, _config())
+    runtime_path = _seed_runtime_state(tmp_path)
+    loaded = load_maintenance_config(base_dir=str(tmp_path))
+    changed = json.loads(runtime_path.read_text())
+    changed["system"]["loop_interval"] = 9
+    changed["winter"]["enabled"] = True
+    changed["devices"]["WR1"]["ac_discharge_enabled"] = False
+    runtime_path.write_text(json.dumps(changed), encoding="utf-8")
+    loaded["draft"]["features"]["system.min_output_limit"] = 50
+
+    preview = preview_maintenance_config(loaded["draft"], base_dir=str(tmp_path))
+
+    rows = {row["path"]: row for row in preview["diff"]["changes"]}
+    assert rows["system.min_output_limit"]["after"] == 50
+    assert not {"system.loop_interval", "winter.enabled", "devices[0].ac_discharge_enabled"} & set(rows)
+
+
+def test_an_operating_value_of_a_device_the_ems_does_not_run_stays_in_its_entry(tmp_path):
+    data = _config()
+    data["devices"][1].update(enabled=False, pv_priority_factor=2.0)
+    _write_config(tmp_path, data)
+    runtime_path = _seed_runtime_state(tmp_path)
+    seeded = json.loads(runtime_path.read_text())
+    del seeded["devices"]["WR2"]
+    runtime_path.write_text(json.dumps(seeded), encoding="utf-8")
+    loaded = load_maintenance_config(base_dir=str(tmp_path))
+    item = next(device for device in loaded["draft"]["devices"] if device["name"] == "WR2")
+    item["pv_priority_factor"] = 2.5
+
+    preview = preview_maintenance_config(loaded["draft"], base_dir=str(tmp_path))
+
+    assert preview["preview"]["devices"][1]["pv_priority_factor"] == 2.5
+    live = [row for row in preview["diff"]["changes"] if row.get("applies_live") and row["path"].startswith("devices[1]")]
+    assert live == []
+
+
+def test_a_new_device_keeps_the_operating_values_typed_for_it(tmp_path):
+    _write_config(tmp_path, _config())
+    _seed_runtime_state(tmp_path)
+    loaded = load_maintenance_config(base_dir=str(tmp_path))
+    template = next(device for device in loaded["draft"]["devices"] if device["name"] == "WR2")
+    new = {key: value for key, value in template.items() if key not in ("original_name", "operating_base")}
+    new.update(name="WR3", ip="192.168.1.102", sn="CCC", ac_charge_enabled=False, ac_discharge_enabled=False, pv_priority_factor=2.0)
+    loaded["draft"]["devices"].append(new)
+
+    preview = preview_maintenance_config(loaded["draft"], base_dir=str(tmp_path))
+
+    added = next(device for device in preview["preview"]["devices"] if device["name"] == "WR3")
+    assert (added["ac_charge_enabled"], added["ac_discharge_enabled"], added["pv_priority_factor"]) == (False, False, 2.0)
 
 
 def _apply_retention(tmp_path, monkeypatch, before, after, loop_interval=None):
@@ -1719,142 +1853,6 @@ def test_a_confirmation_that_cannot_be_recorded_does_not_undo_the_apply(tmp_path
     assert payload["analytics_retention"]["warnings"]
     saved = json.loads((tmp_path / "config" / "config.json").read_text())
     assert saved["influxdb"]["retention"]["raw_days"] == 7
-
-
-def test_reset_runtime_endpoint_writes_config_value(tmp_path, monkeypatch):
-    data = _config()
-    data["system"]["loop_interval"] = 3
-    _write_config(tmp_path, data)
-    runtime_path = _seed_runtime_state(tmp_path, loop_interval=5)
-    monkeypatch.setenv("EMS_INSTALL_DIR", str(tmp_path))
-    srv, base = _server(config_apply=_convergence_service(tmp_path))
-    try:
-        status, payload = _post(
-            f"{base}/api/admin/maintenance/config/reset-runtime",
-            {"targets": [{"scope": "system", "key": "loop_interval"}], "confirm": True},
-        )
-    finally:
-        srv.shutdown()
-        srv.server_close()
-
-    assert status == 200
-    assert payload["ok"] is True
-    assert payload["runtime_sync"]["applied"] == ["system.loop_interval"]
-    assert json.loads(runtime_path.read_text())["system"]["loop_interval"] == 3
-
-
-def test_reset_runtime_resolves_masked_cloud_name_by_opaque_token(
-    tmp_path, monkeypatch
-):
-    route = "ACCOUNT_ROUTE_7501"
-    product = "PRODUCT_KEY_7501"
-    raw_name = f"Cloud shed {route}"
-    data = _config()
-    data["devices"] = [
-        {
-            "type": "zendure_mqtt",
-            "name": raw_name,
-            "enabled": True,
-            "max_power": 700,
-            "mqtt": {
-                "broker_ref": "cloud_a",
-                "topic_family": "legacy_zendure_json",
-                "product_key": product,
-                "device_id": route,
-                "write_topic": f"iot/{product}/{route}/properties/write",
-            },
-            "capabilities": {
-                "read_power": True,
-                "read_soc": True,
-                "write_output_limit": True,
-            },
-        }
-    ]
-    data["zendure_mqtt"] = {
-        "brokers": {
-            "cloud_a": {
-                "host": "mqtt.example.invalid",
-                "port": 8883,
-                "tls": True,
-                "source": "zendure_cloud_mqtt",
-                "credentials_ref": "zendure_cloud:cloud_a",
-            }
-        }
-    }
-    _write_config(tmp_path, data)
-    runtime_path = tmp_path / "runtime-state.json"
-    runtime_path.write_text(
-        json.dumps(
-            {
-                "system": {"max_total_power": 1600},
-                "devices": {raw_name: {"max_power": 500}},
-            }
-        ),
-        encoding="utf-8",
-    )
-    monkeypatch.setenv("EMS_INSTALL_DIR", str(tmp_path))
-    srv, base = _server(config_apply=_convergence_service(tmp_path))
-    try:
-        load_status, loaded = _get(f"{base}/api/admin/maintenance/config")
-        safe_name, fields = next(iter(loaded["overrides"]["devices"].items()))
-        token = fields["max_power"]["physical_identity_token"]
-        status, payload = _post(
-            f"{base}/api/admin/maintenance/config/reset-runtime",
-            {
-                "targets": [
-                    {
-                        "scope": "device",
-                        "name": safe_name,
-                        "key": "max_power",
-                        "physical_identity_token": token,
-                    }
-                ],
-                "confirm": True,
-            },
-        )
-    finally:
-        srv.shutdown()
-        srv.server_close()
-
-    assert load_status == 200
-    assert route not in safe_name
-    assert token.startswith("opaque:v1:")
-    assert status == 200
-    assert payload["ok"] is True
-    assert json.loads(runtime_path.read_text())["devices"][raw_name]["max_power"] == 700
-    response_text = json.dumps(payload)
-    assert route not in response_text
-    assert product not in response_text
-    assert f"iot/{product}/{route}/properties/write" not in response_text
-
-
-def test_reset_runtime_requires_an_explicit_confirmation(tmp_path, monkeypatch):
-    """The only mutating Maintenance route without a server-side confirmation.
-
-    Every other route that writes here (apply, migration apply, container sync)
-    refuses a body without ``confirm``. This one discards live runtime values
-    with no undo, so a browser-side ``window.confirm`` must not be the only
-    thing standing between a stray request and the operator's tuning.
-    """
-
-    data = _config()
-    data["system"]["loop_interval"] = 3
-    _write_config(tmp_path, data)
-    runtime_path = _seed_runtime_state(tmp_path, loop_interval=5)
-    monkeypatch.setenv("EMS_INSTALL_DIR", str(tmp_path))
-    srv, base = _server(config_apply=_convergence_service(tmp_path))
-    try:
-        status, payload = _post(
-            f"{base}/api/admin/maintenance/config/reset-runtime",
-            {"targets": [{"scope": "system", "key": "loop_interval"}]},
-        )
-    finally:
-        srv.shutdown()
-        srv.server_close()
-
-    assert status == 400
-    assert payload["error"] == "confirmation_required"
-    assert json.loads(runtime_path.read_text())["system"]["loop_interval"] == 5
 
 
 def test_a_broker_address_change_survives_the_feature_round_trip():
@@ -2132,11 +2130,22 @@ def test_a_port_the_ems_accepts_passes(port):
     assert "zendure_mqtt_port_invalid" not in codes
 
 
+def test_an_operating_value_the_runtime_service_refuses_blocks_the_apply(tmp_path):
+    _write_config(tmp_path, _config())
+    draft = load_maintenance_config(base_dir=str(tmp_path))["draft"]
+    draft["features"]["winter.enabled"] = "perhaps"
+
+    preview = preview_maintenance_config(draft, base_dir=str(tmp_path))
+
+    codes = [e["code"] for e in preview["validation"]["errors"] if "winter.enabled" in e["message"]]
+    assert codes == ["operating_value_invalid"]
+    assert not (tmp_path / "runtime-state.json").exists()
+
+
 @pytest.mark.parametrize(
     "path,value",
     [
         ("winter.adjust_hour", "noon"),
-        ("winter.enabled", "perhaps"),
         ("winter.ramp_step_percent", 9),
     ],
 )
@@ -2381,3 +2390,394 @@ def test_a_security_choice_against_a_stored_tls_mode_is_refused_not_dropped(
     assert "contradicts tls_mode" in next(
         e["message"] for e in errors if e["code"] == "zendure_mqtt_tls_invalid"
     )
+
+
+def test_a_switched_off_device_shows_the_values_waiting_for_it(tmp_path):
+    data = _config()
+    data["devices"][1]["enabled"] = False
+    _write_config(tmp_path, data)
+    runtime_path = _seed_runtime_state(tmp_path)
+    seeded = json.loads(runtime_path.read_text())
+    del seeded["devices"]["WR2"]
+    seeded["parked_devices"] = {"identity:BBB": {"pv_priority_factor": 2.5, "ac_discharge_enabled": False}}
+    runtime_path.write_text(json.dumps(seeded), encoding="utf-8")
+
+    loaded = load_maintenance_config(base_dir=str(tmp_path))
+
+    item = next(device for device in loaded["draft"]["devices"] if device["name"] == "WR2")
+    assert (item["pv_priority_factor"], item["ac_discharge_enabled"]) == (2.5, False)
+
+
+def test_while_a_setup_reset_waits_an_operating_change_goes_into_the_config(tmp_path):
+    """The next EMS start builds the runtime state from that config; a value written there now would be set aside."""
+
+    from ems.runtime_state import RESET_REQUEST_SUFFIX, config_digest
+
+    config_path = _write_config(tmp_path, _config())
+    runtime_path = _seed_runtime_state(tmp_path)
+    (tmp_path / f"runtime-state.json{RESET_REQUEST_SUFFIX}").write_text(
+        json.dumps({"config_sha256": config_digest(config_path.read_bytes())}), encoding="utf-8"
+    )
+    assert runtime_path == tmp_path / "runtime-state.json"
+    loaded = load_maintenance_config(base_dir=str(tmp_path))
+    loaded["draft"]["features"]["system.grid_target_discharge_w"] = 40
+
+    preview = preview_maintenance_config(loaded["draft"], base_dir=str(tmp_path))
+
+    assert preview["preview"]["system"]["grid_target_discharge_w"] == 40
+    rows = (preview["diff"].get("changes") or []) + (preview["diff"].get("added") or [])
+    named = [row for row in rows if row["path"] == "system.grid_target_discharge_w"]
+    assert named and not [row for row in named if row.get("applies_live")]
+
+
+def test_an_operating_value_is_checked_against_the_limit_the_save_sets(tmp_path):
+    _write_config(tmp_path, _config())
+    _seed_runtime_state(tmp_path)
+    loaded = load_maintenance_config(base_dir=str(tmp_path))
+    loaded["draft"]["features"]["system.max_total_power"] = 100
+    loaded["draft"]["features"]["system.min_output_limit"] = 150
+
+    preview = preview_maintenance_config(loaded["draft"], base_dir=str(tmp_path))
+
+    assert preview["validation"]["ok"] is False
+    assert any("system.min_output_limit" in error["message"] for error in preview["validation"]["errors"])
+
+
+def test_an_operating_change_reaches_a_cloud_device_whose_name_the_browser_saw_masked(tmp_path):
+    route = "ACCOUNT_ROUTE_7501"
+    product = "PRODUCT_KEY_7501"
+    raw_name = f"Cloud shed {route}"
+    data = _config()
+    data["devices"] = [{
+        "type": "zendure_mqtt", "name": raw_name, "enabled": True, "max_power": 700,
+        "mqtt": {"broker_ref": "cloud_a", "topic_family": "legacy_zendure_json", "product_key": product,
+                 "device_id": route, "write_topic": f"iot/{product}/{route}/properties/write"},
+        "capabilities": {"read_power": True, "read_soc": True, "write_output_limit": True},
+    }]
+    data["zendure_mqtt"] = {"brokers": {"cloud_a": {"host": "mqtt.example.invalid", "port": 8883, "tls": True,
+                                                   "source": "zendure_cloud_mqtt", "credentials_ref": "zendure_cloud:cloud_a"}}}
+    _write_config(tmp_path, data)
+    (tmp_path / "runtime-state.json").write_text(json.dumps({
+        "system": {"max_total_power": 1600},
+        "devices": {raw_name: {"identity": route, "max_power": 700, "pv_priority_factor": 1.0}},
+    }), encoding="utf-8")
+    loaded = load_maintenance_config(base_dir=str(tmp_path), identity_token_key=b"k" * 32)
+    item = loaded["draft"]["devices"][0]
+    assert route not in item["original_name"]
+    item["pv_priority_factor"] = 2.5
+
+    preview = preview_maintenance_config(loaded["draft"], base_dir=str(tmp_path), identity_token_key=b"k" * 32)
+
+    assert [row["after"] for row in preview["diff"]["changes"] if row["path"] == "devices[0].pv_priority_factor"] == [2.5]
+
+
+def _parked_wr2(tmp_path):
+    data = _config()
+    data["devices"][1]["enabled"] = False
+    _write_config(tmp_path, data)
+    runtime_path = _seed_runtime_state(tmp_path)
+    seeded = json.loads(runtime_path.read_text())
+    del seeded["devices"]["WR2"]
+    seeded["parked_devices"] = {"identity:BBB": {"pv_priority_factor": 2.5, "ac_discharge_enabled": False}}
+    runtime_path.write_text(json.dumps(seeded), encoding="utf-8")
+    return runtime_path
+
+
+def test_a_parked_devices_value_is_changed_where_it_is_parked(tmp_path, monkeypatch):
+    runtime_path = _parked_wr2(tmp_path)
+    loaded = load_maintenance_config(base_dir=str(tmp_path))
+    item = next(device for device in loaded["draft"]["devices"] if device["name"] == "WR2")
+    item["pv_priority_factor"] = 3.0
+    monkeypatch.setenv("EMS_INSTALL_DIR", str(tmp_path))
+    srv, base = _server(config_apply=_convergence_service(tmp_path))
+    try:
+        status, payload = _post(
+            f"{base}/api/admin/maintenance/config/apply",
+            {"draft": loaded["draft"], "revision": loaded["revision"], "confirm": True, "backup": True},
+        )
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    assert status == 200 and payload["operating_sync"]["applied"] == ["devices[1].pv_priority_factor"]
+    assert json.loads(runtime_path.read_text())["parked_devices"]["identity:BBB"]["pv_priority_factor"] == 3.0
+    assert "pv_priority_factor" not in json.loads((tmp_path / "config" / "config.json").read_text())["devices"][1]
+
+
+def test_a_new_device_under_a_removed_devices_name_touches_none_of_its_values(tmp_path):
+    _write_config(tmp_path, _config())
+    _seed_runtime_state(tmp_path)
+    loaded = load_maintenance_config(base_dir=str(tmp_path))
+    old = loaded["draft"]["devices"].pop(1)
+    new = {key: value for key, value in old.items() if key not in ("original_name", "operating_base")}
+    new.update(sn="CCC", ip="192.168.1.109", ac_discharge_enabled=False, pv_priority_factor=2.0)
+    loaded["draft"]["devices"].append(new)
+
+    preview = preview_maintenance_config(loaded["draft"], base_dir=str(tmp_path))
+
+    assert not [row for row in preview["diff"]["changes"] if row.get("applies_live") and row["path"].startswith("devices[1].")]
+    added = next(device for device in preview["preview"]["devices"] if device.get("sn") == "CCC")
+    assert (added["ac_discharge_enabled"], added["pv_priority_factor"]) == (False, 2.0)
+
+
+def test_a_serial_change_keeps_the_devices_values_in_its_entry(tmp_path):
+    """The next start finds no runtime entry for the new serial and seeds the device from its entry."""
+
+    _write_config(tmp_path, _config())
+    runtime_path = _seed_runtime_state(tmp_path)
+    seeded = json.loads(runtime_path.read_text())
+    seeded["devices"]["WR1"].update(identity="AAA", pv_priority_factor=1.5, ac_discharge_enabled=False)
+    runtime_path.write_text(json.dumps(seeded), encoding="utf-8")
+    loaded = load_maintenance_config(base_dir=str(tmp_path))
+    loaded["draft"]["devices"][0]["sn"] = "AAB"
+
+    preview = preview_maintenance_config(loaded["draft"], base_dir=str(tmp_path))
+
+    device = preview["preview"]["devices"][0]
+    assert (device["sn"], device["pv_priority_factor"], device["ac_discharge_enabled"]) == ("AAB", 1.5, False)
+
+
+def test_a_save_after_the_switch_over_warns_of_no_missing_operating_value(tmp_path):
+    _write_config(tmp_path, _config())
+    _seed_runtime_state(tmp_path)
+    loaded = load_maintenance_config(base_dir=str(tmp_path))
+    loaded["draft"]["features"]["system.max_total_power"] = 1500
+
+    preview = preview_maintenance_config(loaded["draft"], base_dir=str(tmp_path))
+
+    text = json.dumps(preview["validation"].get("warnings") or [])
+    assert "pv_priority_factor" not in text and "ac_discharge_enabled" not in text
+
+
+def test_while_a_setup_reset_waits_the_page_shows_the_values_the_config_gives(tmp_path):
+    from ems.runtime_state import RESET_REQUEST_SUFFIX, config_digest
+
+    config_path = _write_config(tmp_path, _config())
+    _seed_runtime_state(tmp_path, loop_interval=9)
+    (tmp_path / f"runtime-state.json{RESET_REQUEST_SUFFIX}").write_text(
+        json.dumps({"config_sha256": config_digest(config_path.read_bytes())}), encoding="utf-8"
+    )
+
+    loaded = load_maintenance_config(base_dir=str(tmp_path))
+
+    assert loaded["draft"]["features"]["system.loop_interval"] == 5
+
+
+def test_a_device_the_ems_does_not_run_names_no_control_switch(tmp_path):
+    """Its activation is off in the config; the dashboard switched nothing."""
+
+    _parked_wr2(tmp_path)
+
+    loaded = load_maintenance_config(base_dir=str(tmp_path))
+
+    assert loaded["operating"]["devices"]["WR2"]["control"] is None
+    assert loaded["operating"]["devices"]["WR1"]["control"] is True
+
+
+def test_while_a_setup_reset_waits_the_control_status_follows_the_config(tmp_path):
+    from ems.runtime_state import RESET_REQUEST_SUFFIX, config_digest
+
+    data = _config()
+    data["system"].update(enabled=True, dry_run=False)
+    config_path = _write_config(tmp_path, data)
+    _seed_runtime_state(tmp_path, enabled=False)
+    (tmp_path / f"runtime-state.json{RESET_REQUEST_SUFFIX}").write_text(
+        json.dumps({"config_sha256": config_digest(config_path.read_bytes())}), encoding="utf-8"
+    )
+
+    control = load_maintenance_config(base_dir=str(tmp_path))["summary"]["control"]
+
+    assert control["enabled"] is True
+
+
+def test_values_typed_for_a_device_added_back_before_a_restart_reach_the_entry_its_serial_owns(tmp_path):
+    """The next start keeps that entry; without the write it would win over what was typed."""
+
+    data = _config()
+    removed = data["devices"].pop(1)
+    _write_config(tmp_path, data)
+    runtime_path = _seed_runtime_state(tmp_path)
+    seeded = json.loads(runtime_path.read_text())
+    seeded["devices"]["WR1"]["identity"] = "AAA"
+    seeded["devices"]["WR2"].update(identity="BBB", ac_discharge_enabled=True)
+    runtime_path.write_text(json.dumps(seeded), encoding="utf-8")
+    loaded = load_maintenance_config(base_dir=str(tmp_path))
+    loaded["draft"]["devices"].append({**removed, "pv_priority_factor": 2.0, "ac_discharge_enabled": False})
+
+    preview = preview_maintenance_config(loaded["draft"], base_dir=str(tmp_path))
+
+    rows = {row["path"]: row for row in preview["diff"]["changes"] if row.get("applies_live")}
+    assert rows["devices[1].pv_priority_factor"]["after"] == 2.0
+    assert rows["devices[1].ac_discharge_enabled"]["after"] is False
+
+
+def test_an_operating_row_names_the_device_where_the_save_places_it(tmp_path):
+    _write_config(tmp_path, _config())
+    _seed_runtime_state(tmp_path)
+    loaded = load_maintenance_config(base_dir=str(tmp_path))
+    del loaded["draft"]["devices"][0]
+    loaded["draft"]["devices"][0]["pv_priority_factor"] = 1.5
+
+    preview = preview_maintenance_config(loaded["draft"], base_dir=str(tmp_path))
+
+    assert [row["path"] for row in preview["diff"]["changes"] if row.get("applies_live")] == ["devices[0].pv_priority_factor"]
+
+
+def test_a_switched_off_copy_of_a_running_device_leaves_its_values_alone(tmp_path):
+    """A spare entry for WR1's serial is not what the next start builds for it."""
+
+    _write_config(tmp_path, _config())
+    runtime_path = _seed_runtime_state(tmp_path)
+    seeded = json.loads(runtime_path.read_text())
+    seeded["devices"]["WR1"].update(identity="AAA", pv_priority_factor=3.0, ac_discharge_enabled=False)
+    runtime_path.write_text(json.dumps(seeded), encoding="utf-8")
+    loaded = load_maintenance_config(base_dir=str(tmp_path))
+    spare = {key: value for key, value in loaded["draft"]["devices"][0].items() if key not in ("original_name", "operating_base")}
+    spare.update(name="WR1 spare", ip="192.168.1.120", enabled=False, pv_priority_factor=1.0, ac_discharge_enabled=True)
+    loaded["draft"]["devices"].append(spare)
+
+    preview = preview_maintenance_config(loaded["draft"], base_dir=str(tmp_path))
+
+    assert not [row for row in preview["diff"]["changes"] if row.get("applies_live") and row["path"].startswith("devices[2].")]
+
+
+def test_an_existing_device_sent_without_the_values_its_page_loaded_changes_none(tmp_path):
+    """A transport switch built from an older page puts back no value set elsewhere since."""
+
+    _write_config(tmp_path, _config())
+    runtime_path = _seed_runtime_state(tmp_path)
+    seeded = json.loads(runtime_path.read_text())
+    seeded["devices"]["WR1"].update(pv_priority_factor=3.0, ac_discharge_enabled=False)
+    runtime_path.write_text(json.dumps(seeded), encoding="utf-8")
+    loaded = load_maintenance_config(base_dir=str(tmp_path))
+    item = loaded["draft"]["devices"][0]
+    del item["operating_base"]
+    item.update(pv_priority_factor=1.5, ac_discharge_enabled=True)
+
+    preview = preview_maintenance_config(loaded["draft"], base_dir=str(tmp_path))
+
+    assert not [row for row in preview["diff"]["changes"] if row.get("applies_live") and row["path"].startswith("devices[0].")]
+
+
+def test_a_device_that_never_ran_removed_and_added_back_keeps_its_typed_values(tmp_path):
+    data = _config()
+    _write_config(tmp_path, data)
+    loaded = load_maintenance_config(base_dir=str(tmp_path))
+    old = loaded["draft"]["devices"].pop(1)
+    again = {key: value for key, value in old.items() if key not in ("original_name", "operating_base")}
+    again.update(pv_priority_factor=2.0, ac_discharge_enabled=False)
+    loaded["draft"]["devices"].append(again)
+
+    preview = preview_maintenance_config(loaded["draft"], base_dir=str(tmp_path))
+
+    device = next(device for device in preview["preview"]["devices"] if device.get("sn") == "BBB")
+    assert (device["pv_priority_factor"], device["ac_discharge_enabled"]) == (2.0, False)
+
+
+def test_a_draft_without_the_values_its_page_loaded_changes_no_operating_setting(tmp_path):
+    """A stale tab or an API caller would otherwise put config values back over the running ones."""
+
+    _write_config(tmp_path, _config())
+    _seed_runtime_state(tmp_path, loop_interval=9)
+    loaded = load_maintenance_config(base_dir=str(tmp_path))
+    del loaded["draft"]["operating_base"]
+    loaded["draft"]["features"]["system.loop_interval"] = 3
+
+    preview = preview_maintenance_config(loaded["draft"], base_dir=str(tmp_path))
+
+    assert not [row for row in preview["diff"]["changes"] if row["path"] == "system.loop_interval"]
+
+
+
+def test_a_running_device_removed_and_added_back_in_one_draft_brings_its_typed_values(tmp_path):
+    """The merge matches the added item to WR2 by its serial; what was typed for it is what it should run."""
+
+    _write_config(tmp_path, _config())
+    runtime_path = _seed_runtime_state(tmp_path)
+    seeded = json.loads(runtime_path.read_text())
+    seeded["devices"]["WR2"].update(identity="BBB", ac_discharge_enabled=True)
+    runtime_path.write_text(json.dumps(seeded), encoding="utf-8")
+    loaded = load_maintenance_config(base_dir=str(tmp_path))
+    old = loaded["draft"]["devices"].pop(1)
+    again = {key: value for key, value in old.items() if key not in ("original_name", "operating_base")}
+    again.update(ac_discharge_enabled=False)
+    loaded["draft"]["devices"].append(again)
+
+    preview = preview_maintenance_config(loaded["draft"], base_dir=str(tmp_path))
+
+    rows = [row for row in preview["diff"]["changes"] if row.get("applies_live") and row["path"] == "devices[1].ac_discharge_enabled"]
+    assert [row["after"] for row in rows] == [False]
+
+
+def test_a_runtime_state_path_that_is_no_text_still_loads_the_page(tmp_path):
+    """A hand-edited config is when the page is needed to repair it."""
+
+    data = _config()
+    data["system"]["runtime_state_path"] = 5
+    _write_config(tmp_path, data)
+
+    assert load_maintenance_config(base_dir=str(tmp_path))["status"] == "ok"
+
+
+def test_a_value_that_takes_effect_at_once_is_listed_once(tmp_path):
+    _write_config(tmp_path, _config())
+    runtime_path = _seed_runtime_state(tmp_path)
+    seeded = json.loads(runtime_path.read_text())
+    seeded["devices"]["WR1"]["identity"] = "AAA"
+    runtime_path.write_text(json.dumps(seeded), encoding="utf-8")
+    loaded = load_maintenance_config(base_dir=str(tmp_path))
+    loaded["draft"]["devices"][0].update(sn="AAB", pv_priority_factor=1.5)
+
+    preview = preview_maintenance_config(loaded["draft"], base_dir=str(tmp_path))
+
+    rows = [row for bucket in ("changes", "added", "removed") for row in preview["diff"].get(bucket) or []]
+    assert len([row for row in rows if row["path"] == "devices[0].pv_priority_factor"]) == 1
+
+
+def test_while_the_runtime_state_comes_from_template_placeholders_a_change_goes_into_the_config(tmp_path):
+    """The first start without placeholders builds the runtime state afresh from the config."""
+
+    _write_config(tmp_path, _config())
+    runtime_path = _seed_runtime_state(tmp_path)
+    seeded = json.loads(runtime_path.read_text())
+    seeded["seeded_from_placeholders"] = True
+    runtime_path.write_text(json.dumps(seeded), encoding="utf-8")
+    loaded = load_maintenance_config(base_dir=str(tmp_path))
+    loaded["draft"]["features"]["winter.enabled"] = True
+
+    preview = preview_maintenance_config(loaded["draft"], base_dir=str(tmp_path))
+
+    assert preview["preview"]["winter"]["enabled"] is True
+    rows = (preview["diff"].get("changes") or []) + (preview["diff"].get("added") or [])
+    assert not [row for row in rows if row.get("applies_live") and row["path"] == "winter.enabled"]
+
+
+def test_before_any_start_on_a_config_with_template_placeholders_a_change_goes_into_the_config(tmp_path):
+    """The first EMS start would force control off into a runtime state the Admin created; the config is read instead."""
+
+    from ems.config import template_placeholder_paths
+
+    template = json.loads((Path(__file__).resolve().parents[1] / "config" / "config.template.json").read_text())
+    assert template_placeholder_paths(template)
+    _write_config(tmp_path, template)
+    loaded = load_maintenance_config(base_dir=str(tmp_path))
+    loaded["draft"]["features"]["system.min_output_limit"] = 50
+
+    preview = preview_maintenance_config(loaded["draft"], base_dir=str(tmp_path))
+
+    assert preview["preview"]["system"]["min_output_limit"] == 50
+    assert not (tmp_path / "runtime-state.json").exists()
+
+
+def test_a_config_without_a_grid_meter_counts_as_still_holding_placeholders(tmp_path):
+    """The EMS checks the config with its defaults applied, and so does the Admin."""
+
+    data = _config()
+    del data["grid_meter"]
+    _write_config(tmp_path, data)
+    loaded = load_maintenance_config(base_dir=str(tmp_path))
+    loaded["draft"]["features"]["system.min_output_limit"] = 50
+
+    preview = preview_maintenance_config(loaded["draft"], base_dir=str(tmp_path))
+
+    assert preview["preview"]["system"]["min_output_limit"] == 50

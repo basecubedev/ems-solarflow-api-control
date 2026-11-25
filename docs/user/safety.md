@@ -119,11 +119,10 @@ rather than place it, so know what that means before you run it:
 - **It acts only against your own surplus.** Entry needs a sustained export
   above `charge_start_w`; an installation that never exports never charges. It
   stops the moment the house needs the power back.
-- **A config upgrade turns it on.** A `config.json` written before the feature
-  existed has neither key, and the upgrade fills both in as enabled. If you do
-  not want that, set `ac_charge_control.enabled` to `false`, or
-  `ac_charge_enabled` to `false` on the devices you want to keep out of it,
-  before the upgrade runs.
+- **It is on unless you switch it off.** A `config.json` without the switches
+  reads as on. To keep it off, switch it off on the dashboard (`emsctl.py
+  ac-charge disable`, or `device NAME ac-charge off` for one device); a value
+  edited into `config.json` after the EMS moved it is not taken.
 - **Which devices can charge is decided by the model**, not by the switch — see
   [supported-setups.md](supported-setups.md#supported-zendure-devices-local-api--zensdk).
   Only the 800 Pro 2 was measured here; the other models are enabled on the

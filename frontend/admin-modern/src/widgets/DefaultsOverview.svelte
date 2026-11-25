@@ -5,7 +5,7 @@
   import Empty from "../../../shared/ui/Empty.svelte";
   import CatalogText from "./CatalogText.svelte";
   import { t, catalogText, optionText } from "../i18n/i18n.svelte.js";
-  import { FEATURE_IDS, FEATURE_LOOKS, SECTION_LOOK, previewValue, spelledSwitch } from "../lib/settings.js";
+  import { FEATURE_IDS, FEATURE_LOOKS, SECTION_LOOK, spelledSwitch } from "../lib/settings.js";
 
   /**
    * The settings that depart from this release's defaults (lib/settings.js,
@@ -58,7 +58,6 @@
               </span>
               <span class="badges">
                 {#if row.value !== undefined}<span class="badge saved num">{t("settings.defaults.saved", { value: words(row.field, row.value) })}</span>{/if}
-                {#if row.live}<span class="badge live num" title={t("settings.edit.liveHint", { live: previewValue(row.live.effective_value), saved: previewValue(row.live.config_value) })}>{t("settings.edit.live", { value: words(row.field, row.live.effective_value) })}</span>{/if}
                 <span class="badge default num">{t("settings.edit.defaultBadge", { value: words(row.field, row.standard) })}</span>
               </span>
               <button class="btn secondary small" type="button" aria-label={t("settings.defaults.showField", { name: label.text })} onclick={() => onshow(row)}><Icon name="eye" size="sm" />{t("settings.defaults.show")}</button>
@@ -84,7 +83,6 @@
   .path { color: var(--m-muted); font-size: 11.5px; overflow-wrap: anywhere; }
   .badges { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: var(--s2); }
   .badge.default { color: var(--m-muted); background: transparent; box-shadow: inset 0 0 0 1px var(--m-line-strong); }
-  .live { color: var(--m-accent); }
   @container content (max-width: 720px) {
     .row { grid-template-columns: minmax(0, 1fr) auto; }
     .badges { grid-column: 1 / -1; grid-row: 2; justify-content: flex-start; }

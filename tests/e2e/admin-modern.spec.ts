@@ -728,7 +728,7 @@ test.describe("Modern Admin: settings", { tag: ["@smoke"] }, () => {
     for (const [key, shipped] of [["summer_full_points", "3"], ["winter_full_points", "4"], ["pv_only_points", "1"], ["min_discharge_w", "50"], ["pv_margin_percent", "20"], ["pv_margin_min_w", "35"]]) {
       const input = care.locator(`[data-path="battery_care.${key}"] input`);
       await expect(input).toBeVisible();
-      await expect(input).toHaveAttribute("placeholder", `${shipped} (default)`);
+      await expect(input).toHaveValue(shipped);
     }
     await expect(care.locator("details.level")).toHaveCount(0);
   });
@@ -802,6 +802,23 @@ test.describe("Modern Admin: settings", { tag: ["@smoke"] }, () => {
     await inverter.locator(".summary").click();
     await expect(soc).toHaveValue("15");
     await expect(ceiling).toHaveValue("800");
+  });
+
+  test("a power limit names the operating value below it, and lowering the limit lowers it at once", async ({ page, seedAdminScenario }) => {
+    await seededAt(page, seedAdminScenario, "#/settings/safety");
+    const total = page.locator('[data-path="system.max_total_power"]');
+    await expect(total.getByTestId("operating-value")).toHaveText(/^Operating value: /);
+    await expect(page.getByTestId("reset-overrides")).toHaveCount(0);
+
+    await total.locator("input").fill("500");
+    await page.getByTestId("review").click();
+    await expect(page.getByTestId("settings-review")).toContainText("Settings are valid");
+    await page.getByTestId("apply").click();
+    await page.getByRole("dialog", { name: "Save the checked changes?" }).getByTestId("confirm").click();
+    await expect(page.getByTestId("settings-applied")).toBeVisible();
+
+    await expect(total.locator("input")).toHaveValue("500");
+    await expect(total.getByTestId("operating-value")).toHaveText(/^Operating value: 500\sW$/);
   });
 
   test("the Customized tab lists each saved value away from its default and leads to where it is set", async ({ page, seedAdminScenario }) => {

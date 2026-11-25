@@ -8,6 +8,7 @@ import json
 import os
 
 from ems import config as config_mod
+from ems.runtime_commands import OPERATION_DEVICE_KEYS
 from ems.config_catalog import grid_meter_port_carries_over, grid_meter_variant_field_spec
 from ems.read_only_devices import (
     E3DC_MODBUS_DEVICE_TYPE,
@@ -832,6 +833,7 @@ def ask_devices(
     *,
     noninteractive=False,
     allow_placeholder_defaults=False,
+    installed=False,
 ):
     existing_devices = [
         item for item in existing_devices
@@ -851,6 +853,9 @@ def ask_devices(
         current = copy.deepcopy(template_device)
         current["name"] = f"WR{index + 1}"
         if index < len(existing_devices):
+            if installed:
+                for key in OPERATION_DEVICE_KEYS:
+                    current.pop(key, None)
             current.update(copy.deepcopy(existing_devices[index]))
         current.setdefault("name", f"WR{index + 1}")
         current.setdefault("max_power", 800)
@@ -965,7 +970,13 @@ def ask_read_only_devices(existing, grid_meter, *, noninteractive=False):
     return [device]
 
 
-def apply_system_basics(config, *, noninteractive=False):
+def _asks(installed, block, key):
+    """Whether config init asks for an operating value: on a fresh config, or where the installed one still holds it."""
+
+    return not installed or key in block
+
+
+def apply_system_basics(config, *, noninteractive=False, installed=False):
     system = config.setdefault("system", {})
     dashboard = config.setdefault("dashboard", {})
     winter = config.setdefault("winter", {})
@@ -978,27 +989,33 @@ def apply_system_basics(config, *, noninteractive=False):
         minimum=0,
         noninteractive=noninteractive,
     )
-    system["min_output_limit"] = ask_int(
-        "Minimum output limit",
-        system.get("min_output_limit", 35),
-        minimum=0,
-        noninteractive=noninteractive,
-    )
-    system["enabled"] = ask_confirm(
-        "EMS control enabled on startup?",
-        bool(system.get("enabled", True)),
-        noninteractive=noninteractive,
-    )
+    if _asks(installed, system, "min_output_limit"):
+        system["min_output_limit"] = ask_int(
+            "Minimum output limit",
+            system.get("min_output_limit", 35),
+            minimum=0,
+            noninteractive=noninteractive,
+        )
+    if _asks(installed, system, "enabled"):
+        system["enabled"] = ask_confirm(
+            "EMS control enabled on startup?",
+            bool(system.get("enabled", True)),
+            noninteractive=noninteractive,
+        )
     dashboard["enabled"] = ask_confirm(
         "Dashboard enabled?",
         bool(dashboard.get("enabled", True)),
         noninteractive=noninteractive,
     )
-    winter["enabled"] = ask_confirm(
-        "Winter mode enabled?",
-        bool(winter.get("enabled", False)),
-        noninteractive=noninteractive,
-    )
+    if _asks(installed, winter, "enabled"):
+        winter["enabled"] = ask_confirm(
+            "Winter mode enabled?",
+            bool(winter.get("enabled", config_mod.WINTER_DEFAULTS["enabled"])),
+            noninteractive=noninteractive,
+        )
+    if installed and not all(_asks(installed, block, key) for block, key in ((system, "enabled"), (system, "min_output_limit"), (winter, "enabled"))):
+        print("Control on or off, the minimum output limit and winter mode run from runtime-state.json;")
+        print("change them on the dashboard or with emsctl (system enable|disable, system min-output-limit, winter enable|disable).")
     assist["enabled"] = ask_confirm(
         "Battery full-charge assist enabled?",
         bool(assist.get("enabled", False)),
@@ -1034,7 +1051,15 @@ def apply_answers(
     noninteractive=False,
     allow_placeholder_defaults=False,
     analytics=False,
+    installed=False,
 ):
+    """The config the answers make of ``base_config``.
+
+    For an ``installed`` config the operating values it no longer holds live
+    in the runtime state (docs/developer/settings-operation-store.md): neither
+    asked nor seeded here, since the next start keeps the running ones.
+    """
+
     updated = copy.deepcopy(base_config)
     updated["grid_meter"] = ask_grid_meter(
         updated.get("grid_meter", {}),
@@ -1048,12 +1073,13 @@ def apply_answers(
         template_config,
         noninteractive=noninteractive,
         allow_placeholder_defaults=allow_placeholder_defaults,
+        installed=installed,
     ) + ask_read_only_devices(
         [item for item in existing if is_read_only_device_config(item)],
         updated["grid_meter"],
         noninteractive=noninteractive,
     )
-    apply_system_basics(updated, noninteractive=noninteractive)
+    apply_system_basics(updated, noninteractive=noninteractive, installed=installed)
     if analytics:
         apply_analytics(updated)
     return updated
@@ -1146,7 +1172,10 @@ def print_summary(config, config_path):
     influxdb = config_mod.resolve_influxdb_config(config)
     print(f"  max total power: {system.get('max_total_power', 0)} W")
     print(f"  dashboard: {'enabled' if dashboard.get('enabled') else 'disabled'}")
-    print(f"  winter mode: {'enabled' if winter.get('enabled') else 'disabled'}")
+    if "enabled" in winter:
+        print(f"  winter mode: {'enabled' if winter.get('enabled') else 'disabled'}")
+    else:
+        print("  winter mode: as set in runtime-state.json")
     print(
         "  battery full-charge assist: "
         f"{'enabled' if assist.get('enabled') else 'disabled'}"
@@ -1264,6 +1293,7 @@ def run_config_init(
         noninteractive=(dry_run or yes),
         allow_placeholder_defaults=allow_placeholder_defaults,
         analytics=analytics,
+        installed=plan["kind"] == "edited",
     )
     print_summary(updated, config_path)
 

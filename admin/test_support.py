@@ -1696,6 +1696,14 @@ def build_test_runtime(*, data_dir):
         ]
         runtime.zendure_cloud_discovery._candidates = []
 
+    def _reset_operating_state():
+        """A seeded scenario starts from its config alone: the operating values a test saved live in the runtime state."""
+
+        from admin.config_runtime_overlap import resolve_runtime_state_path
+
+        context = detect_install_context()
+        Path(resolve_runtime_state_path(context, {})).unlink(missing_ok=True)
+
     def write_install_config(config):
         target = detect_install_context().config_path
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -1726,6 +1734,7 @@ def build_test_runtime(*, data_dir):
             runtime.zendure_cloud_discovery._candidates = []
         if scenario is None and described:
             return {"ok": True, "scenario": None}
+        _reset_operating_state()
         backup_failure_state["enabled"] = scenario == "mqtt_backup_failure"
         if scenario in {"mqtt_migration", "mqtt_backup_failure"}:
             write_install_config(legacy_mqtt_config())

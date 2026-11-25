@@ -88,6 +88,24 @@ def install(tmp_path, saved, *, loaded=None, age_seconds=0, schema=CONTROL_STATU
     return context
 
 
+@pytest.mark.parametrize(("runtime", "known"), [({"system": {"loop_interval": 40}}, True), (None, False)])
+def test_a_snapshot_is_fresh_by_the_loop_interval_the_ems_runs(tmp_path, runtime, known):
+    """A snapshot that names no loop interval (an older EMS) is fresh for three
+    intervals, at least a minute; the interval is an operating value, so it is
+    the runtime one the EMS takes."""
+
+    saved = {"system": {"runtime_state_path": "data/runtime-state.json"}, "devices": [external("balkon", "Balkon")]}
+    context = install(tmp_path, saved, loaded=device_fingerprints({"devices": []}), age_seconds=100, runtime=runtime)
+    snapshot = Path(resolve_control_status_path(resolve_runtime_state_path(context, saved)))
+    status = json.loads(snapshot.read_text())
+    del status["loop_interval_s"]
+    snapshot.write_text(json.dumps(status))
+
+    answer = ems_device_states(context)
+
+    assert answer["known"] is known
+
+
 def test_a_fresh_snapshot_tells_the_states_of_the_install(tmp_path):
     saved = {"system": {"runtime_state_path": "data/runtime-state.json"}, "devices": [external("balkon", "Balkon")]}
 
