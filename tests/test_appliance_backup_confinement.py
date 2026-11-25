@@ -606,8 +606,8 @@ def test_an_export_whose_newest_file_the_account_cannot_read_is_degraded(tmp_pat
 
     `setup-export-root.sh` grants `u:ems-backup:rX` with an explicit `m::rX`
     because it knows a named-user entry is capped by the file's mask. That mask
-    is re-derived from each file's create mode, and `ems/backup.py` writes every
-    archive with `tempfile.mkstemp`, which is 0600. Measured on a POSIX-ACL
+    is re-derived from each file's create mode, and `ems/backup.py` creates
+    every archive 0600 in its staging folder. Measured on a POSIX-ACL
     filesystem: `default:user:X:r-x` plus create mode 0600 yields
     `user:X:r-x  #effective:---` and `mask::---`.
 

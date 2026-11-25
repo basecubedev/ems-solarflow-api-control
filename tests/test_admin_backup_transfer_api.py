@@ -15,6 +15,7 @@ second authority and no second format.
 
 import json
 import os
+import stat
 import threading
 import urllib.error
 import urllib.request
@@ -169,6 +170,27 @@ def test_an_exported_archive_can_be_put_back(server, install):
     assert len(restored) == 1
     assert restored[0]["backup_type"] == "config"
     assert restored[0]["valid"] is True
+
+
+def test_an_import_sweeps_what_a_killed_upload_or_backup_left_and_keeps_0600(server, install):
+    """Backlog 19: a killed upload's part stayed in the backup folder for good."""
+
+    from ems.backup_staging import ARCHIVE_PARTS, IMPORT_UPLOADS
+    from tests.test_backup_staging import abandoned
+
+    path = _make_config_archive(install)
+    with open(path, "rb") as handle:
+        payload = handle.read()
+    name = os.path.basename(path)
+    os.remove(path)
+    left = [abandoned(_backup_dir(install), kind) for kind in (IMPORT_UPLOADS, ARCHIVE_PARTS)]
+
+    status, data = _import(server, name, payload)
+
+    assert status == 200, data
+    assert not any(os.path.exists(folder) for folder in left)
+    assert os.listdir(_backup_dir(install)) == [name]
+    assert stat.S_IMODE(os.stat(os.path.join(_backup_dir(install), name)).st_mode) == 0o600
 
 
 def test_an_import_never_overwrites_an_existing_archive(server, install):
