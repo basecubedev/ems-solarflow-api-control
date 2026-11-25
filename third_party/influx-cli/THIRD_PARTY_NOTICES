@@ -1,9 +1,9 @@
-Third-party notices for influx-cli 8cdf40161d7662e942582086853fca948fc1a842
+Third-party notices for influx-cli 54431c54aa7cd7fb486740908f60cdbe3831e7d3
 
 component: influx-cli
-version: 8cdf40161d7662e942582086853fca948fc1a842
-identity: 8cdf40161d7662e942582086853fca948fc1a842
-source: https://github.com/influxdata/influx-cli at 8cdf40161d7662e942582086853fca948fc1a842
+version: 54431c54aa7cd7fb486740908f60cdbe3831e7d3
+identity: 54431c54aa7cd7fb486740908f60cdbe3831e7d3
+source: https://github.com/influxdata/influx-cli at 54431c54aa7cd7fb486740908f60cdbe3831e7d3
 generator: scripts/binary_notices.py
 
 Modules of the build (its go.mod or vendor/modules.txt, test-only modules included):
@@ -54,18 +54,17 @@ Modules of the build (its go.mod or vendor/modules.txt, test-only modules includ
   go.uber.org/multierr v1.11.0
   go.uber.org/zap v1.24.0
   golang.org/x/exp/typeparams v0.0.0-20231108232855-2478ac86f678
-  golang.org/x/mod v0.33.0
-  golang.org/x/sync v0.19.0
-  golang.org/x/sys v0.41.0
-  golang.org/x/telemetry v0.0.0-20260209163413-e7419c687ee4
+  golang.org/x/mod v0.41.0
+  golang.org/x/sync v0.23.0
+  golang.org/x/sys v0.48.0
+  golang.org/x/telemetry v0.0.0-20260924152758-ed294f943157
   golang.org/x/term v0.0.0-20220526004731-065cf7ba2467
   golang.org/x/text v0.3.8
   golang.org/x/time v0.0.0-20210220033141-f8bda1e9f3ba
-  golang.org/x/tools v0.42.0
-  golang.org/x/tools/go/expect v0.1.1-deprecated
+  golang.org/x/tools v0.51.0
   google.golang.org/protobuf v1.33.0
   gopkg.in/yaml.v3 v3.0.1
-  honnef.co/go/tools v0.6.1
+  honnef.co/go/tools v0.8.2
 
 ==============================================================================
 LICENSE of:
@@ -862,7 +861,7 @@ LICENSE of:
   golang.org/x/term v0.0.0-20220526004731-065cf7ba2467
   golang.org/x/text v0.3.8
   golang.org/x/time v0.0.0-20210220033141-f8bda1e9f3ba
-  honnef.co/go/tools/go/gcsizes v0.6.1
+  honnef.co/go/tools/go/gcsizes v0.8.2
 ------------------------------------------------------------------------------
 Copyright (c) 2009 The Go Authors. All rights reserved.
 
@@ -1866,12 +1865,11 @@ THE SOFTWARE.
 
 ==============================================================================
 LICENSE of:
-  golang.org/x/mod v0.33.0
-  golang.org/x/sync v0.19.0
-  golang.org/x/sys v0.41.0
-  golang.org/x/telemetry v0.0.0-20260209163413-e7419c687ee4
-  golang.org/x/tools v0.42.0
-  golang.org/x/tools/go/expect v0.1.1-deprecated
+  golang.org/x/mod v0.41.0
+  golang.org/x/sync v0.23.0
+  golang.org/x/sys v0.48.0
+  golang.org/x/telemetry v0.0.0-20260924152758-ed294f943157
+  golang.org/x/tools v0.51.0
   std Go standard library
 ------------------------------------------------------------------------------
 Copyright 2009 The Go Authors.
@@ -1904,14 +1902,14 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ==============================================================================
 PATENTS of:
-  golang.org/x/mod v0.33.0
-  golang.org/x/sync v0.19.0
-  golang.org/x/sys v0.41.0
-  golang.org/x/telemetry v0.0.0-20260209163413-e7419c687ee4
+  golang.org/x/mod v0.41.0
+  golang.org/x/sync v0.23.0
+  golang.org/x/sys v0.48.0
+  golang.org/x/telemetry v0.0.0-20260924152758-ed294f943157
   golang.org/x/term v0.0.0-20220526004731-065cf7ba2467
   golang.org/x/text v0.3.8
   golang.org/x/time v0.0.0-20210220033141-f8bda1e9f3ba
-  golang.org/x/tools v0.42.0
+  golang.org/x/tools v0.51.0
   google.golang.org/protobuf v1.33.0
 ------------------------------------------------------------------------------
 Additional IP Rights Grant (Patents)
@@ -2043,7 +2041,7 @@ limitations under the License.
 
 ==============================================================================
 LICENSE of:
-  honnef.co/go/tools v0.6.1
+  honnef.co/go/tools v0.8.2
 ------------------------------------------------------------------------------
 Copyright (c) 2016 Dominik Honnef
 
@@ -2068,7 +2066,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ==============================================================================
 LICENSE-THIRD-PARTY of:
-  honnef.co/go/tools v0.6.1
+  honnef.co/go/tools v0.8.2
 ------------------------------------------------------------------------------
 Staticcheck and its related tools make use of third party projects,
 either by reusing their code, or by statically linking them into
@@ -2194,7 +2192,7 @@ resulting binaries. These projects are:
 
 ==============================================================================
 LICENSE of:
-  honnef.co/go/tools/go/ir v0.6.1
+  honnef.co/go/tools/go/ir v0.8.2
 ------------------------------------------------------------------------------
 Copyright (c) 2009 The Go Authors. All rights reserved.
 Copyright (c) 2016 Dominik Honnef. All rights reserved.
