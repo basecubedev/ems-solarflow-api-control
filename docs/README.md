@@ -158,6 +158,7 @@ For contributors and maintainers. Git clone and build-from-source belong here.
 | Agent rules | [developer/agent-rules.md](developer/agent-rules.md) | Canonical project-wide rules for coding agents and maintainers. |
 | Code intelligence | [developer/code-intelligence.md](developer/code-intelligence.md) | GitNexus and Serena for coding agents: which tool answers which question, and the rules that follow. |
 | Review coverage | [developer/review-coverage.md](developer/review-coverage.md) | What whole-system reviews covered, what they fixed and what is still open. Read it before starting a review. |
+| Settings stores | [developer/settings-operation-store.md](developer/settings-operation-store.md) | Installation in `config.json`, operation in `runtime-state.json`: one value per setting, the owner's decisions and the phases. |
 | Developer setup | [developer/developer-setup.md](developer/developer-setup.md) | Source checkout, venv, local config and dry-run validation. |
 | Development notes | [developer/development.md](developer/development.md) | Module layout and developer workflow. |
 | Developer notes | [developer/developer.md](developer/developer.md) | Additional development and maintenance context. |
