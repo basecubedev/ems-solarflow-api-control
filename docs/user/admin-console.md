@@ -115,7 +115,7 @@ confirmation starts it, and the page follows it to **Update complete**. See
 
 ### Settings & devices
 
-![Settings and devices on the Features tab: the tabs Features, Safety, Expert and Devices, Search settings, and the features with Winter mode opened](../assets/screenshots/admin/admin-settings-features.png)
+![Settings and devices on the Features tab: the tabs Features, Add-ons, Safety, Expert, Devices and Customized, Search settings, and the features with Winter mode opened](../assets/screenshots/admin/admin-settings-features.png)
 
 **Settings & devices** has six tabs — **Features**, **Add-ons**, **Safety**,
 **Expert**, **Devices** and **Customized** — and **Search settings** across all
