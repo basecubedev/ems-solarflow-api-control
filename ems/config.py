@@ -2406,6 +2406,12 @@ def load_config(args=None, base_dir=None):
     )
 
 
+def _allocation_switch(value):
+    """An allocation switch: its words as ``safe_bool`` reads them, anything else by its truth, as before."""
+
+    return safe_bool(value, bool(value))
+
+
 def _start_may_refresh_defaults(args, raw_config):
     """Whether this start may move old defaults: a live start, not a check or a test.
 
@@ -2504,14 +2510,8 @@ def initialize(args, base_dir):
     if args.simulate or args.replay:
         LOG_LEVEL = "debug"
 
-    REDISTRIBUTE_CLAMPED_POWER = CONFIG["system"].get(
-        "redistribute_clamped_power",
-        True
-    )
-    PV_KWP_WEIGHTING = CONFIG["system"].get(
-        "pv_kwp_weighting",
-        True
-    )
+    REDISTRIBUTE_CLAMPED_POWER = _allocation_switch(CONFIG["system"].get("redistribute_clamped_power", True))
+    PV_KWP_WEIGHTING = _allocation_switch(CONFIG["system"].get("pv_kwp_weighting", True))
     PV_CHARGE_BALANCE_ENABLED = safe_bool(
         CONFIG["system"].get("pv_charge_balance_enabled", True),
         True
@@ -2534,10 +2534,7 @@ def initialize(args, base_dir):
             minimum=0.0
         )
     )
-    BATTERY_KWH_WEIGHTING = CONFIG["system"].get(
-        "battery_kwh_weighting",
-        True
-    )
+    BATTERY_KWH_WEIGHTING = _allocation_switch(CONFIG["system"].get("battery_kwh_weighting", True))
     SOC_RECONCILE_INTERVAL = CONFIG["system"].get(
         "soc_reconcile_interval",
         10
