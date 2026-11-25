@@ -284,10 +284,10 @@ decision within one loop interval. A fresh **Guided setup**
 config at the next EMS start: a device you switched off is active again, and AC
 role goes back to Output with no AC charge power (see
 [runtime state](../../technical/runtime-state.md#fresh-setup-reset)). On the
-Admin's **Settings & devices** page, **Put saved values back**, and a **Save
-and apply** that changes the same setting, write the config value over it right
-away, for every value here except **AC role** and **AC charge power**, which
-have no config value and stay as you set them.
+Admin's **Settings & devices** page shows and changes the same values: a
+**Save and apply** that changes one writes it here right away, and **Put saved
+values back** sets the power limits back to the saved ones. AC role, AC charge
+power and the other operating values have no second value in the config.
 
 ## Warnings and common problems
 

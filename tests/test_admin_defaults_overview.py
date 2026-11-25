@@ -94,7 +94,7 @@ def test_every_value_an_earlier_release_shipped_as_its_default_is_listed(tmp_pat
     assert all(listed[path][2] == value for path, value in retired.items())
 
 
-def test_a_value_the_dashboard_runs_instead_of_the_saved_one_is_listed_with_both(tmp_path):
+def test_an_operating_value_is_listed_once_as_the_ems_runs_it(tmp_path):
     config = _template()
     config["system"]["min_output_limit"] = 40
     for number, device in enumerate(config["devices"], start=1):
@@ -108,10 +108,10 @@ def test_a_value_the_dashboard_runs_instead_of_the_saved_one_is_listed_with_both
 
     rows = {row[1]: row for row in _departures(tmp_path)}
 
-    assert rows["system.min_output_limit"] == ["section:system", "system.min_output_limit", 40, 35, 35]
-    assert rows["system.loop_interval"] == ["section:system", "system.loop_interval", None, 7, 5]
-    assert rows["devices[].pv_priority_factor"] == ["device:1", "devices[].pv_priority_factor", None, 2.0, 1.0]
-    assert len(rows) == 3
+    assert "system.min_output_limit" not in rows
+    assert rows["system.loop_interval"] == ["section:system", "system.loop_interval", 7, None, 5]
+    assert rows["devices[].pv_priority_factor"] == ["device:1", "devices[].pv_priority_factor", 2.0, None, 1.0]
+    assert len(rows) == 2
 
 
 def test_a_device_field_names_the_default_a_new_device_gets():

@@ -137,11 +137,20 @@ def _runs_as_another(runtime_state, holder):
     return [f"device {name} runs as {entry} in the EMS until it restarts"]
 
 
-def _write_targets(context, config, targets):
+def write_targets(context, config, targets, *, create=False):
+    """Write ``targets`` through the runtime service; ``create`` makes a missing runtime state first.
+
+    An operating setting lives only in the runtime state, so a change of one
+    creates the file where the EMS has not yet; a mirror of a config value
+    leaves a missing file to the EMS, which seeds it from the config.
+    """
+
     result = {"applied": [], "skipped": [], "warnings": []}
     if not targets:
         return result
     path = resolve_runtime_state_path(context, config)
+    if create and not os.path.exists(path):
+        RuntimeState(path, {"devices": {}}).load_or_create()
     if not os.path.exists(path):
         for display_path, *_ in targets:
             result["skipped"].append({"path": display_path, "reason": RUNTIME_ABSENT_REASON})
@@ -185,7 +194,7 @@ def mirror_changed_keys_to_runtime(context, *, previous, merged):
     for path, name, identity, key, value in device_runtime_plan(previous, merged):
         if _classify(path, merged):
             targets.append((path, "device", (name, identity, None), key, value))
-    return _write_targets(context, merged, targets)
+    return write_targets(context, merged, targets)
 
 
 def reset_targets_to_config(context, config, requests):
@@ -218,13 +227,13 @@ def reset_targets_to_config(context, config, requests):
         if value is None:
             continue
         if kind == "device":
-            holder, value = _device_reset(config, holder, key, value)
+            holder, value = device_holder(config, holder, key, value)
         targets.append((display, kind, holder, key, value))
-    return _write_targets(context, config, targets)
+    return write_targets(context, config, targets)
 
 
-def _device_reset(config, name, key, value):
-    """The holder and value a reset of ``key`` writes for the config device ``name``.
+def device_holder(config, name, key, value):
+    """The holder and value a write of ``key`` takes for the config device ``name``.
 
     Only the entry that speaks for its device (device_state) is reset, and
     ``enabled`` is whether the EMS builds that device, so a telemetry entry

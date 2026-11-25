@@ -30,6 +30,13 @@ from admin.config_runtime_overlap import (
     resolve_runtime_state_path,
     runtime_device_entries,
 )
+from ems.runtime_commands import OPERATION_SETTING_PATHS
+from admin.operation_settings import (
+    adopt_operating_values,
+    installation_provenance,
+    operating_from,
+    operation_changes,
+)
 from admin.connection_planner import (
     INTENT_SWITCH_CONNECTION,
     plan_connection_change,
@@ -563,7 +570,9 @@ def load_maintenance_config(base_dir=None, *, identity_token_key=None):
         }
 
     draft = build_maintenance_draft(config, identity_token_key=identity_token_key)
-    overrides = overlap_provenance_for_context(context, config)
+    provenance = overlap_provenance_for_context(context, config)
+    adopt_operating_values(draft, *operating_from(provenance))
+    overrides = installation_provenance(provenance)
     _attach_runtime_override_identity_tokens(
         overrides,
         config,
@@ -1292,6 +1301,7 @@ def preview_maintenance_config(draft, base_dir=None, *, identity_token_key=None)
     merged = _merge_draft(
         current, draft, merge_issues, identity_token_key=identity_token_key
     )
+    operating, _targets = _operating_changes(context, current, draft, merge_issues)
     history = _consumer_history(current, merged, draft, context)
     validation = _validate(merged, merge_issues)
     # Read-only preview surfaces the global MQTT credentials_ref contract early
@@ -1300,7 +1310,7 @@ def preview_maintenance_config(draft, base_dir=None, *, identity_token_key=None)
     # credential-staging layer, which rejects the same references with a stable
     # structured code and a byte-exact rollback.
     _append_mqtt_credential_consumer_issues(validation, merged)
-    diff = summarize_config_changes(current, merged, runtime_device_entries(context, merged))
+    diff = _with_operating(summarize_config_changes(current, merged, runtime_device_entries(context, merged)), operating)
     response = {
         "status": "ok",
         "config_path": config_path,
@@ -1324,6 +1334,23 @@ def preview_maintenance_config(draft, base_dir=None, *, identity_token_key=None)
         sensitive_context=merged,
         drop_secrets=False,
     )
+
+
+def _operating_changes(context, current, draft, merge_issues):
+    """The draft's operating changes and their writes; a refused value joins ``merge_issues``."""
+
+    changes, targets, issues = operation_changes(context, current, draft)
+    merge_issues.extend(_issue(issue["code"], issue["message"]) for issue in issues)
+    return changes, targets
+
+
+def _with_operating(diff, operating):
+    """The config diff with the operating changes as rows that take effect at once."""
+
+    if operating:
+        diff["changes"] = list(diff.get("changes") or []) + operating
+        diff["changed"] = True
+    return diff
 
 
 def _consumer_history(current, merged, draft, context):
@@ -1358,9 +1385,10 @@ def prepare_maintenance_config_apply(
     merged = _merge_draft(
         current, draft, merge_issues, identity_token_key=identity_token_key
     )
+    operating, targets = _operating_changes(context, current, draft, merge_issues)
     history = _consumer_history(current, merged, draft, context)
     validation = _validate(merged, merge_issues)
-    diff = summarize_config_changes(current, merged, runtime_device_entries(context, merged))
+    diff = _with_operating(summarize_config_changes(current, merged, runtime_device_entries(context, merged)), operating)
     result = sanitize_external_mqtt_status(
         {
             "status": "ok",
@@ -1400,6 +1428,7 @@ def prepare_maintenance_config_apply(
         json.dumps(merged, indent=2, ensure_ascii=False) + "\n"
     ).encode("utf-8")
     result["replaced"] = current
+    result["operating_targets"] = targets
     return result
 
 
@@ -2343,7 +2372,7 @@ def _apply_device_fields(device, item, refused=None):
     for key in ("name", "ip", "sn"):
         if key in item:
             device[key] = str(item.get(key) or "").strip()
-    apply_common_device_values(device, item, _DEVICE_VALUE_FIELDS, issues=refused)
+    apply_common_device_values(device, item, issues=refused)
     # Keep unknown (non-catalog) device keys untouched; only surface an
     # explicit enabled flag so a disabled draft device reads as a real change.
     enabled = bool(item.get("enabled", True))
@@ -2450,7 +2479,10 @@ def _grid_meter_mqtt_container(target):
 
 
 def _merge_features(merged, features, issues):
-    """The settings draft onto ``merged``.
+    """The settings draft onto ``merged``, its operating settings left out.
+
+    Those live in the runtime state and are written there by the apply
+    (``admin.operation_settings``), never into the config.
 
     Switching analytics on here puts the bundled InfluxDB secret where Docker
     reads it, as Setup does: a config that ran Setup with analytics off still
@@ -2463,7 +2495,7 @@ def _merge_features(merged, features, issues):
     analytics_was_on = resolve_influxdb_config(merged)["enabled"]
     result = apply_config_changes(
         merged,
-        [ConfigChange(path, value) for path, value in features.items()],
+        [ConfigChange(path, value) for path, value in features.items() if path not in OPERATION_SETTING_PATHS],
         MAINTENANCE_POLICY,
         field_index=_maintenance_field_index(),
     )

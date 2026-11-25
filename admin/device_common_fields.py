@@ -51,14 +51,26 @@ def common_device_value_fields():
     )
 
 
+def installation_device_value_fields():
+    """The common device fields a config entry holds: without the operating ones.
+
+    An operating device value (``ems.runtime_commands.OPERATION_DEVICE_KEYS``)
+    lives in the runtime state and is never written into the config.
+    """
+
+    from ems.runtime_commands import OPERATION_DEVICE_KEYS
+
+    return {key: field for key, field in common_device_value_fields().items() if key not in OPERATION_DEVICE_KEYS}
+
+
 def apply_common_device_values(device, item, fields=None, *, issues=None):
-    """Write coerced common values present in a draft entry onto a device.
+    """Write coerced installation values present in a draft entry onto a device.
 
     A value its type cannot hold is not written and is reported into ``issues``.
     """
 
     if fields is None:
-        fields = common_device_value_fields()
+        fields = installation_device_value_fields()
     return apply_common_values(device, item, fields, issues=issues)
 
 

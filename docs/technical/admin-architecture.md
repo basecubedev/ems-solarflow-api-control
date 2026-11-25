@@ -38,11 +38,17 @@ calls the same EMS tools a shell user would run directly.
 
 The Admin Console is config-authoritative and does not reconcile the
 runtime-state device lifecycle. Besides restoring a backup, it touches runtime
-state in two ways only. Config → runtime convergence: on maintenance Apply it mirrors the whitelisted
-overlapping scalar keys it changed into `runtime-state.json`, but only through
-the EMS-owned runtime-write whitelist (`ems/runtime_commands.py`) — the same
-validated writer the Dashboard uses — so it introduces no second runtime format
-and stays inside the whitelist safety property. And a fresh Setup leaves a reset
+state in three ways only, each through the EMS-owned runtime-write whitelist
+(`ems/runtime_commands.py`), the same validated writer the Dashboard uses, so it
+introduces no second runtime format and stays inside the whitelist safety
+property. Operating settings (`OPERATION_SETTING_PATHS`,
+`OPERATION_DEVICE_KEYS`) live only in `runtime-state.json`: Maintenance shows
+them as the EMS runs them and an Apply writes the changed ones there
+(`admin/operation_settings.py`, creating the file where the EMS has not), never
+into the config; see
+[settings-operation-store.md](../developer/settings-operation-store.md).
+Config → runtime convergence: on Apply it mirrors the power limits and device
+activation it changed into `runtime-state.json`. And a fresh Setup leaves a reset
 request beside the file, which only the EMS starting on the new config honours
 (`ems.runtime_state.start_runtime_state`) and only while the installed config is
 the one the request names; the Admin never sets the file aside itself. A restore

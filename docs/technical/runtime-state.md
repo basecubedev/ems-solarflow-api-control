@@ -396,8 +396,13 @@ config by the EMS on its next start. The entry a write goes to is
 looked up again under the runtime-state file lock, so an EMS start that re-keys
 the entries in between cannot turn it onto another device, and the mirror runs
 inside the Admin's apply transaction, so an earlier save cannot mirror its
-values over a later one's. **Settings & devices** also marks a field whose live Dashboard override
-differs from the installed config value with **Running: …**, and its **Put saved
+values over a later one's. The operating settings themselves
+(`OPERATION_SETTING_PATHS`, `OPERATION_DEVICE_KEYS` in `ems/runtime_commands.py`)
+have no config value to mirror: **Settings & devices** shows them as the EMS
+runs them and an Apply writes a changed one here directly
+(`admin/operation_settings.py`), creating this file where the EMS has not yet.
+For the power limits it marks a field whose live Dashboard value differs from
+the installed config value with **Running: …**, and its **Put saved
 values back** action writes the installed config values back into runtime-state,
 into the entry of the device the field's entry speaks for, and only for that entry;
 `enabled` is written as whether the EMS builds the device (it always writes the value; it never just clears the override, because the EMS loads

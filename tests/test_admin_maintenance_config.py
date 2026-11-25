@@ -134,7 +134,10 @@ def test_load_never_exposes_secret_feature_values(tmp_path):
         assert all(field["path"] != "influxdb.token" for field in section["fields"])
 
 
-def test_load_surfaces_runtime_override_provenance(tmp_path):
+def test_load_shows_operating_values_as_the_ems_runs_them(tmp_path):
+    """An operating value has one value, the runtime one; only the caps keep a
+    provenance to compare."""
+
     data = _config()
     data["system"]["loop_interval"] = 3
     _write_config(tmp_path, data)
@@ -143,11 +146,9 @@ def test_load_surfaces_runtime_override_provenance(tmp_path):
     )
     result = load_maintenance_config(base_dir=str(tmp_path))
     overrides = result["overrides"]
-    assert overrides["system.loop_interval"]["config_value"] == 3
-    assert overrides["system.loop_interval"]["effective_value"] == 5
-    assert overrides["system.loop_interval"]["source"] == "dashboard_override"
+    assert result["draft"]["features"]["system.loop_interval"] == 5
+    assert "system.loop_interval" not in overrides
     assert overrides["system.max_total_power"]["source"] == "config"
-    assert result["draft"]["features"]["system.loop_interval"] == 3
 
 
 @pytest.mark.parametrize(("config_enabled", "runtime_enabled", "status"), [
@@ -549,10 +550,14 @@ def test_preview_missing_config_is_clear_status(tmp_path):
 def test_feature_change_is_coerced_and_diffed(tmp_path):
     _write_config(tmp_path, _config())
     draft = load_maintenance_config(base_dir=str(tmp_path))["draft"]
-    draft["features"]["winter.enabled"] = True
+    draft["features"]["winter.winter_min_soc"] = 35
+    draft["features"]["winter.enabled"] = not draft["features"]["winter.enabled"]
     preview = preview_maintenance_config(draft, base_dir=str(tmp_path))
-    assert preview["preview"]["winter"]["enabled"] is True
-    assert any(c["path"] == "winter.enabled" for c in preview["diff"]["changes"])
+    rows = {c["path"]: c for bucket in ("changes", "added") for c in preview["diff"][bucket]}
+    assert preview["preview"]["winter"]["winter_min_soc"] == 35
+    assert rows["winter.winter_min_soc"]["applies_live"] is False
+    assert rows["winter.enabled"]["applies_live"] is True
+    assert preview["preview"]["winter"].get("enabled") == _config()["winter"].get("enabled")
 
 
 def test_zendure_mqtt_enabled_feature_path_is_ignored(tmp_path):
@@ -1597,7 +1602,10 @@ def _convergence_service(tmp_path):
     )
 
 
-def test_apply_mirrors_changed_overlapping_key_to_runtime(tmp_path, monkeypatch):
+def test_apply_writes_a_changed_operating_value_to_the_runtime_state_only(tmp_path, monkeypatch):
+    """An operating value lives in runtime-state.json; the apply writes it there
+    and leaves config.json as it is (docs/developer/settings-operation-store.md)."""
+
     data = _config()
     data["system"]["loop_interval"] = 3
     _write_config(tmp_path, data)
@@ -1622,17 +1630,36 @@ def test_apply_mirrors_changed_overlapping_key_to_runtime(tmp_path, monkeypatch)
 
     assert status == 200
     assert payload["ok"] is True
-    assert payload["runtime_sync"]["applied"] == ["system.loop_interval"]
+    assert payload["operating_sync"]["applied"] == ["system.loop_interval"]
     assert json.loads(runtime_path.read_text())["system"]["loop_interval"] == 7
-    assert (
-        json.loads((tmp_path / "config" / "config.json").read_text())["system"][
-            "loop_interval"
-        ]
-        == 7
-    )
+    assert json.loads((tmp_path / "config" / "config.json").read_text())["system"]["loop_interval"] == 3
 
 
-def test_apply_succeeds_when_runtime_file_absent(tmp_path, monkeypatch):
+def test_apply_writes_a_device_operating_value_to_its_runtime_entry_only(tmp_path, monkeypatch):
+    _write_config(tmp_path, _config())
+    runtime_path = _seed_runtime_state(tmp_path)
+    loaded = load_maintenance_config(base_dir=str(tmp_path))
+    item = next(device for device in loaded["draft"]["devices"] if device["name"] == "WR1")
+    item["pv_priority_factor"] = 1.5
+    monkeypatch.setenv("EMS_INSTALL_DIR", str(tmp_path))
+    srv, base = _server(config_apply=_convergence_service(tmp_path))
+    try:
+        status, payload = _post(
+            f"{base}/api/admin/maintenance/config/apply",
+            {"draft": loaded["draft"], "revision": loaded["revision"], "confirm": True, "backup": True},
+        )
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    assert status == 200 and payload["ok"] is True
+    assert payload["operating_sync"]["applied"] == ["devices[0].pv_priority_factor"]
+    assert json.loads(runtime_path.read_text())["devices"]["WR1"]["pv_priority_factor"] == 1.5
+    saved = json.loads((tmp_path / "config" / "config.json").read_text())["devices"][0]
+    assert "pv_priority_factor" not in saved
+
+
+def test_an_operating_change_creates_the_runtime_state_where_the_ems_has_not(tmp_path, monkeypatch):
     data = _config()
     data["system"]["loop_interval"] = 3
     _write_config(tmp_path, data)
@@ -1656,15 +1683,9 @@ def test_apply_succeeds_when_runtime_file_absent(tmp_path, monkeypatch):
 
     assert status == 200
     assert payload["ok"] is True
-    assert payload["runtime_sync"]["applied"] == []
-    assert payload["runtime_sync"]["skipped"][0]["reason"] == "runtime_state_absent"
-    assert not (tmp_path / "runtime-state.json").exists()
-    assert (
-        json.loads((tmp_path / "config" / "config.json").read_text())["system"][
-            "loop_interval"
-        ]
-        == 7
-    )
+    assert payload["operating_sync"]["applied"] == ["system.loop_interval"]
+    assert json.loads((tmp_path / "runtime-state.json").read_text())["system"]["loop_interval"] == 7
+    assert json.loads((tmp_path / "config" / "config.json").read_text())["system"]["loop_interval"] == 3
 
 
 def _apply_retention(tmp_path, monkeypatch, before, after, loop_interval=None):
@@ -2156,11 +2177,22 @@ def test_a_port_the_ems_accepts_passes(port):
     assert "zendure_mqtt_port_invalid" not in codes
 
 
+def test_an_operating_value_the_runtime_service_refuses_blocks_the_apply(tmp_path):
+    _write_config(tmp_path, _config())
+    draft = load_maintenance_config(base_dir=str(tmp_path))["draft"]
+    draft["features"]["winter.enabled"] = "perhaps"
+
+    preview = preview_maintenance_config(draft, base_dir=str(tmp_path))
+
+    codes = [e["code"] for e in preview["validation"]["errors"] if "winter.enabled" in e["message"]]
+    assert codes == ["operating_value_invalid"]
+    assert not (tmp_path / "runtime-state.json").exists()
+
+
 @pytest.mark.parametrize(
     "path,value",
     [
         ("winter.adjust_hour", "noon"),
-        ("winter.enabled", "perhaps"),
         ("winter.ramp_step_percent", 9),
     ],
 )

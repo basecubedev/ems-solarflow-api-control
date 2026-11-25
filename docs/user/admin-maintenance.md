@@ -346,19 +346,22 @@ This page edits an existing installation.
   writes it. A value its field cannot hold — text in a number field, a switch
   that is neither true nor false, a number outside the field's range — is
   refused by name instead of being saved as text, read as *off* or cut to a
-  whole number; a value you did not change is left as it is stored. Saving
-  writes `config.json` and additionally mirrors the whitelisted overlapping
-  values it changed (system power/loop limits, winter enable, and per-device
-  enabled/max power/PV priority) into `data/runtime-state.json` so the change
-  goes live immediately instead of waiting for an EMS restart. A device you
+  whole number; a value you did not change is left as it is stored. The
+  operating settings (control on or off, loop interval, standby floor, grid
+  targets, winter mode, AC charging and battery care on or off and its values,
+  and per device PV priority, AC charging and discharging and the off-grid
+  socket) live in `data/runtime-state.json`, where the Dashboard changes them
+  too: they show the value EMS runs, and saving writes them there, live at
+  once, never into `config.json`. Saving writes the rest into `config.json`,
+  and the power limits and a device's activation also into the runtime state,
+  so they go live immediately instead of waiting for an EMS restart. A device you
   switch off, or turn telemetry-only while it keeps its serial number, is taken
   out of control at once; one you switch back on keeps the values set for it on
   the Dashboard, except those you changed here. Saving still never moves
   `data/` history,
-  `docker-compose.yml`, or databases. Fields that also
-  carry a live override set from the Dashboard show **Running: …** with the
-  effective value, and **Put saved values back** makes the live EMS use the
-  saved values again. A field whose value differs from its default shows
+  `docker-compose.yml`, or databases. A power limit the Dashboard runs below
+  its saved value shows **Running: …**, and **Put saved values back** makes
+  the live EMS use the saved values again. A field whose value differs from its default shows
   **Default: …**, for information only, except values that describe the
   installation, such as power limits and battery size. An emptied field names
   in grey the value it falls back to, and saving makes that the value the EMS

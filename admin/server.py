@@ -162,6 +162,7 @@ from admin.maintenance_config import (
     trusted_selection_conflicts_with_stored_device,
 )
 from admin.running_pair_health import RunningPairHealthCheck
+from admin.operation_settings import write_operation_changes
 from admin.runtime_convergence import (
     mirror_changed_keys_to_runtime,
     reset_targets_to_config,
@@ -3749,6 +3750,7 @@ class AdminHandler(BaseHTTPRequestHandler):
                     500,
                 )
             result["runtime_sync"] = self._mirror_runtime_after_apply(prepared)
+            result["operating_sync"] = self._write_operating_after_apply(prepared)
             result["analytics_retention"] = self._record_confirmed_retention(prepared)
         result["validation"] = prepared["validation"]
         result["diff"] = prepared["diff"]
@@ -3872,6 +3874,22 @@ class AdminHandler(BaseHTTPRequestHandler):
             )
         except Exception as exc:
             return {"applied": [], "skipped": [], "warnings": [f"runtime sync skipped: {exc}"]}
+
+    def _write_operating_after_apply(self, prepared):
+        """Write the operating settings the apply changed into the runtime state.
+
+        They live there only (docs/developer/settings-operation-store.md), so
+        the runtime state is created where the EMS has not yet. Best-effort
+        like the mirror: the config is saved, and a value the write refuses is
+        named in the answer.
+        """
+
+        targets = prepared.pop("operating_targets", None) or []
+        try:
+            context = self.server.config_apply.install_context_provider()
+            return write_operation_changes(context, json.loads(prepared["payload"]), targets)
+        except Exception as exc:
+            return {"applied": [], "skipped": [], "warnings": [f"operating values not written: {exc}"]}
 
     def _record_confirmed_retention(self, prepared):
         """Record the bucket retentions this confirmed apply set.

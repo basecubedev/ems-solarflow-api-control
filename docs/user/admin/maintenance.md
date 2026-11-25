@@ -208,8 +208,9 @@ reloads and never touches your unsaved changes.
 **Customized** answers *what did I change?* Its name counts the settings that
 differ from the defaults this release ships, *Customized (3)*, and the list
 groups them by feature and by device. Each row shows the setting with its
-config path, the saved value (**Saved: …**), the value the Dashboard set at
-runtime when one runs instead (**Running: …**), and the default
+config path, the value (**Saved: …**; an operating setting has the one value
+EMS runs, wherever it was set), for a power limit the value the Dashboard runs
+instead (**Running: …**), and the default
 (**Default: …**). **Show** takes you to the field: a setting on its tab with
 the search set to its config path, a feature's switch at the head of its
 feature, a device's setting in its opened card. The list only shows; it
@@ -312,10 +313,11 @@ needs an EMS restart, the card says *Some changes take effect once EMS
 restarts.* with **Restart EMS now**; **Follow it in Services** shows how it
 goes. Otherwise *EMS uses the new values without a restart.*
 
-**Values changed in the dashboard.** A value the dashboard changed while EMS
-runs is marked **Running: …** beside its field, and a note at the top of the
-page counts them. **Put saved values back** makes EMS use the saved values
-again, at once; it changes the running state, not the settings file.
+**Values changed in the dashboard.** An operating setting has one value: the
+one the Dashboard and this page both show and change, stored in the runtime
+state. Only a power limit the Dashboard runs below its saved value is marked
+**Running: …** beside its field, with a note at the top of the page; **Put
+saved values back** makes EMS use the saved limits again, at once.
 
 ### 6 — Look at the system's files
 
