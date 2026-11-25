@@ -823,6 +823,34 @@ def test_fail_closed_learned_device_alias_round_trips_without_config(tmp_path):
     assert _resolve_external_device_name(server, alias) == raw_name
 
 
+def test_a_local_api_device_s_name_is_readable_in_the_log_lines(tmp_path):
+    """A log line names its device as ``device=<name>``; the name is no Cloud route."""
+
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "devices": [
+                    {"name": "Terrace", "ip": "192.0.2.20", "sn": "HOA1NAH0XYZ123"},
+                    {"name": "Grill", "ip": "192.0.2.21", "sn": "HOA1NAH1XYZ124"},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    server = SimpleNamespace(config_path=str(config_path), runtime_validation={})
+    messages = [
+        "event=ac_mode_firmware_control_observed ac_mode=2 device=Grill soc=39",
+        "event=ac_mode_firmware_control_observed ac_mode=2 device=Terrace soc=40",
+    ]
+
+    safe = _external_mqtt_status_payload(
+        server, {"lines": [{"message": message} for message in messages], "cursor": 2}
+    )
+
+    assert [line["message"] for line in safe["lines"]] == messages
+
+
 @pytest.mark.parametrize("configured", [False, True], ids=["no_config", "local_api_device"])
 def test_the_catalogue_s_device_defaults_are_not_taken_for_device_names(tmp_path, configured):
     """Issue #406: /api/runtime showed pv_priority_factor as …ctor.

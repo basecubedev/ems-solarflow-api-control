@@ -566,3 +566,83 @@ def test_credential_keys_are_dropped(key):
     safe = sanitize_external_mqtt_status({key: "CREDENTIAL-VALUE", "note": "kept"})
     assert key not in safe
     assert safe["note"] == "kept"
+
+
+def test_a_configured_device_name_after_device_stays_readable_in_free_text():
+    config = {
+        "devices": [
+            {"name": "Grill", "ip": "192.0.2.21", "sn": "HOA1NAH1XYZ124"},
+            {"name": "TSUN OpenDTU", "type": "opendtu_http", "ip": "192.0.2.30"},
+        ]
+    }
+    status = {
+        "lines": [
+            {"message": "event=ac_mode_firmware_control_observed device=Grill soc=39"},
+            {"message": "event=device_read_failed device=TSUN OpenDTU reason=timeout"},
+            {"message": "event=x device=UNKNOWN_ROUTE_7501 device_id=ACCOUNT_ROUTE_1234"},
+            {"message": "event=x device=Grill/UNKNOWNROUTE9876 soc=40"},
+            {"message": "event=x device=Grill(UNKNOWNROUTE9876) soc=40"},
+        ]
+    }
+
+    safe = sanitize_external_mqtt_status(status, sensitive_context=config)
+
+    assert [line["message"] for line in safe["lines"]] == [
+        "event=ac_mode_firmware_control_observed device=Grill soc=39",
+        "event=device_read_failed device=TSUN OpenDTU reason=timeout",
+        "event=x device=…7501 device_id=…1234",
+        "event=x device=…9876 soc=40",
+        "event=x device=…876) soc=40",
+    ]
+
+
+def test_a_cloud_device_name_after_device_stays_readable_and_its_route_does_not():
+    route = "CLOUD_ROUTE_7501"
+    config = {
+        "zendure_mqtt": {"brokers": {"cloud_a": {"source": "zendure_cloud_mqtt"}}},
+        "devices": [
+            {
+                "name": "Garage",
+                "type": "zendure_mqtt",
+                "mqtt": {"broker_ref": "cloud_a", "device_id": route, "product_key": "KNOWN_PRODUCT"},
+            }
+        ],
+    }
+
+    safe = sanitize_external_mqtt_status(
+        {"lines": [{"message": f"event=x device=Garage device_id={route}"}]},
+        sensitive_context=config,
+    )
+
+    assert safe["lines"][0]["message"] == "event=x device=Garage device_id=…7501"
+
+
+def test_a_device_named_after_its_cloud_route_stays_masked_after_device():
+    route = "CLOUD_ROUTE_7501"
+    config = {
+        "zendure_mqtt": {"brokers": {"cloud_a": {"source": "zendure_cloud_mqtt"}}},
+        "devices": [
+            {
+                "name": route,
+                "type": "zendure_mqtt",
+                "mqtt": {"broker_ref": "cloud_a", "device_id": route, "product_key": "KNOWN_PRODUCT"},
+            }
+        ],
+    }
+
+    safe = sanitize_external_mqtt_status(
+        {"lines": [{"message": f"event=x device={route} soc=40"}]},
+        sensitive_context=config,
+    )
+
+    assert route not in json.dumps(safe)
+
+
+def test_a_device_named_like_a_short_credential_stays_masked_in_a_mapping_key():
+    config = {"devices": [{"name": "pw12", "password": "pw12"}]}
+
+    safe = sanitize_external_mqtt_status(
+        {"rows": {"device=pw12 status": 1}}, sensitive_context=config
+    )
+
+    assert "pw12" not in json.dumps(safe)
