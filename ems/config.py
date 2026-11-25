@@ -2113,6 +2113,59 @@ def _refresh_startup_config_defaults(raw_config, path, base_dir, *, backup, back
     return written
 
 
+def normalize_startup_config_switches(raw_config, path, base_dir, *, backup, backup_factory, emit_message):
+    """The config with its spelled switches written as booleans, before EMS starts.
+
+    A switch spelled as text is written as the boolean the EMS already read
+    from it (``ems.spelled_switches``), behind the same backup as an
+    auto-upgrade, so the file shows what runs. With none, nothing is written.
+    Only once the old-defaults refresh has recorded its revision: it tells a
+    value set by hand from one left as shipped by its type too, so a text
+    switch rewritten before it ran would look left as shipped and be moved.
+    """
+
+    from ems.spelled_switches import normalize_spelled_switches
+
+    normalized, changes = normalize_spelled_switches(raw_config)
+    if not changes:
+        return raw_config
+    if not _config_writable(path):
+        emit_message(logging.INFO, "Switch rewrite skipped: config.json is not writable.")
+        return raw_config
+    try:
+        with open(path) as handle:
+            text = handle.read()
+        layout = _own_layout(text)
+        unchanged = _same_config(json.loads(text), raw_config)
+    except (OSError, ValueError) as exc:
+        emit_message(logging.WARNING, f"Switch rewrite skipped: {exc}")
+        return raw_config
+    if not unchanged:
+        emit_message(logging.INFO, "Switch rewrite skipped: config.json changed while the EMS started.")
+        return raw_config
+    written = _write_startup_config(
+        raw_config,
+        normalized,
+        path,
+        base_dir,
+        label="Switch rewrite",
+        layout=layout,
+        backup=backup,
+        backup_factory=backup_factory,
+        emit_message=emit_message,
+        unwritable_level=logging.INFO,
+        expected_text=text,
+    )
+    if written is None:
+        return raw_config
+    emit_message(
+        logging.WARNING,
+        "Config switches written as text were rewritten as the value EMS read from them:\n  "
+        + "\n  ".join(describe_refreshed_defaults(changes)),
+    )
+    return written
+
+
 def _same_config(left, right):
     """Whether two parsed configs are the same JSON, NaN included."""
 
@@ -2125,6 +2178,14 @@ def _config_writable(path):
     return os.access(path, os.W_OK) and os.access(os.path.dirname(path) or ".", os.W_OK)
 
 
+def _own_layout(text):
+    """The layout of a config ``text``, each list item its own rather than the first item's."""
+
+    layout = _extract_template_layout(text)
+    layout["list_item_objects"] = {}
+    return layout
+
+
 def _own_layout_with_defaults_revision(text):
     """The layout of a config ``text``, with the revision beside the schema version.
 
@@ -2133,8 +2194,7 @@ def _own_layout_with_defaults_revision(text):
     item its own rather than the first item's.
     """
 
-    layout = _extract_template_layout(text)
-    layout["list_item_objects"] = {}
+    layout = _own_layout(text)
     root = layout.get("objects", {}).get(())
     if root and CONFIG_REVISION_KEY not in root["keys"] and "config_schema_version" in root["keys"]:
         root["keys"].insert(root["keys"].index("config_schema_version") + 1, CONFIG_REVISION_KEY)
@@ -2185,6 +2245,16 @@ def perform_startup_config_upgrade(
 
     if refresh_defaults:
         raw_config = _refresh_startup_config_defaults(
+            raw_config,
+            path,
+            base_dir,
+            backup=upgrade_config["backup_before_apply"],
+            backup_factory=backup_factory,
+            emit_message=emit_message,
+        )
+
+    if refresh_defaults and stored_revision(raw_config, CONFIG_REVISION_KEY) >= DEFAULTS_REVISION:
+        raw_config = normalize_startup_config_switches(
             raw_config,
             path,
             base_dir,

@@ -221,7 +221,9 @@ device's power limit, PV size and battery size, and passwords. A switch the
 file spells as text, `"false"` for instance, is always listed, with its text:
 the EMS reads a
 safety switch spelled so as its safe side, so write `true` or `false` without
-quotes. A value an earlier
+quotes. At its next start the EMS writes most such switches itself as the
+`true` or `false` it read from them; see
+[Switches Written As Text](../../technical/configuration.md#switches-written-as-text). A value an earlier
 release shipped as its default and a later one replaced is listed too, until
 the EMS's refresh moves it to today's (see
 [Old defaults](../../technical/configuration.md#old-defaults)). The list reads the

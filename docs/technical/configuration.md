@@ -213,6 +213,38 @@ changed by hand, so the EMS moves it to today's default once:
   and every tuned one it keeps; see
   [Maintenance](../user/admin/maintenance.md#3--change-settings).
 
+### Switches Written As Text
+
+A switch is `true` or `false`. One written as text, such as
+`"allow_hardware_writes": "false"`, is read by the EMS differently from how it
+looks, and the Admin console shows what the file says. So the EMS writes such
+a switch as the value it already read from it, at a live start once the
+old-defaults refresh above has recorded its revision, behind the same backup,
+and logs each one as a warning (`Config switches written as text were
+rewritten`). The refresh tells a switch set by hand from one left as shipped by
+its type too, so it has to come first. The EMS then does exactly what it did
+before:
+
+- A control flag (`system.enabled`, `dry_run`, `simulation_mode`,
+  `reconcile_smart_mode` and the four write gates) holding anything but
+  `true` or `false`, `null` included, is written on its blocking side, the
+  side the EMS read it on. A text `simulation_mode` also forced a dry run, so
+  `system.dry_run` is written `true` with it.
+- One of the other switches outside the device and grid-meter entries that the
+  EMS reads by their words (`ems/spelled_switches.py` lists them) is written
+  when it holds a word all its EMS readers agree on — `true`/`false`,
+  `yes`/`no`, `on`/`off`, `1`/`0` in any case — or the number 0 or 1.
+  `emsctl diagnose` and parts of the Admin read some of them by their truth
+  instead, so where they showed a text `"false"` as on, they show off after
+  the rewrite, as the EMS ran it.
+- Anything else stays as written: another word or value, and
+  `zendure_mqtt.tls` and `tls_insecure`, which the EMS refuses unless they are
+  `true` or `false` (it then reports the broker and starts no MQTT control
+  device), so the operator decides them. A switch a later release adds stays
+  as written until that release places it.
+- A start that runs dry because of such a switch, like a test start, writes
+  nothing; the startup warning names the switch to write as `true` or `false`.
+
 After upgrading:
 
 Docker:
