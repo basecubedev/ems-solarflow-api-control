@@ -1005,7 +1005,7 @@ def default_safe_config():
             "max_device_power": 800,
             "deadband": 2,
             "runtime_state_path": "runtime-state.json",
-            "min_output_limit": 0,
+            "min_output_limit": 35,
             "grid_target_discharge_w": 0,
             "grid_target_charge_w": 0,
             "loop_interval": 5,

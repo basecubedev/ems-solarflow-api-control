@@ -1636,7 +1636,7 @@ def runtime_defaults(config, existing=None):
                 minimum=1
             ),
             "min_output_limit": int_value(
-                system.get("min_output_limit", 0),
+                system.get("min_output_limit", config_mod.default_runtime_config()["system"]["min_output_limit"]),
                 "system.min_output_limit",
                 minimum=0
             ),
@@ -1644,7 +1644,10 @@ def runtime_defaults(config, existing=None):
             "grid_target_charge_w": config_mod.grid_target_w(system.get("grid_target_charge_w", 0)),
         },
         "winter": {
-            "enabled": config_section(config, "winter").get("enabled", False)
+            "enabled": config_mod.safe_bool(
+                config_section(config, "winter").get("enabled"),
+                config_mod.WINTER_DEFAULTS["enabled"],
+            )
         },
         "ac_charge_control": {
             "enabled": config_mod.normalize_ac_charge_control_config(

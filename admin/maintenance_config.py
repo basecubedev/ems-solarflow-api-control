@@ -22,7 +22,14 @@ from admin.config_preview import (
     _valid_host,
     tibber_grid_meter_issues,
 )
-from admin.config_runtime_overlap import applies_live, live_device_paths, overlap_provenance_for_context, runtime_device_entries
+from admin.config_runtime_overlap import (
+    applies_live,
+    live_device_paths,
+    overlap_provenance_for_context,
+    read_runtime_state,
+    resolve_runtime_state_path,
+    runtime_device_entries,
+)
 from admin.connection_planner import (
     INTENT_SWITCH_CONNECTION,
     plan_connection_change,
@@ -581,7 +588,7 @@ def load_maintenance_config(base_dir=None, *, identity_token_key=None):
         "config_path": config_path,
         "source": context.config_source,
         "revision": hashlib.sha256(raw).hexdigest(),
-        "summary": _summary(config, draft),
+        "summary": _summary(config, draft, _runtime_control_enabled(context, config)),
         "draft": browser_fields["draft"],
         "overrides": browser_fields["overrides"],
         "catalog": _catalog(),
@@ -1090,18 +1097,22 @@ def _soc_window(devices):
     }
 
 
-def _control_state(config):
+def _control_state(config, runtime_enabled=None):
     """What the stored config permits, stated without adding an authority.
 
     Every value is a projection of an EMS/Core decision: the gates come from the
     shared write-gate evaluator, the device grouping from the Core selectors.
     The status ladder is ordered by cause so the most fundamental reason is the
-    one shown. It states what the saved config permits, never that EMS is
-    running: ``may_control`` requires an armed transport with a device behind
-    it, nothing more.
+    one shown. It states what the saved config and the operator's control
+    switch permit, never that EMS is running: ``may_control`` requires an armed
+    transport with a device behind it, nothing more. Control on or off is an
+    operating value, so ``runtime_enabled`` stands before the config's, as the
+    EMS takes it.
     """
 
-    flags = config_control_flags(config)
+    flags = dict(config_control_flags(config))
+    if runtime_enabled is not None:
+        flags["enabled"] = runtime_enabled
     grouped = config_control_devices_by_gate(config)
     transports = []
     for control_gate in CONTROL_GATE_ORDER:
@@ -1152,7 +1163,15 @@ def _control_state(config):
     }
 
 
-def _summary(config, draft):
+def _runtime_control_enabled(context, config):
+    """Control on or off as the operator set it at runtime, or ``None`` when the runtime state holds no such value."""
+
+    system = read_runtime_state(resolve_runtime_state_path(context, config)).get("system")
+    value = system.get("enabled") if isinstance(system, dict) else None
+    return value if isinstance(value, bool) else None
+
+
+def _summary(config, draft, runtime_enabled=None):
     devices = draft["devices"]
     grid_meter = config.get("grid_meter") if isinstance(config.get("grid_meter"), dict) else {}
     dashboard = config.get("dashboard") if isinstance(config.get("dashboard"), dict) else {}
@@ -1167,7 +1186,7 @@ def _summary(config, draft):
         "dashboard_enabled": safe_bool(dashboard.get("enabled", DASHBOARD_DEFAULTS["enabled"]), False),
         "influx_enabled": influx["enabled"],
         "influx_mode": influx["mode"],
-        "control": _control_state(config),
+        "control": _control_state(config, runtime_enabled),
     }
 
 

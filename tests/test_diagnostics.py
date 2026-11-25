@@ -2656,6 +2656,39 @@ def test_the_sample_window_check_reads_enabled_the_way_the_store_does():
         assert "energy_sample_window_below_write_interval" not in codes_for(disabled), disabled
 
 
+def test_the_sample_window_check_counts_in_the_loop_interval_the_ems_runs():
+    """The loop interval is an operating value: the runtime one stands before
+    the config's, as the EMS takes it."""
+
+    def codes_for(runtime):
+        checks = []
+        diagnose_config_plausibility(
+            checks,
+            None,
+            {
+                "system": {"loop_interval": 4},
+                "dashboard": {"write_interval_seconds": 16},
+                "energy_savings": {"enabled": True, "max_sample_delta_seconds": 20},
+            },
+            runtime,
+        )
+        return {check["code"] for check in checks}
+
+    assert "energy_sample_window_below_write_interval" not in codes_for({})
+    assert "energy_sample_window_below_write_interval" in codes_for({"system": {"loop_interval": 7}})
+
+
+def test_operating_values_left_out_of_the_config_are_no_config_errors():
+    """min_output_limit and loop_interval are operating values the runtime state
+    holds; a config without them is not invalid."""
+
+    checks = []
+    diagnose_config_plausibility(checks, None, {"system": {"max_total_power": 800}})
+    codes = {check["code"] for check in checks}
+
+    assert not {"system_min_output_limit_invalid", "system_loop_interval_invalid"} & codes
+
+
 def test_an_unreadable_sample_window_is_an_error_not_an_ok():
     checks = []
     diagnose_config_plausibility(

@@ -150,6 +150,30 @@ def test_load_surfaces_runtime_override_provenance(tmp_path):
     assert result["draft"]["features"]["system.loop_interval"] == 3
 
 
+@pytest.mark.parametrize(("config_enabled", "runtime_enabled", "status"), [
+    (True, False, "disabled"),
+    (False, True, "may_control"),
+    (True, None, "may_control"),
+    (False, None, "disabled"),
+])
+def test_the_control_summary_shows_control_as_the_ems_runs_it(tmp_path, config_enabled, runtime_enabled, status):
+    """Control on or off is an operating value: the EMS takes the runtime value
+    before the config's, and the summary shows what it takes."""
+
+    data = _config()
+    data["system"].update({"enabled": config_enabled, "dry_run": False})
+    _write_config(tmp_path, data)
+    if runtime_enabled is not None:
+        (tmp_path / "runtime-state.json").write_text(
+            json.dumps({"system": {"enabled": runtime_enabled}}), encoding="utf-8"
+        )
+
+    control = load_maintenance_config(base_dir=str(tmp_path))["summary"]["control"]
+
+    assert control["enabled"] is (runtime_enabled if runtime_enabled is not None else config_enabled)
+    assert control["status"] == status
+
+
 def test_load_without_runtime_file_marks_all_config(tmp_path):
     _write_config(tmp_path, _config())
     result = load_maintenance_config(base_dir=str(tmp_path))

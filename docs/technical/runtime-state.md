@@ -97,7 +97,8 @@ Example:
 | `grid_target_discharge_w` | The meter reading the regulation settles on while the battery discharges, -200 to 200 W, import positive, export negative; 0 aims for 0 W ([Grid target](control-logic.md#grid-target)). A value outside that range, or not a number, reads as 0 |
 | `grid_target_charge_w` | The same while a surplus charge runs |
 
-`min_output_limit=35` is the current template default and is useful on
+`min_output_limit=35` is the default, for a config or a runtime state that
+leaves it out as for the template, and is useful on
 installations where `outputLimit=0` behaves like a stop, idle, or sleep state. A battery
 that [battery care](control-logic.md#battery-care) holds between minSoc and its
 full point gets its ceiling instead where that is lower.

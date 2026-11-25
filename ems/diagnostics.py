@@ -924,7 +924,7 @@ def diagnose_template_placeholders(checks, config_data):
     )
 
 
-def diagnose_config_plausibility(checks, args, config_data):
+def diagnose_config_plausibility(checks, args, config_data, runtime_data=None):
     if not isinstance(config_data, dict):
         return
 
@@ -949,13 +949,17 @@ def diagnose_config_plausibility(checks, args, config_data):
             )
 
     min_output_limit = diagnose_float(system.get("min_output_limit"))
-    if min_output_limit is None or min_output_limit < 0:
+    if "min_output_limit" not in system:
+        pass
+    elif min_output_limit is None or min_output_limit < 0:
         diagnose_add(checks, "config", "error", "system_min_output_limit_invalid", "system.min_output_limit must be numeric and non-negative")
     else:
         diagnose_add(checks, "config", "ok", "system_min_output_limit_valid", "system.min_output_limit is numeric and non-negative")
 
     loop_interval = diagnose_float(system.get("loop_interval"))
-    if loop_interval is None or loop_interval <= 0:
+    if "loop_interval" not in system:
+        pass
+    elif loop_interval is None or loop_interval <= 0:
         diagnose_add(checks, "config", "error", "system_loop_interval_invalid", "system.loop_interval must be numeric and > 0")
     else:
         diagnose_add(checks, "config", "ok", "system_loop_interval_valid", "system.loop_interval is numeric and > 0")
@@ -983,7 +987,7 @@ def diagnose_config_plausibility(checks, args, config_data):
         )
         # The controller can only write on a loop tick, so a 16 s write
         # interval on a 5 s loop stores a sample every 20 s, not every 16.
-        loop_tick = diagnose_float(system.get("loop_interval"))
+        loop_tick = diagnose_loop_interval(config_data, runtime_data or {})
         if write_interval is not None and loop_tick and loop_tick > 0:
             # Zero or anything below one tick means "every loop", which is a
             # tick apart, not nothing apart.
@@ -4553,9 +4557,9 @@ def diagnose_collect(args):
         else:
             diagnose_add(checks, "config", "ok", "config_keys_complete", "config.json contains all template keys")
 
-    diagnose_config_plausibility(checks, args, config_data)
-
     runtime_path = resolve_runtime_path(args, config_data)
+    diagnose_config_plausibility(checks, args, config_data, diagnose_control_load_runtime(runtime_path)[0])
+
     diagnose_parent_path(checks, "project", "runtime_state", runtime_path, "runtime-state path", check_write=True, missing_level="warning")
     battery_full_charge_report = diagnose_battery_full_charge_assist_report(
         config_data, diagnose_control_load_runtime(runtime_path)[0]
