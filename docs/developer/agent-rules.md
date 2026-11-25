@@ -387,7 +387,13 @@ its counts, and do not run `analyze` outside the launcher.
 
 A stale index is an agent's to fix, not to work around: re-running the analysis
 through `scripts/gitnexus-project` is pre-authorized and needs no separate
-instruction. Report that it was refreshed and against which revision.
+instruction. Report that it was refreshed and against which revision. An agent
+keeps the index current for the code it relies on before it uses `impact`,
+`detect_changes` or `query`, and refreshes it unasked (owner, 2026-11-25). The
+one limit is concurrency: two agents never refresh at the same time. An agent
+normally works alone; when another agent instance works on the code in
+parallel, the owner says so in the task, and the refresh is then left to the
+agent the owner names, or else to the one that was there first.
 
 If GitNexus is unavailable, stale or fails, do not pretend it was used. Perform
 a manual blast-radius review with symbol/reference searches; inspect callers,
@@ -451,6 +457,15 @@ git stash list
 Preserve unrelated work. Never use `git reset --hard`, `git clean -fd`, a force
 checkout over user changes, unrelated stash mutation, history rewriting, or a
 push without explicit instruction.
+
+Task work happens in a worktree of its own. The main checkout is what the code
+tools read, so an agent working alone keeps it current (owner, 2026-11-25): it
+may switch it to `main` and fast-forward it to `origin/main`, but only with a
+clean `git status`, never over uncommitted work, never touching a stash, and
+not while a process reads from it, such as a local Admin test server or a
+browser suite serving its built assets.
+When the owner announces a parallel agent, neither of them changes the main
+checkout.
 
 A file that is copied aside so it can be put back — a stylesheet perturbed to
 prove a contract bites, a config swapped to measure a baseline — is copied to a
