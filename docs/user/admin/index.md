@@ -68,8 +68,9 @@ The top bar always names the page, says how the installation is — **All
 good**, **A note**, **Needs a look**, **Needs attention**, **Not installed**,
 **Checking…** or **Unknown state**, a pill that leads to Status — beside the
 EMS's live state, and carries **Sign in** or **Sign out** and the
-**Appearance** button. The foot of the side menu holds **Hide menu text** and
-**About & licenses**. On a phone the menu becomes a bar at the bottom with
+**Appearance** button. The foot of the side menu holds **Hide menu text**,
+**About & licenses** and the version that runs, the last also at the end of
+**More** on a phone. On a phone the menu becomes a bar at the bottom with
 four pages and **More**; see
 [Appearance, language and phone](appearance.md#on-a-phone).
 

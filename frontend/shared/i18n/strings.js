@@ -48,6 +48,8 @@ export const SHARED_STRINGS = {
   "about.version": s("Version", "Version", "Versie", "Version"),
   "about.revision": s("Commit", "Commit", "Commit", "Commit"),
   "about.development": s("development build", "Entwicklungsstand", "ontwikkelversie", "version de développement"),
+  "about.latest": s("latest", "latest", "latest", "latest"),
+  "about.build": s("build {serial}", "Build {serial}", "build {serial}", "build {serial}"),
   "about.source": s("Source code of this version", "Quellcode dieser Version", "Broncode van deze versie", "Code source de cette version"),
   "about.license.title": s("License", "Lizenz", "Licentie", "Licence"),
   "about.license.notice": s(

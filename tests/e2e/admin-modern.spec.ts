@@ -1660,3 +1660,36 @@ test.describe("Modern Admin: About & licenses", () => {
     await expect(notices.locator("details[open] pre")).toContainText("VoidZero Inc. and Vite contributors");
   });
 });
+
+test.describe("Modern Admin: the running build where the menu ends", { tag: ["@smoke"] }, () => {
+  const COMMIT = "9168b7a2b2896524c554039547e75e7b4d88fb8a";
+
+  test("a latest build is named by its number and commit, in the menu and in More on a phone", async ({ page }) => {
+    await page.route("**/build.json", (route: Route) => route.fulfill({ json: { version: "latest", revision: COMMIT, build_id: `latest-${COMMIT.slice(0, 12)}-1-1`, build_serial: "812", channel: "latest" } }));
+    await openModern(page);
+
+    await expect(page.getByTestId("nav-version")).toHaveText("latest · build 812 · 9168b7a");
+
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.getByTestId("nav-more").click();
+    await expect(page.getByRole("dialog", { name: "More" }).getByTestId("sheet-version")).toHaveText("latest · build 812 · 9168b7a");
+  });
+
+  test("a release is named by its version, as on the About page", async ({ page }) => {
+    await page.route("**/build.json", (route: Route) => route.fulfill({ json: { version: "v0.10.9", revision: COMMIT, build_id: `v0.10.9-${COMMIT.slice(0, 12)}-1-1`, build_serial: "812", channel: "stable" } }));
+    await openModern(page);
+
+    await expect(page.getByTestId("nav-version")).toHaveText("v0.10.9");
+    await page.getByTestId("nav-about").click();
+    await expect(page.locator(".fact").filter({ hasText: "Version" })).toContainText("v0.10.9");
+    await expect(page.locator(".fact").filter({ hasText: "Commit" })).toContainText(COMMIT.slice(0, 12));
+  });
+
+  test("a local build, which names no version, leaves the line out", async ({ page }) => {
+    await page.route("**/build.json", (route: Route) => route.fulfill({ json: { version: "local", revision: "0".repeat(40), build_id: "local-0000000", build_serial: "0", channel: "development" } }));
+    await openModern(page);
+
+    await expect(page.locator(".app")).toBeVisible();
+    await expect(page.getByTestId("nav-version")).toHaveCount(0);
+  });
+});

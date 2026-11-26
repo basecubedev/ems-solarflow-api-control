@@ -72,13 +72,31 @@ export function sourceLinks(ref) {
  * channel as its version.
  */
 export function buildFacts(value) {
-  if (!value || typeof value !== "object") return { version: "", revision: "" };
+  if (!value || typeof value !== "object") return { version: "", revision: "", serial: 0 };
   const version = String(value.version || "").trim();
   const channel = String(value.channel || "").trim();
+  const serial = String(value.build_serial ?? "").trim();
   return {
     version: version && version !== "local" ? version : NO_CHANNEL.has(channel) ? "" : channel,
     revision: knownRevision(value.revision),
+    serial: /^[1-9]\d*$/.test(serial) ? Number(serial) : 0,
   };
+}
+
+/**
+ * The line that names the running build where the menu ends: a release by its
+ * version; a build of ``latest``, which is always called latest, also by its
+ * build number and short commit, so two of them can be told apart; nothing
+ * for a local build, which names none.
+ */
+export function versionText(facts, t) {
+  const version = String(facts?.version || "");
+  if (!version) return "";
+  if (version !== "latest") return version;
+  const parts = [t("about.latest")];
+  if (facts.serial) parts.push(t("about.build", { serial: facts.serial }));
+  if (facts.revision) parts.push(facts.revision.slice(0, 7));
+  return parts.join(" · ");
 }
 
 /**

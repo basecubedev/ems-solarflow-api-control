@@ -529,6 +529,7 @@ jobs:
           build-args: |
             EMS_REVISION=${{ steps.build_identity.outputs.git_commit }}
             EMS_BUILD_ID=${{ steps.build_identity.outputs.build_id }}
+            EMS_BUILD_SERIAL=${{ steps.build_identity.outputs.build_serial }}
             EMS_CHANNEL=development
             EMS_RELEASE_TAG=${{ steps.build_identity.outputs.immutable_tag }}
             EMS_SYSTEM_TAG=${{ steps.build_identity.outputs.immutable_tag }}
@@ -662,6 +663,7 @@ jobs:
           build-args: |
             EMS_REVISION=${{ steps.build_identity.outputs.git_commit }}
             EMS_BUILD_ID=${{ steps.build_identity.outputs.build_id }}
+            EMS_BUILD_SERIAL=${{ steps.build_identity.outputs.build_serial }}
             EMS_CHANNEL=development
             EMS_RELEASE_TAG=${{ steps.build_identity.outputs.immutable_tag }}
             EMS_SYSTEM_TAG=${{ steps.build_identity.outputs.immutable_tag }}

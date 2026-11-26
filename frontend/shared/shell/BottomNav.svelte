@@ -9,6 +9,8 @@
   import { t } from "../i18n/i18n.svelte.js";
   import { prefs, setPref, THEMES, THEME_NAMES, LANGUAGES } from "../state/prefs.svelte.js";
   import { useShell } from "./context.js";
+  import { versionText } from "../lib/about.js";
+  import { build, loadBuild } from "../state/build.svelte.js";
 
   const shell = useShell();
   const { pageSet, session } = shell;
@@ -108,6 +110,12 @@
     }
     if (session.leavesOnSignOut) closed();
   }
+
+  const version = $derived(versionText(build.facts, t));
+
+  $effect(() => {
+    loadBuild();
+  });
 </script>
 
 <nav class="bottom-nav" aria-label={t("nav.main")}>
@@ -214,6 +222,7 @@
         {#if hasAbout}<a class="ghost-link" href={href("about")} onclick={() => (open = false)} data-testid="sheet-about"><Icon name="info" /><span>{t("nav.about")}</span></a>{/if}
         <button class="ghost-link" type="button" onclick={startEditing} data-testid="customize-bar"><Icon name="pencil" /><span>{t("nav.customize")}</span></button>
         {#if shell.classic}<button class="ghost-link" type="button" onclick={() => shell.classic(router.page)}><Icon name="arrow-left-right" /><span>{t("nav.classicSwitch")}</span></button>{/if}
+        {#if version}<div class="version" title={t("about.version")} data-testid="sheet-version">{version}</div>{/if}
       </div>
     {/if}
   </div>
