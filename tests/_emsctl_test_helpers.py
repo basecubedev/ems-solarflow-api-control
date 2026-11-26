@@ -7,6 +7,7 @@ both tests/test_emsctl_cli.py and tests/test_diagnostics.py.
 """
 import json
 import math
+import os
 import subprocess
 import sys
 import time
@@ -59,7 +60,7 @@ def write_config(path):
     }))
 
 
-def run_emsctl(tmp_path, *args, input_text=None):
+def run_emsctl(tmp_path, *args, input_text=None, env=None):
     config_path = tmp_path / "config.json"
     runtime_path = tmp_path / "runtime-state.json"
     if not config_path.exists():
@@ -82,6 +83,7 @@ def run_emsctl(tmp_path, *args, input_text=None):
         input=input_text,
         capture_output=True,
         check=False,
+        env=None if env is None else {**os.environ, **env},
     )
 
 

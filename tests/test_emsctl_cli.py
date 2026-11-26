@@ -1704,6 +1704,8 @@ def test_config_upgrade_noninteractive_no_backup_writes_without_backup(
 def test_encrypted_backup_inspect_and_restore_accept_stdin_password(tmp_path):
     backup_dir = tmp_path / "backups"
     password = "stdin-backup-password"
+    (tmp_path / "data").mkdir()
+    install = {"EMS_INSTALL_DIR": str(tmp_path)}
 
     create = run_emsctl(
         tmp_path,
@@ -1715,6 +1717,7 @@ def test_encrypted_backup_inspect_and_restore_accept_stdin_password(tmp_path):
         str(backup_dir),
         "--password",
         input_text=f"{password}\n{password}\n",
+        env=install,
     )
     assert create.returncode == 0, create.stderr
     assert password not in create.stdout + create.stderr
@@ -1726,6 +1729,7 @@ def test_encrypted_backup_inspect_and_restore_accept_stdin_password(tmp_path):
         "inspect",
         str(archive),
         input_text=f"{password}\n",
+        env=install,
     )
     assert inspect.returncode == 0, inspect.stderr
     assert "encrypted:  True" in inspect.stdout
@@ -1741,6 +1745,7 @@ def test_encrypted_backup_inspect_and_restore_accept_stdin_password(tmp_path):
         "keep",
         "--no-rollback",
         input_text=f"{password}\n",
+        env=install,
     )
     assert restore.returncode == 0, restore.stderr
     assert "Dry run: no files were changed" in restore.stdout
@@ -1756,6 +1761,7 @@ def test_encrypted_backup_inspect_and_restore_accept_stdin_password(tmp_path):
         "keep",
         "--no-rollback",
         input_text="wrong-password\n",
+        env=install,
     )
     assert wrong.returncode != 0
     assert "incorrect password or corrupted backup" in wrong.stderr

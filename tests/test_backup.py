@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from ems import backup, backup_crypto
+from ems import backup, backup_crypto, backup_staging
 
 pytestmark = [
     pytest.mark.backup_restore,
@@ -486,6 +486,167 @@ def test_encrypted_backup_roundtrip(tmp_path):
     info = backup.inspect_backup(path, password="hunter2pw")
     assert info["encrypted"] is True
     assert info["manifest"]["encryption"]["enabled"] is True
+
+
+def _decrypted_folders(directory):
+    return sorted(name for name in os.listdir(directory) if name.startswith(backup_staging.DECRYPTED_ARCHIVES))
+
+
+def _abandoned_decryption(parent):
+    folder = backup_staging.claim_staging(str(parent), backup_staging.DECRYPTED_ARCHIVES)
+    Path(folder.path, "archive.tar.gz").write_bytes(b"plaintext archive")
+    os.close(folder._claim_fd)
+    folder._claim_fd = None
+    return folder.path
+
+
+def _encrypted_install(tmp_path, monkeypatch):
+    base, config, config_path = write_project(tmp_path)
+    path = create(tmp_path, config, base, config_path, password="hunter2pw")
+    monkeypatch.setenv("EMS_INSTALL_DIR", str(base))
+    system_temp = tmp_path / "system-temp"
+    system_temp.mkdir()
+    monkeypatch.setattr(tempfile, "tempdir", str(system_temp))
+    return base, config, config_path, path, system_temp
+
+
+def test_an_encrypted_archive_is_decrypted_in_the_data_folder_only(tmp_path, monkeypatch):
+    """Backlog 18: the Admin's temp folder is a 16 MiB RAM disk; the backup folder is exported to the appliance's backup account."""
+
+    base, _config, _config_path, path, system_temp = _encrypted_install(tmp_path, monkeypatch)
+    data_dir = os.path.join(base, "data")
+    backup_dir = os.path.dirname(path)
+
+    with backup.open_backup_archive(path, password="hunter2pw", allowed_root=backup_dir) as tar:
+        assert backup.read_manifest(tar)["encryption"]["enabled"] is True
+        folders = _decrypted_folders(data_dir)
+        assert len(folders) == 1
+        plain = [name for name in os.listdir(os.path.join(data_dir, folders[0])) if name != backup_staging.CLAIM_NAME]
+        assert len(plain) == 1
+        assert stat.S_IMODE(os.stat(os.path.join(data_dir, folders[0], plain[0])).st_mode) == 0o600
+        assert _decrypted_folders(backup_dir) == []
+        assert os.listdir(system_temp) == []
+
+    assert _decrypted_folders(data_dir) == []
+
+
+def test_an_archive_on_a_stick_is_never_decrypted_beside_itself(tmp_path, monkeypatch):
+    """Review: the stick or share the encryption protects must not receive the plaintext."""
+
+    base, _config, _config_path, path, _system_temp = _encrypted_install(tmp_path, monkeypatch)
+    stick = tmp_path / "stick"
+    stick.mkdir()
+    moved = stick / os.path.basename(path)
+    os.replace(path, moved)
+
+    with backup.open_backup_archive(str(moved), password="hunter2pw"):
+        assert sorted(os.listdir(stick)) == [moved.name]
+        assert len(_decrypted_folders(os.path.join(base, "data"))) == 1
+
+    assert sorted(os.listdir(stick)) == [moved.name]
+
+
+def test_a_wrong_password_leaves_no_decrypted_copy(tmp_path, monkeypatch):
+    base, _config, _config_path, path, system_temp = _encrypted_install(tmp_path, monkeypatch)
+
+    with pytest.raises(backup_crypto.BackupPasswordError):
+        with backup.open_backup_archive(path, password="wrong-pw"):
+            pass
+
+    assert _decrypted_folders(os.path.join(base, "data")) == []
+    assert os.listdir(system_temp) == []
+
+
+def test_a_decrypted_copy_a_killed_process_left_goes_with_the_next_decryption_or_database_backup(tmp_path, monkeypatch):
+    base, config, _config_path, path, _system_temp = _encrypted_install(tmp_path, monkeypatch)
+    data_dir = os.path.join(base, "data")
+
+    left = _abandoned_decryption(data_dir)
+    with backup.open_backup_archive(path, password="hunter2pw"):
+        assert not os.path.exists(left)
+    left = _abandoned_decryption(data_dir)
+    sqlite3.connect(os.path.join(data_dir, "dashboard.sqlite")).close()
+    config.setdefault("dashboard", {})["database_path"] = os.path.join(data_dir, "dashboard.sqlite")
+    create_db(base, config)
+
+    assert not os.path.exists(left)
+
+
+def test_an_encrypted_backup_writes_its_plaintext_in_the_data_folder_only(tmp_path, monkeypatch):
+    """Review: the plaintext tar sat in the exported backup folder while it was encrypted."""
+
+    base, config, config_path, _path, system_temp = _encrypted_install(tmp_path, monkeypatch)
+    data_dir = os.path.join(base, "data")
+    backup_dir = os.path.join(base, "backup")
+    seen = {}
+    encrypt = backup_crypto.encrypt_file
+
+    def watched(plaintext_path, *args, **kwargs):
+        seen["backup"] = sorted(str(found.relative_to(backup_dir)) for found in Path(backup_dir).rglob("*") if found.is_file())
+        seen["data"] = _decrypted_folders(data_dir)
+        return encrypt(plaintext_path, *args, **kwargs)
+
+    monkeypatch.setattr(backup_crypto, "encrypt_file", watched)
+    create(tmp_path, config, base, config_path, password="hunter2pw")
+
+    assert not [name for name in seen["backup"] if name.endswith("archive.tar.gz")]
+    assert len(seen["data"]) == 1
+    assert _decrypted_folders(data_dir) == []
+    assert os.listdir(system_temp) == []
+
+
+def test_a_database_backup_leaves_a_decryption_that_runs_alone(tmp_path, monkeypatch):
+    base, config, _config_path, path, _system_temp = _encrypted_install(tmp_path, monkeypatch)
+    data_dir = os.path.join(base, "data")
+    sqlite3.connect(os.path.join(data_dir, "dashboard.sqlite")).close()
+    config.setdefault("dashboard", {})["database_path"] = os.path.join(data_dir, "dashboard.sqlite")
+
+    with backup.open_backup_archive(path, password="hunter2pw") as tar:
+        folders = _decrypted_folders(data_dir)
+        create_db(base, config)
+        assert _decrypted_folders(data_dir) == folders
+        assert backup.read_manifest(tar)["encryption"]["enabled"] is True
+
+
+def test_without_an_install_dir_the_plaintext_goes_into_this_installations_data_folder(tmp_path, monkeypatch):
+    """The EMS container, emsctl through compose exec and the dashboard name no EMS_INSTALL_DIR."""
+
+    from ems import paths
+
+    monkeypatch.delenv("EMS_INSTALL_DIR", raising=False)
+    monkeypatch.setattr(paths, "BASE_DIR", str(tmp_path / "install"))
+
+    assert Path(backup.plaintext_dir()) == tmp_path / "install" / "data"
+
+
+def test_a_staging_folder_that_cannot_be_made_is_a_backup_error(tmp_path, monkeypatch):
+    """Review: a raw OSError escaped, and the Admin's verify step catches BackupError only."""
+
+    _base, _config, _config_path, path, _system_temp = _encrypted_install(tmp_path, monkeypatch)
+
+    def full_disk(parent, kind):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(backup_staging, "claim_staging", full_disk)
+
+    with pytest.raises(backup.BackupError):
+        with backup.open_backup_archive(path, password="hunter2pw"):
+            pass
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root writes into a folder without write permission")
+def test_a_data_folder_that_takes_no_files_sends_the_decryption_to_the_system_temp_folder(tmp_path, monkeypatch):
+    base, _config, _config_path, path, system_temp = _encrypted_install(tmp_path, monkeypatch)
+    data_dir = Path(base) / "data"
+    data_dir.chmod(0o500)
+    try:
+        with backup.open_backup_archive(path, password="hunter2pw") as tar:
+            assert backup.read_manifest(tar)["encryption"]["enabled"] is True
+            assert len(_decrypted_folders(system_temp)) == 1
+    finally:
+        data_dir.chmod(0o700)
+
+    assert os.listdir(system_temp) == []
 
 
 def test_encrypted_inspect_without_password(tmp_path):
@@ -1553,3 +1714,21 @@ def test_restored_schedules_keep_the_mode_of_the_file_they_replace(tmp_path):
 
     assert stat.S_IMODE(os.stat(schedules).st_mode) == 0o640
     assert json.loads(schedules.read_text())["enabled"] is True
+
+
+def test_an_encrypted_backup_whose_plaintext_cannot_be_staged_is_a_backup_error(tmp_path, monkeypatch):
+    base, config, config_path, _path, _system_temp = _encrypted_install(tmp_path, monkeypatch)
+    claim = backup_staging.claim_staging
+
+    def plaintext_refused(parent, kind):
+        if kind == backup_staging.DECRYPTED_ARCHIVES:
+            raise OSError(28, "No space left on device")
+        return claim(parent, kind)
+
+    monkeypatch.setattr(backup_staging, "claim_staging", plaintext_refused)
+    before = sorted(os.listdir(os.path.join(base, "backup")))
+
+    with pytest.raises(backup.BackupError):
+        create(tmp_path, config, base, config_path, password="hunter2pw")
+
+    assert sorted(os.listdir(os.path.join(base, "backup"))) == before

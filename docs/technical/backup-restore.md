@@ -172,18 +172,28 @@ not fit, nor the backup folder, which the appliance hands to its backup
 account, is used for this. The archive itself is written in a hidden
 `.ems-backup-part-…` folder in the backup folder and moved out of it whole,
 and an archive taken back through the Admin Console arrives in a
-`.ems-backup-import-…` folder there. A restore writes each file it puts back
+`.ems-backup-import-…` folder there. The plaintext of a password-protected
+archive lives in a `.ems-backup-decrypted-…` folder in the installation's
+data folder (`data/`; the Admin Console finds it through `EMS_INSTALL_DIR`):
+written there before it is encrypted into the archive, and decrypted there
+for as long as the archive is inspected, verified, imported or restored, so
+`data/` needs room for one plaintext copy. Never in the backup folder, which the appliance
+exports to its backup account, and never beside the archive, which may sit
+on the stick or share the password protects; only a data folder that is
+missing or takes no files sends it to the system temp folder. A restore writes each file it puts back
 in a hidden `.ems-restore-part-…` folder beside that file and moves it into
 place from there, so the move stays atomic; a live database is copied in from
 there through SQLite instead.
 
 Each of these folders holds a claim file that its process keeps locked until
 the folder is removed, and the claim is removed after everything else in it.
-A backup, upload or restore whose process is killed half-way leaves its folder
-behind, plaintext database copies included; the next backup or upload then
-removes every such folder whose lock is free and that belongs to the account it
-runs as, beside the databases it snapshots and in the backup folder, and the
-next restore those beside each file it writes (a file it skips as unchanged is
+A backup, upload, decryption or restore whose process is killed half-way
+leaves its folder behind, plaintext database copies and decrypted archives
+included; the next backup or upload then removes every such folder whose lock
+is free and that belongs to the account it runs as, beside the databases it
+snapshots and in the backup folder, the next decryption or database backup
+the decrypted copies in the data folder, and the next restore those beside
+each file it writes (a file it skips as unchanged is
 not written, so the folder beside it waits for a later restore, or for the next
 database backup when it sits beside a database). A process removes its own
 folder by the files it put there; anything else in it keeps the folder for

@@ -329,17 +329,44 @@ def decrypt_file_to_temp(
     )
     temp_dir = _validated_temp_dir(temp_dir)
     with open(encrypted_path, "rb") as handle:
-        if handle.read(len(MAGIC)) != MAGIC:
-            raise BackupFormatError("not an EMS encrypted backup")
-        version_byte = handle.read(1)
-        if len(version_byte) != 1:
-            raise BackupFormatError("truncated encrypted backup header")
-        version = version_byte[0]
-        if version == STREAMING_VERSION:
-            return _decrypt_streaming(handle, password, temp_dir)
-        if version == LEGACY_FERNET_VERSION:
-            return _decrypt_legacy_fernet(handle, password, temp_dir)
-        raise BackupFormatError(f"unsupported encrypted backup version {version}")
+        decrypt = _decryptor(handle)
+        fd, tmp_path = tempfile.mkstemp(suffix=".tar.gz", dir=temp_dir)
+        try:
+            with os.fdopen(fd, "wb") as out:
+                decrypt(handle, password, out)
+        except BaseException:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+            raise
+    return tmp_path
+
+
+def decrypt_file_into(encrypted_path, password, out, allowed_root=None):
+    """Decrypt ``encrypted_path`` into ``out``, a binary file open for writing.
+
+    The formats and errors of :func:`decrypt_file_to_temp`; the caller owns
+    ``out`` and removes what was written to it when this raises.
+    """
+
+    encrypted_path = _validated_existing_file_path(
+        encrypted_path, allowed_root=allowed_root
+    )
+    with open(encrypted_path, "rb") as handle:
+        _decryptor(handle)(handle, password, out)
+
+
+def _decryptor(handle):
+    if handle.read(len(MAGIC)) != MAGIC:
+        raise BackupFormatError("not an EMS encrypted backup")
+    version_byte = handle.read(1)
+    if len(version_byte) != 1:
+        raise BackupFormatError("truncated encrypted backup header")
+    version = version_byte[0]
+    if version == STREAMING_VERSION:
+        return _decrypt_streaming
+    if version == LEGACY_FERNET_VERSION:
+        return _decrypt_legacy_fernet
+    raise BackupFormatError(f"unsupported encrypted backup version {version}")
 
 
 def _require_int(header, name):
@@ -393,7 +420,7 @@ def _parse_streaming_header(header):
     return algorithm, iterations, salt, nonce_prefix, chunk_size
 
 
-def _decrypt_streaming(handle, password, temp_dir):
+def _decrypt_streaming(handle, password, out):
     header_len = struct.unpack(">I", _read_exact(handle, 4))[0]
     if header_len == 0:
         raise BackupFormatError("encrypted backup header is empty")
@@ -414,51 +441,43 @@ def _decrypt_streaming(handle, password, temp_dir):
     key = _derive_key(password, salt, iterations)
     cipher = create_aead_cipher(algorithm, key)
 
-    fd, tmp_path = tempfile.mkstemp(suffix=".tar.gz", dir=temp_dir)
-    try:
-        with os.fdopen(fd, "wb") as out:
-            index = 0
-            while True:
-                flag_byte = handle.read(1)
-                if not flag_byte:
-                    raise BackupFormatError(
-                        "truncated encrypted backup: missing final chunk"
-                    )
-                if flag_byte not in (b"\x00", b"\x01"):
-                    raise BackupFormatError("invalid chunk flag in encrypted backup")
-                final = flag_byte == b"\x01"
-                length = struct.unpack(">I", _read_exact(handle, 4))[0]
-                if length == 0 and not final:
-                    raise BackupFormatError("empty non-final chunk in encrypted backup")
-                if length > max_ciphertext:
-                    raise BackupFormatError("encrypted chunk exceeds maximum size")
-                ciphertext = _read_exact(handle, length)
-                try:
-                    plaintext = cipher.decrypt(
-                        _chunk_nonce(nonce_prefix, index),
-                        ciphertext,
-                        _chunk_aad(algorithm, index, final),
-                    )
-                except InvalidTag as exc:
-                    raise BackupPasswordError(
-                        "incorrect password or corrupted backup"
-                    ) from exc
-                out.write(plaintext)
-                index += 1
-                if final:
-                    if handle.read(1):
-                        raise BackupFormatError(
-                            "trailing data after final encrypted chunk"
-                        )
-                    break
-    except Exception:
-        if os.path.exists(tmp_path):
-            os.remove(tmp_path)
-        raise
-    return tmp_path
+    index = 0
+    while True:
+        flag_byte = handle.read(1)
+        if not flag_byte:
+            raise BackupFormatError(
+                "truncated encrypted backup: missing final chunk"
+            )
+        if flag_byte not in (b"\x00", b"\x01"):
+            raise BackupFormatError("invalid chunk flag in encrypted backup")
+        final = flag_byte == b"\x01"
+        length = struct.unpack(">I", _read_exact(handle, 4))[0]
+        if length == 0 and not final:
+            raise BackupFormatError("empty non-final chunk in encrypted backup")
+        if length > max_ciphertext:
+            raise BackupFormatError("encrypted chunk exceeds maximum size")
+        ciphertext = _read_exact(handle, length)
+        try:
+            plaintext = cipher.decrypt(
+                _chunk_nonce(nonce_prefix, index),
+                ciphertext,
+                _chunk_aad(algorithm, index, final),
+            )
+        except InvalidTag as exc:
+            raise BackupPasswordError(
+                "incorrect password or corrupted backup"
+            ) from exc
+        out.write(plaintext)
+        index += 1
+        if final:
+            if handle.read(1):
+                raise BackupFormatError(
+                    "trailing data after final encrypted chunk"
+                )
+            return
 
 
-def _decrypt_legacy_fernet(handle, password, temp_dir):
+def _decrypt_legacy_fernet(handle, password, out):
     """Decrypt a version-1 backup within the bounds a version-2 header must meet.
 
     The legacy header is read before any authentication, so an unchecked
@@ -483,15 +502,7 @@ def _decrypt_legacy_fernet(handle, password, temp_dir):
             "incorrect password or corrupted backup"
         ) from exc
 
-    fd, tmp_path = tempfile.mkstemp(suffix=".tar.gz", dir=temp_dir)
-    try:
-        with os.fdopen(fd, "wb") as out:
-            out.write(plaintext)
-    except Exception:
-        if os.path.exists(tmp_path):
-            os.remove(tmp_path)
-        raise
-    return tmp_path
+    out.write(plaintext)
 
 
 def _encrypt_file_legacy_fernet(
