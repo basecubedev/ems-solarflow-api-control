@@ -11,6 +11,7 @@ The code is split by responsibility:
 - `ems/sml.py`: SML 1.04 telegram decoder for meters read over their IR port
 - `ems/tibber_pulse.py`: Tibber Pulse IR bridge reader with a cached background poller (experimental grid meter)
 - `ems/runtime_state.py`: mutable runtime-state handling
+- `ems/runtime_devices.py`: which runtime-state entry a device's config entry owns, and what a new one starts with
 - `ems/target_control.py`: capability detection and target calculation
 - `ems/controller.py`: EMS control loop
 - `ems/simulation.py`: simulation, replay, preflight and self-test helpers

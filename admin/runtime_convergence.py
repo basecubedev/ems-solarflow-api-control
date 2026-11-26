@@ -12,7 +12,7 @@ Both go through the validated writers the dashboard uses, so they take effect
 within one EMS control loop.
 
 A device's keys reach the runtime entry the device owns by the rule the EMS
-starts with (``ems.runtime_state.owned_runtime_device``): the entry stamped with
+starts with (``ems.runtime_devices.owned_runtime_device``): the entry stamped with
 its serial, so a rename or a name swap that the running EMS has not loaded yet
 still reaches the device it means, and the EMS carries that entry, values
 included, over to the new name at its next start.
@@ -25,6 +25,7 @@ entry and is skipped: the EMS seeds its values on its next start.
 
 import os
 import re
+from contextlib import ExitStack, contextmanager
 
 from admin.config_runtime_overlap import (
     device_group,
@@ -40,6 +41,7 @@ from ems.runtime_commands import (
     RuntimeWriteError,
     apply_configured_device_update,
     apply_section_update,
+    create_configured_device,
     apply_system_update,
     build_validation_context,
 )
@@ -99,11 +101,6 @@ def _named_device(config, name):
 
 
 def _apply_one(runtime_state, validation_context, kind, holder, key, value):
-    if kind == "parked":
-        name, identity = holder
-        if not runtime_state.update_parked(name, identity, {key: value}):
-            raise RuntimeWriteError(f"no parked values for device {name}")
-        return
     if kind == "system":
         apply_system_update(runtime_state, {key: value}, validation_context, source="admin")
     elif kind == "section":
@@ -137,7 +134,8 @@ def write_targets(context, config, targets, *, create=False):
     creates the file where the EMS has not yet, recording the config's
     defaults revision as the EMS would, so its first start takes no value set
     here for an old default; a mirror of a config value leaves a missing file
-    to the EMS, which seeds it from the config.
+    to the EMS, which puts it back from its last good copy or seeds it from
+    the config.
     """
 
     result = {"applied": [], "skipped": [], "warnings": []}
@@ -155,7 +153,7 @@ def write_targets(context, config, targets, *, create=False):
         for display_path, *_ in targets:
             result["skipped"].append({"path": display_path, "reason": RUNTIME_ABSENT_REASON})
         result["warnings"].append(
-            "runtime-state file not present; the EMS will seed these values "
+            "runtime-state file not present; the EMS restores it from its last good copy, or seeds these values "
             "from config on its next start"
         )
         return result
@@ -175,6 +173,45 @@ def write_targets(context, config, targets, *, create=False):
                 {"path": display_path, "reason": f"runtime_write_failed: {exc}"}
             )
     return result
+
+
+class DeviceEntriesNotWritten(Exception):
+    """An added device's runtime entry could not be written; the apply saves nothing."""
+
+
+@contextmanager
+def device_entries_written(context, config, entries):
+    """Write the runtime entries ``entries`` (admin.operation_settings.new_device_entries) and hold the runtime-state lock until the block ends.
+
+    The block writes ``config``: no EMS start reconciles the runtime state
+    between an entry and the config that names its device, and one that read
+    the config before keeps the entry by the config on disk
+    (ems.runtime_state._saved_device_keys). The runtime state is created where
+    it is missing, as write_targets does for an operating setting. Any entry
+    that cannot be written raises DeviceEntriesNotWritten before the block
+    runs; an entry written before a later failure belongs to no device of the
+    config on disk, and the next EMS start removes it.
+    """
+
+    if not entries:
+        yield []
+        return
+    with ExitStack() as stack:
+        try:
+            path = resolve_runtime_state_path(context, config)
+            if not os.path.exists(path):
+                RuntimeState(path, {"devices": {}}, recorded_defaults_revision(config), refresh_defaults=False).load_or_create()
+            runtime_state = RuntimeState(path, {"devices": {}})
+            runtime_state.load_if_changed(force=True)
+            stack.enter_context(runtime_state.holding_lock())
+            validation_context = build_validation_context(config, None)
+            written = [
+                create_configured_device(runtime_state, name, identity, values, validation_context, source="admin")
+                for _index, name, identity, values in entries
+            ]
+        except (RuntimeWriteError, OSError, ValueError) as exc:
+            raise DeviceEntriesNotWritten(str(exc)) from exc
+        yield written
 
 
 def mirror_changed_keys_to_runtime(context, *, previous, merged):

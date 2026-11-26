@@ -164,6 +164,8 @@ from admin.maintenance_config import (
 from admin.running_pair_health import RunningPairHealthCheck
 from admin.operation_settings import write_operation_changes
 from admin.runtime_convergence import (
+    DeviceEntriesNotWritten,
+    device_entries_written,
     mirror_changed_keys_to_runtime,
 )
 from admin.mdns import MdnsProvider
@@ -3720,8 +3722,24 @@ class AdminHandler(BaseHTTPRequestHandler):
                     400,
                 )
             try:
-                result = self.server.config_apply.apply_maintenance(
-                    prepared["payload"], revision, create_backup=backup
+                with self._device_entries_written(prepared, revision):
+                    result = self.server.config_apply.apply_maintenance(
+                        prepared["payload"], revision, create_backup=backup
+                    )
+            except DeviceEntriesNotWritten as exc:
+                return (
+                    self._rollback_staged_credentials(
+                        changes,
+                        {
+                            "ok": False,
+                            "status": "error",
+                            "message": (
+                                "The settings of the added device could not be written "
+                                f"to runtime-state.json, so nothing was saved: {exc}"
+                            ),
+                        },
+                    ),
+                    500,
                 )
             except ConfigChangedError as exc:
                 return (
@@ -3750,6 +3768,35 @@ class AdminHandler(BaseHTTPRequestHandler):
         result["validation"] = prepared["validation"]
         result["diff"] = prepared["diff"]
         return result, 200
+
+    @contextlib.contextmanager
+    def _device_entries_written(self, prepared, revision):
+        """Give each device the apply adds its runtime entry, holding the runtime-state lock while the block writes the config.
+
+        Not best-effort like the writes after the save: the config the apply
+        writes holds none of these devices' operating values, so a failure
+        here stops the apply (DeviceEntriesNotWritten), and a config changed
+        since the review stops it (ConfigChangedError) before an entry is
+        written (docs/developer/settings-operation-store.md).
+        """
+
+        entries = prepared.pop("device_entries", None) or []
+        if not entries:
+            yield []
+            return
+        try:
+            with open(prepared["config_path"], "rb") as handle:
+                current = hashlib.sha256(handle.read()).hexdigest()
+        except OSError as exc:
+            raise DeviceEntriesNotWritten(str(exc)) from exc
+        if current != revision:
+            raise ConfigChangedError(
+                "config/config.json changed after this workflow was opened. "
+                "Reload the current config and review the draft again."
+            )
+        context = self.server.config_apply.install_context_provider()
+        with device_entries_written(context, json.loads(prepared["payload"]), entries) as written:
+            yield written
 
     def _mirror_runtime_after_apply(self, prepared):
         """Mirror changed overlapping whitelisted keys into runtime-state.

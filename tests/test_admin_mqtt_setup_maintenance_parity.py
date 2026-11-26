@@ -13,6 +13,7 @@ import copy
 import pytest
 
 from admin.models import MqttHardwareCandidate
+from ems.runtime_commands import OPERATION_DEVICE_KEYS
 from admin.zendure_mqtt_config_draft import (
     apply_zendure_mqtt_draft_fields,
     build_manual_zendure_mqtt_fragment,
@@ -196,7 +197,17 @@ def test_setup_and_maintenance_generate_equivalent_broker_and_device(
     def _mqtt_devices(config):
         return [d for d in config["devices"] if d.get("type") == "zendure_mqtt"]
 
-    assert _mqtt_devices(maintenance_config) == _mqtt_devices(setup_config)
+    def _installed(devices):
+        return [{key: value for key, value in d.items() if key not in OPERATION_DEVICE_KEYS} for d in devices]
+
+    # Maintenance adds the device to a running installation, so its operating
+    # values go into the runtime entry the Admin creates for it, where Setup's
+    # first start moves them.
+    assert _installed(_mqtt_devices(maintenance_config)) == _installed(_mqtt_devices(setup_config))
+    for device in _mqtt_devices(setup_config):
+        operating = {key: value for key, value in device.items() if key in OPERATION_DEVICE_KEYS}
+        entry = prepared["runtime_entries"][device["name"]]
+        assert operating and {key: entry.get(key) for key in operating} == operating
 
 
 def test_maintenance_does_not_make_supported_inverter_telemetry_only():

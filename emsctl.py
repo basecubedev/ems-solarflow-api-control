@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 from dashboard import auth as dashboard_auth
 from ems import device_settings
 from ems import runtime_commands
-from ems.runtime_state import RuntimeState
+from ems.runtime_state import RuntimeState, last_good_runtime_state_path, read_last_good_runtime_state
 
 
 from ems.zendure_mqtt.builtin_broker import builtin_broker_view
@@ -1620,6 +1620,7 @@ def runtime_defaults(config, existing=None):
                     "pv_priority_factor": 1.0,
                     "ac_charge_enabled": True,
                     "ac_discharge_enabled": True,
+                    **({"identity": value["identity"]} if isinstance(value.get("identity"), str) and value["identity"].strip() else {}),
                 }
 
     return {
@@ -1665,11 +1666,29 @@ def open_runtime_state(path, config):
     """The runtime state emsctl reads and edits, as the EMS's RuntimeState.
 
     Returns it with whether the file is still to be created. An unreadable file
-    is refused rather than replaced by defaults.
+    is refused rather than replaced by defaults, and a missing one is created
+    from its last good copy where one is usable, as the EMS would; one whose
+    copy cannot be used is refused too.
     """
 
     existing = None
     signature = None
+    if not os.path.exists(path):
+        existing = read_last_good_runtime_state(path)
+        if existing is None and os.path.lexists(last_good_runtime_state_path(path)):
+            raise ValueError(
+                f"runtime state {path} is missing and its last good copy cannot be read; "
+                "the EMS starts with control off from it, emsctl does not"
+            )
+        if existing is not None:
+            runtime_state = RuntimeState(
+                path,
+                runtime_defaults(config, existing),
+                config_mod.recorded_defaults_revision(config),
+                refresh_defaults=False,
+            )
+            runtime_state.adopt(existing, None)
+            return runtime_state, True
     if os.path.exists(path):
         try:
             existing, signature = RuntimeState.read_file(path)

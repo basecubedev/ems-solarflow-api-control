@@ -43,6 +43,7 @@ from ems.zendure_mqtt.builtin_broker import (
     mappings_path,
 )
 from ems.zendure_mqtt.external_catalog import EXTERNAL_TOPIC_FAMILIES
+from ems.zendure_mqtt.config_entries import config_entry_enabled
 from mqtt_mapping.config import load_mappings_file, mappings_file_signature, read_mappings_document, saved_brokers
 
 SETTINGS_SCHEMA_VERSION = 1
@@ -1054,7 +1055,7 @@ class BuiltinBroker:
         external, zendure = [], []
         refs = builtin_profile_refs(config) | {BUILTIN_PROFILE_REF}
         for index, item in enumerate(config.get("devices") or []):
-            if not isinstance(item, dict) or item.get("enabled") is False:
+            if not isinstance(item, dict) or not config_entry_enabled(item):
                 continue
             mqtt = item.get("mqtt") if isinstance(item.get("mqtt"), dict) else {}
             if mqtt.get("broker_ref") not in refs:

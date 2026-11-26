@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Maintenance config draft, preview and explicit apply tests."""
 
+import hashlib
 import json
 import threading
 import urllib.error
@@ -74,6 +75,75 @@ def test_load_reads_standard_config(tmp_path):
     assert result["draft"]["grid_meter"]["type"] == "shelly"
     assert len(result["revision"]) == 64
     assert "winter.enabled" in result["draft"]["features"]
+
+
+@pytest.mark.parametrize("stored", ["true", 1, "on"])
+def test_load_shows_a_device_switched_on_as_text_off_as_the_ems_reads_it(tmp_path, stored):
+    """Backlog 59: the EMS builds a device only for ``"enabled": true``; the Admin showed text and 1 on."""
+
+    data = _config()
+    data["devices"] = [
+        {"name": "WR1", "ip": "192.168.1.100", "sn": "AAA", "enabled": stored},
+        {"name": "WR2", "ip": "192.168.1.101", "sn": "BBB", "enabled": None},
+        {"name": "TSUN OpenDTU", "type": "opendtu_http", "ip": "192.168.1.70", "serial": "116491234567", "enabled": stored},
+        {
+            "type": "zendure_mqtt",
+            "name": "MQTT WR",
+            "enabled": stored,
+            "serial_number": "MQTT1",
+            "mqtt": {"topic_family": "zensdk_ha_scalar", "device_id": "MQTT1"},
+            "capabilities": {"read_power": True, "read_soc": True, "write_output_limit": False},
+        },
+    ]
+    _write_config(tmp_path, data)
+
+    result = load_maintenance_config(base_dir=str(tmp_path))
+
+    enabled = {device["original_name"]: device["enabled"] for device in result["draft"]["devices"]}
+    assert enabled == {"WR1": False, "WR2": True, "TSUN OpenDTU": False, "MQTT WR": False}
+    assert result["summary"]["enabled_device_count"] == 1
+
+
+def _three_kinds(enabled):
+    return [
+        {"name": "WR1", "ip": "192.168.1.100", "sn": "AAA", "enabled": enabled},
+        {"name": "TSUN OpenDTU", "type": "opendtu_http", "ip": "192.168.1.70", "serial": "116491234567", "enabled": enabled},
+        {
+            "type": "zendure_mqtt",
+            "name": "MQTT WR",
+            "enabled": enabled,
+            "serial_number": "MQTT1",
+            "mqtt": {"topic_family": "zensdk_ha_scalar", "device_id": "MQTT1"},
+            "capabilities": {"read_power": True, "read_soc": True, "write_output_limit": False},
+        },
+    ]
+
+
+@pytest.mark.parametrize("stored", [None, "true", 1])
+def test_an_unchanged_draft_leaves_a_device_switch_as_written(tmp_path, stored):
+    """The EMS runs ``null`` and never runs ``"true"``; a save that changes neither writes nothing."""
+
+    data = _config()
+    data["devices"] = _three_kinds(stored)
+    _write_config(tmp_path, data)
+
+    loaded = load_maintenance_config(base_dir=str(tmp_path))
+    preview = preview_maintenance_config(loaded["draft"], base_dir=str(tmp_path))
+
+    assert preview["changed"] is False, preview["diff"]
+
+
+def test_a_device_switched_on_in_the_draft_is_written_true_over_its_text(tmp_path):
+    data = _config()
+    data["devices"] = _three_kinds("true")
+    _write_config(tmp_path, data)
+    loaded = load_maintenance_config(base_dir=str(tmp_path))
+    for item in loaded["draft"]["devices"]:
+        item["enabled"] = True
+
+    preview = preview_maintenance_config(loaded["draft"], base_dir=str(tmp_path))
+
+    assert [device["enabled"] for device in preview["preview"]["devices"]] == [True, True, True]
 
 
 @pytest.mark.parametrize(
@@ -1774,7 +1844,9 @@ def test_a_new_device_keeps_the_operating_values_typed_for_it(tmp_path):
     preview = preview_maintenance_config(loaded["draft"], base_dir=str(tmp_path))
 
     added = next(device for device in preview["preview"]["devices"] if device["name"] == "WR3")
-    assert (added["ac_charge_enabled"], added["ac_discharge_enabled"], added["pv_priority_factor"]) == (False, False, 2.0)
+    entry = preview["runtime_entries"]["WR3"]
+    assert (entry["ac_charge_enabled"], entry["ac_discharge_enabled"], entry["pv_priority_factor"], entry["identity"]) == (False, False, 2.0, "CCC")
+    assert not {"ac_charge_enabled", "ac_discharge_enabled", "pv_priority_factor"} & set(added)
 
 
 def _apply_retention(tmp_path, monkeypatch, before, after, loop_interval=None):
@@ -2392,15 +2464,8 @@ def test_a_security_choice_against_a_stored_tls_mode_is_refused_not_dropped(
     )
 
 
-def test_a_switched_off_device_shows_the_values_waiting_for_it(tmp_path):
-    data = _config()
-    data["devices"][1]["enabled"] = False
-    _write_config(tmp_path, data)
-    runtime_path = _seed_runtime_state(tmp_path)
-    seeded = json.loads(runtime_path.read_text())
-    del seeded["devices"]["WR2"]
-    seeded["parked_devices"] = {"identity:BBB": {"pv_priority_factor": 2.5, "ac_discharge_enabled": False}}
-    runtime_path.write_text(json.dumps(seeded), encoding="utf-8")
+def test_a_switched_off_device_shows_the_values_its_runtime_entry_keeps(tmp_path):
+    _switched_off_wr2(tmp_path)
 
     loaded = load_maintenance_config(base_dir=str(tmp_path))
 
@@ -2471,20 +2536,24 @@ def test_an_operating_change_reaches_a_cloud_device_whose_name_the_browser_saw_m
     assert [row["after"] for row in preview["diff"]["changes"] if row["path"] == "devices[0].pv_priority_factor"] == [2.5]
 
 
-def _parked_wr2(tmp_path):
+def _switched_off_wr2(tmp_path, *, entry=True):
+    """WR2 switched off in the config; its runtime entry kept with values set before (backlog 73), or none: it never ran."""
+
     data = _config()
     data["devices"][1]["enabled"] = False
     _write_config(tmp_path, data)
     runtime_path = _seed_runtime_state(tmp_path)
     seeded = json.loads(runtime_path.read_text())
-    del seeded["devices"]["WR2"]
-    seeded["parked_devices"] = {"identity:BBB": {"pv_priority_factor": 2.5, "ac_discharge_enabled": False}}
+    if entry:
+        seeded["devices"]["WR2"].update(identity="BBB", pv_priority_factor=2.5, ac_discharge_enabled=False)
+    else:
+        del seeded["devices"]["WR2"]
     runtime_path.write_text(json.dumps(seeded), encoding="utf-8")
     return runtime_path
 
 
-def test_a_parked_devices_value_is_changed_where_it_is_parked(tmp_path, monkeypatch):
-    runtime_path = _parked_wr2(tmp_path)
+def test_a_switched_off_devices_value_is_changed_in_its_runtime_entry(tmp_path, monkeypatch):
+    runtime_path = _switched_off_wr2(tmp_path)
     loaded = load_maintenance_config(base_dir=str(tmp_path))
     item = next(device for device in loaded["draft"]["devices"] if device["name"] == "WR2")
     item["pv_priority_factor"] = 3.0
@@ -2500,7 +2569,7 @@ def test_a_parked_devices_value_is_changed_where_it_is_parked(tmp_path, monkeypa
         srv.server_close()
 
     assert status == 200 and payload["operating_sync"]["applied"] == ["devices[1].pv_priority_factor"]
-    assert json.loads(runtime_path.read_text())["parked_devices"]["identity:BBB"]["pv_priority_factor"] == 3.0
+    assert json.loads(runtime_path.read_text())["devices"]["WR2"]["pv_priority_factor"] == 3.0
     assert "pv_priority_factor" not in json.loads((tmp_path / "config" / "config.json").read_text())["devices"][1]
 
 
@@ -2563,10 +2632,35 @@ def test_while_a_setup_reset_waits_the_page_shows_the_values_the_config_gives(tm
     assert loaded["draft"]["features"]["system.loop_interval"] == 5
 
 
-def test_a_device_the_ems_does_not_run_names_no_control_switch(tmp_path):
-    """Its activation is off in the config; the dashboard switched nothing."""
+def test_a_switched_off_device_names_no_control_switch_though_its_entry_keeps_one(tmp_path):
+    """Backlog 73: the entry stays with control off from the save that switched it off; the dashboard does not list it."""
 
-    _parked_wr2(tmp_path)
+    runtime_path = _switched_off_wr2(tmp_path)
+    seeded = json.loads(runtime_path.read_text())
+    seeded["devices"]["WR2"]["enabled"] = False
+    runtime_path.write_text(json.dumps(seeded), encoding="utf-8")
+
+    loaded = load_maintenance_config(base_dir=str(tmp_path))
+
+    assert loaded["operating"]["devices"]["WR2"]["control"] is None
+
+
+def test_a_switched_off_devices_value_change_waits_for_it_to_run(tmp_path):
+    _switched_off_wr2(tmp_path)
+    loaded = load_maintenance_config(base_dir=str(tmp_path))
+    item = next(device for device in loaded["draft"]["devices"] if device["name"] == "WR2")
+    item["pv_priority_factor"] = 3.0
+
+    preview = preview_maintenance_config(loaded["draft"], base_dir=str(tmp_path))
+
+    (row,) = [row for row in preview["diff"]["changes"] if row["path"] == "devices[1].pv_priority_factor"]
+    assert row["applies_live"] is False
+
+
+def test_a_device_that_never_ran_names_no_control_switch(tmp_path):
+    """Its activation is off in the config and it has no runtime entry; the dashboard switched nothing."""
+
+    _switched_off_wr2(tmp_path, entry=False)
 
     loaded = load_maintenance_config(base_dir=str(tmp_path))
 
@@ -2781,3 +2875,365 @@ def test_a_config_without_a_grid_meter_counts_as_still_holding_placeholders(tmp_
     preview = preview_maintenance_config(loaded["draft"], base_dir=str(tmp_path))
 
     assert preview["preview"]["system"]["min_output_limit"] == 50
+
+
+def _apply_draft(tmp_path, monkeypatch, loaded):
+    monkeypatch.setenv("EMS_INSTALL_DIR", str(tmp_path))
+    srv, base = _server(config_apply=_convergence_service(tmp_path))
+    try:
+        return _post(
+            f"{base}/api/admin/maintenance/config/apply",
+            {"draft": loaded["draft"], "revision": loaded["revision"], "confirm": True, "backup": True},
+        )
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+def _added_device(loaded, **values):
+    template = next(device for device in loaded["draft"]["devices"] if device["name"] == "WR2")
+    new = {key: value for key, value in template.items() if key not in ("original_name", "operating_base")}
+    new.update(values)
+    loaded["draft"]["devices"].append(new)
+    return new
+
+
+def _stamped_runtime_state(tmp_path):
+    path = _seed_runtime_state(tmp_path)
+    seeded = json.loads(path.read_text())
+    seeded["devices"]["WR1"]["identity"] = "AAA"
+    seeded["devices"]["WR2"].update(identity="BBB", pv_priority_factor=3.0)
+    path.write_text(json.dumps(seeded), encoding="utf-8")
+    return path
+
+
+def test_apply_gives_an_added_device_its_runtime_entry_and_its_config_entry_no_operating_value(tmp_path, monkeypatch):
+    """Backlog 73: a device's operating values live in its runtime entry from the save that adds it."""
+
+    from ems.runtime_commands import OPERATION_DEVICE_KEYS
+
+    _write_config(tmp_path, _config())
+    runtime_path = _stamped_runtime_state(tmp_path)
+    loaded = load_maintenance_config(base_dir=str(tmp_path))
+    _added_device(loaded, name="WR3", ip="192.168.1.102", sn="CCC", ac_discharge_enabled=False, pv_priority_factor=2.0)
+
+    status, payload = _apply_draft(tmp_path, monkeypatch, loaded)
+
+    assert status == 200 and payload["ok"] is True, payload
+    entry = json.loads(runtime_path.read_text())["devices"]["WR3"]
+    assert (entry["identity"], entry["enabled"], entry["max_power"]) == ("CCC", True, 600)
+    assert (entry["ac_discharge_enabled"], entry["pv_priority_factor"]) == (False, 2.0)
+    saved = next(device for device in json.loads((tmp_path / "config" / "config.json").read_text())["devices"] if device["name"] == "WR3")
+    assert not set(saved) & OPERATION_DEVICE_KEYS
+    assert (saved["sn"], saved["max_power"]) == ("CCC", 600)
+
+
+def test_an_added_device_whose_runtime_entry_cannot_be_written_saves_nothing(tmp_path, monkeypatch):
+    from ems.runtime_state import RuntimeState
+
+    _write_config(tmp_path, _config())
+    runtime_path = _stamped_runtime_state(tmp_path)
+    config_path = tmp_path / "config" / "config.json"
+    before = (config_path.read_bytes(), runtime_path.read_bytes())
+    loaded = load_maintenance_config(base_dir=str(tmp_path))
+    _added_device(loaded, name="WR3", ip="192.168.1.102", sn="CCC", pv_priority_factor=2.0)
+
+    def full_card(self, *args, **kwargs):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(RuntimeState, "create_configured_device", full_card)
+    status, payload = _apply_draft(tmp_path, monkeypatch, loaded)
+
+    assert status == 500 and payload["ok"] is False
+    assert "nothing was saved" in payload["message"]
+    assert (config_path.read_bytes(), runtime_path.read_bytes()) == before
+
+
+def test_an_added_device_under_the_name_of_a_device_this_save_renames_keeps_its_values_in_its_config_entry(tmp_path, monkeypatch):
+    """The next start gives the entry under that name to the renamed device, by its serial; the added one seeds from its config entry."""
+
+    _write_config(tmp_path, _config())
+    runtime_path = _stamped_runtime_state(tmp_path)
+    loaded = load_maintenance_config(base_dir=str(tmp_path))
+    _added_device(loaded, name="WR2", ip="192.168.1.102", sn="CCC", pv_priority_factor=2.0)
+    renamed = next(device for device in loaded["draft"]["devices"] if device.get("original_name") == "WR2")
+    renamed["name"] = "WR9"
+
+    status, payload = _apply_draft(tmp_path, monkeypatch, loaded)
+
+    assert status == 200 and payload["ok"] is True, payload
+    stored = json.loads(runtime_path.read_text())["devices"]
+    assert (stored["WR2"]["identity"], stored["WR2"]["pv_priority_factor"]) == ("BBB", 3.0)
+    saved = next(device for device in json.loads((tmp_path / "config" / "config.json").read_text())["devices"] if device.get("sn") == "CCC")
+    assert saved["pv_priority_factor"] == 2.0
+
+
+def test_an_added_device_under_a_removed_devices_name_keeps_its_values_in_its_config_entry(tmp_path, monkeypatch):
+    """Review: until its next start the running EMS drives the removed device under that name, from that entry."""
+
+    _write_config(tmp_path, _config())
+    runtime_path = _stamped_runtime_state(tmp_path)
+    before = json.loads(runtime_path.read_text())["devices"]["WR2"]
+    loaded = load_maintenance_config(base_dir=str(tmp_path))
+    _added_device(loaded, name="WR2", ip="192.168.1.109", sn="CCC", pv_priority_factor=2.0)
+    loaded["draft"]["devices"] = [device for device in loaded["draft"]["devices"] if device.get("original_name") != "WR2"]
+
+    status, payload = _apply_draft(tmp_path, monkeypatch, loaded)
+
+    assert status == 200 and payload["ok"] is True, payload
+    assert json.loads(runtime_path.read_text())["devices"]["WR2"] == before
+    saved = next(device for device in json.loads((tmp_path / "config" / "config.json").read_text())["devices"] if device.get("sn") == "CCC")
+    assert saved["pv_priority_factor"] == 2.0
+
+
+def test_a_value_of_a_device_renamed_since_the_ems_started_reaches_it_at_once(tmp_path, monkeypatch):
+    """Review: the running EMS drives the device under the name it started with, so the label follows the entry the write reaches."""
+
+    import admin.ems_device_states as states
+
+    data = _config()
+    data["devices"][1]["name"] = "WRX"
+    _write_config(tmp_path, data)
+    _stamped_runtime_state(tmp_path)
+    fingerprints = [{"name": name, "device_id": None, "enabled": True, "digest": "x"} for name in ("WR1", "WR2")]
+    monkeypatch.setattr(states, "read_snapshot", lambda context, config: {"fingerprints": fingerprints, "reason": None, "started_at": None})
+    loaded = load_maintenance_config(base_dir=str(tmp_path))
+    item = next(device for device in loaded["draft"]["devices"] if device["name"] == "WRX")
+    item["pv_priority_factor"] = 2.0
+
+    preview = preview_maintenance_config(loaded["draft"], base_dir=str(tmp_path))
+
+    rows = {row["path"]: row for row in preview["diff"]["changes"] if row["path"].endswith(".pv_priority_factor")}
+    assert rows["devices[1].pv_priority_factor"]["applies_live"] is True
+
+
+def test_an_added_device_while_a_setup_reset_is_pending_keeps_its_values_in_its_config_entry(tmp_path, monkeypatch):
+    """The next start builds the runtime state from the config, so nothing is written to the runtime state."""
+
+    from ems.runtime_state import request_runtime_reset
+
+    _write_config(tmp_path, _config())
+    runtime_path = _stamped_runtime_state(tmp_path)
+    request_runtime_reset(str(runtime_path), hashlib.sha256((tmp_path / "config" / "config.json").read_bytes()).hexdigest())
+    before = runtime_path.read_bytes()
+    loaded = load_maintenance_config(base_dir=str(tmp_path))
+    _added_device(loaded, name="WR3", ip="192.168.1.102", sn="CCC", pv_priority_factor=2.0)
+
+    status, payload = _apply_draft(tmp_path, monkeypatch, loaded)
+
+    assert status == 200 and payload["ok"] is True, payload
+    assert runtime_path.read_bytes() == before
+    saved = next(device for device in json.loads((tmp_path / "config" / "config.json").read_text())["devices"] if device["name"] == "WR3")
+    assert saved["pv_priority_factor"] == 2.0
+
+
+def test_the_runtime_state_stays_locked_until_the_config_naming_an_added_device_is_written(tmp_path, monkeypatch):
+    """Review: an EMS start between the entry and the config must not reconcile the entry away."""
+
+    from admin.config_apply import ConfigApplyService
+    from ems.file_io import FileLockTimeout, exclusive_file_lock
+
+    _write_config(tmp_path, _config())
+    runtime_path = _stamped_runtime_state(tmp_path)
+    loaded = load_maintenance_config(base_dir=str(tmp_path))
+    _added_device(loaded, name="WR3", ip="192.168.1.102", sn="CCC")
+    seen = []
+    apply = ConfigApplyService.apply_maintenance
+
+    def while_writing(self, *args, **kwargs):
+        try:
+            with exclusive_file_lock(f"{runtime_path}.lock", 0.01):
+                seen.append("free")
+        except FileLockTimeout:
+            seen.append("held")
+        return apply(self, *args, **kwargs)
+
+    monkeypatch.setattr(ConfigApplyService, "apply_maintenance", while_writing)
+    status, payload = _apply_draft(tmp_path, monkeypatch, loaded)
+
+    assert status == 200 and payload["ok"] is True, payload
+    assert seen == ["held"]
+    with exclusive_file_lock(f"{runtime_path}.lock", 0.01):
+        pass
+
+
+def test_a_save_reviewed_against_an_older_config_writes_no_entry(tmp_path, monkeypatch):
+    """Review: a stale save took over another save's entry before its revision check refused it."""
+
+    _write_config(tmp_path, _config())
+    runtime_path = _stamped_runtime_state(tmp_path)
+    loaded = load_maintenance_config(base_dir=str(tmp_path))
+    _added_device(loaded, name="WR3", ip="192.168.1.102", sn="CCC")
+    before = runtime_path.read_bytes()
+    import admin.server as server_module
+
+    stage = server_module.stage_runtime_credentials_for_config
+
+    def another_save_committed_first(*args, **kwargs):
+        changed = _config()
+        changed["system"]["max_total_power"] = 1500
+        _write_config(tmp_path, changed)
+        return stage(*args, **kwargs)
+
+    monkeypatch.setattr(server_module, "stage_runtime_credentials_for_config", another_save_committed_first)
+    status, payload = _apply_draft(tmp_path, monkeypatch, loaded)
+
+    assert status == 409 and payload["ok"] is False and payload["status"] == "conflict"
+    assert runtime_path.read_bytes() == before
+
+
+@pytest.mark.parametrize("ran", [{"WR1": True, "WR2": True}, {"WR1": True, "WR2": True, "WR3": False}])
+def test_a_value_of_a_device_the_running_ems_does_not_drive_waits_for_its_start(tmp_path, monkeypatch, ran):
+    """Review: an added device owns an entry before it runs, and one switched on runs only after a restart."""
+
+    import admin.ems_device_states as states
+
+    data = _config()
+    data["devices"].append({"name": "WR3", "ip": "192.168.1.102", "sn": "CCC", "max_power": 600})
+    _write_config(tmp_path, data)
+    runtime_path = _stamped_runtime_state(tmp_path)
+    seeded = json.loads(runtime_path.read_text())
+    seeded["devices"]["WR3"] = {"identity": "CCC", "enabled": True, "max_power": 600, "pv_priority_factor": 1.0}
+    runtime_path.write_text(json.dumps(seeded), encoding="utf-8")
+    fingerprints = [{"name": name, "device_id": None, "enabled": enabled, "digest": "x"} for name, enabled in ran.items()]
+    monkeypatch.setattr(states, "read_snapshot", lambda context, config: {"fingerprints": fingerprints, "reason": None, "started_at": None})
+    loaded = load_maintenance_config(base_dir=str(tmp_path))
+    item = next(device for device in loaded["draft"]["devices"] if device["name"] == "WR3")
+    item["pv_priority_factor"] = 2.0
+    first = next(device for device in loaded["draft"]["devices"] if device["name"] == "WR1")
+    first["pv_priority_factor"] = 1.5
+
+    preview = preview_maintenance_config(loaded["draft"], base_dir=str(tmp_path))
+
+    rows = {row["path"]: row for row in preview["diff"]["changes"] if row["path"].endswith(".pv_priority_factor")}
+    assert rows["devices[2].pv_priority_factor"]["applies_live"] is False
+    assert rows["devices[0].pv_priority_factor"]["applies_live"] is True
+
+
+def _never_ran_wr3(tmp_path, monkeypatch, *, in_config):
+    import admin.ems_device_states as states
+
+    data = _config()
+    if in_config:
+        data["devices"].append({"name": "WR3", "ip": "192.168.1.102", "sn": "CCC", "max_power": 600})
+    _write_config(tmp_path, data)
+    runtime_path = _stamped_runtime_state(tmp_path)
+    seeded = json.loads(runtime_path.read_text())
+    seeded["devices"]["WR3"] = {"identity": "CCC", "enabled": True, "max_power": 600, "pv_priority_factor": 1.0}
+    runtime_path.write_text(json.dumps(seeded), encoding="utf-8")
+    fingerprints = [{"name": name, "device_id": None, "enabled": True, "digest": "x"} for name in ("WR1", "WR2")]
+    monkeypatch.setattr(states, "read_snapshot", lambda context, config: {"fingerprints": fingerprints, "reason": None, "started_at": None})
+    return load_maintenance_config(base_dir=str(tmp_path))
+
+
+def test_a_device_added_back_that_never_ran_takes_its_values_at_its_start(tmp_path, monkeypatch):
+    """Review: an entry the Admin wrote for a device a later save removed again owns its serial, but the EMS never ran it."""
+
+    loaded = _never_ran_wr3(tmp_path, monkeypatch, in_config=False)
+    _added_device(loaded, name="WR3", ip="192.168.1.102", sn="CCC", pv_priority_factor=2.0)
+
+    preview = preview_maintenance_config(loaded["draft"], base_dir=str(tmp_path))
+
+    rows = [row for row in preview["diff"]["changes"] if row["path"].endswith(".pv_priority_factor")]
+    assert rows and all(row["applies_live"] is False for row in rows)
+
+
+def test_a_limit_of_a_device_that_never_ran_takes_effect_at_its_start(tmp_path, monkeypatch):
+    loaded = _never_ran_wr3(tmp_path, monkeypatch, in_config=True)
+    next(device for device in loaded["draft"]["devices"] if device["name"] == "WR3")["max_power"] = 500
+
+    preview = preview_maintenance_config(loaded["draft"], base_dir=str(tmp_path))
+
+    rows = [row for row in preview["diff"]["changes"] if row["path"].startswith("devices[2]")]
+    assert rows and all(row.get("applies_live") is False for row in rows)
+
+
+def test_an_added_device_keeps_its_values_in_its_config_entry_while_the_runtime_state_cannot_be_read(tmp_path, monkeypatch):
+    """Review: no writer replaces an unreadable file, so the save failed although its preview was fine."""
+
+    _write_config(tmp_path, _config())
+    runtime_path = _stamped_runtime_state(tmp_path)
+    runtime_path.write_text("{not json", encoding="utf-8")
+    loaded = load_maintenance_config(base_dir=str(tmp_path))
+    _added_device(loaded, name="WR3", ip="192.168.1.102", sn="CCC", pv_priority_factor=2.0)
+
+    preview = preview_maintenance_config(loaded["draft"], base_dir=str(tmp_path))
+    status, payload = _apply_draft(tmp_path, monkeypatch, loaded)
+
+    assert preview["runtime_entries"] == {}
+    assert status == 200 and payload["ok"] is True, payload
+    assert runtime_path.read_text() == "{not json"
+    saved = next(device for device in json.loads((tmp_path / "config" / "config.json").read_text())["devices"] if device["name"] == "WR3")
+    assert saved["pv_priority_factor"] == 2.0
+
+
+def test_an_added_device_whose_serial_an_entry_already_carries_gets_no_second_one(tmp_path, monkeypatch):
+    """Review: the next start follows the first carrier and pruned the entry the Admin added."""
+
+    _write_config(tmp_path, _config())
+    runtime_path = _stamped_runtime_state(tmp_path)
+    seeded = json.loads(runtime_path.read_text())
+    seeded["devices"]["OLD1"] = {"identity": "CCC", "pv_priority_factor": 3.0}
+    seeded["devices"]["OLD2"] = {"identity": "CCC", "pv_priority_factor": 3.0}
+    runtime_path.write_text(json.dumps(seeded), encoding="utf-8")
+    loaded = load_maintenance_config(base_dir=str(tmp_path))
+    _added_device(loaded, name="WR3", ip="192.168.1.102", sn="CCC", pv_priority_factor=2.0)
+
+    preview = preview_maintenance_config(loaded["draft"], base_dir=str(tmp_path))
+
+    assert preview["runtime_entries"] == {}
+    added = next(device for device in preview["preview"]["devices"] if device["name"] == "WR3")
+    assert added["pv_priority_factor"] == 2.0
+
+
+def test_a_device_added_switched_off_keeps_its_entry_switched_off(tmp_path, monkeypatch):
+    _write_config(tmp_path, _config())
+    runtime_path = _stamped_runtime_state(tmp_path)
+    loaded = load_maintenance_config(base_dir=str(tmp_path))
+    _added_device(loaded, name="WR3", ip="192.168.1.102", sn="CCC", enabled=False, pv_priority_factor=2.0)
+
+    status, payload = _apply_draft(tmp_path, monkeypatch, loaded)
+
+    assert status == 200 and payload["ok"] is True, payload
+    entry = json.loads(runtime_path.read_text())["devices"]["WR3"]
+    assert (entry["identity"], entry["pv_priority_factor"], entry["enabled"]) == ("CCC", 2.0, False)
+
+
+def test_a_device_the_running_ems_has_not_built_names_no_control_switch(tmp_path, monkeypatch):
+    from admin.install_context import detect_install_context
+    from admin.operation_settings import unbuilt_device_names
+
+    loaded = _never_ran_wr3(tmp_path, monkeypatch, in_config=True)
+    assert loaded["status"] == "ok"
+    config = json.loads((tmp_path / "config" / "config.json").read_text())
+
+    unbuilt = unbuilt_device_names(detect_install_context(base_dir=str(tmp_path)), config)
+
+    assert "WR3" in unbuilt and not {"WR1", "WR2"} & unbuilt
+
+
+def test_a_dangling_runtime_state_link_counts_as_missing_for_an_added_device(tmp_path, monkeypatch):
+    """As the writer treats it: the save creates the file, and the added device gets its entry there."""
+
+    _write_config(tmp_path, _config())
+    (tmp_path / "runtime-state.json").symlink_to(tmp_path / "gone.json")
+    loaded = load_maintenance_config(base_dir=str(tmp_path))
+    _added_device(loaded, name="WR3", ip="192.168.1.102", sn="CCC", pv_priority_factor=2.0)
+
+    preview = preview_maintenance_config(loaded["draft"], base_dir=str(tmp_path))
+
+    assert preview["runtime_entries"]["WR3"]["pv_priority_factor"] == 2.0
+
+
+def test_a_name_the_running_ems_read_twice_runs_when_one_of_them_was_switched_on(tmp_path, monkeypatch):
+    import admin.ems_device_states as states
+    from admin.install_context import detect_install_context
+    from admin.operation_settings import _running_devices
+
+    fingerprints = [
+        {"name": "WR1", "device_id": None, "enabled": True, "digest": "a"},
+        {"name": "WR1", "device_id": None, "enabled": False, "digest": "b"},
+    ]
+    monkeypatch.setattr(states, "read_snapshot", lambda context, config: {"fingerprints": fingerprints, "reason": None, "started_at": None})
+
+    assert _running_devices(detect_install_context(base_dir=str(tmp_path)), _config()) == {"WR1": True}

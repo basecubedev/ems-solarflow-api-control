@@ -167,6 +167,36 @@ def _repository_retention_record_stays_untouched(monkeypatch):
     monkeypatch.setattr(confirmed_retention, "_write", refuse_repository_write)
 
 
+REPOSITORY_DATA_DIR = Path(__file__).resolve().parents[1] / "data"
+
+
+@pytest.fixture(autouse=True)
+def _backup_plaintext_stays_out_of_the_checkout(request, tmp_path_factory, monkeypatch):
+    """Stage a password-protected archive's plaintext in a temporary folder, not in the checkout's ``data/``.
+
+    ``ems.backup.plaintext_dir`` resolves the installation's data folder; a
+    backup test without an isolated install root would decrypt into, and
+    sweep, the developer's own ``data/``. A test that names its install root
+    through ``EMS_INSTALL_DIR`` keeps it. Only the ``backup_restore`` tests,
+    so a test of what a module imports never sees ``ems.backup`` loaded.
+    """
+
+    if request.node.get_closest_marker("backup_restore") is None:
+        return
+    from ems import backup
+
+    original = backup.plaintext_dir
+
+    def outside_the_checkout():
+        found = original()
+        if Path(found).resolve() == REPOSITORY_DATA_DIR:
+            folder = tmp_path_factory.mktemp("plaintext")
+            return str(folder)
+        return found
+
+    monkeypatch.setattr(backup, "plaintext_dir", outside_the_checkout)
+
+
 @pytest.fixture
 def isolated_install_root(tmp_path_factory, monkeypatch):
     """Point EMS path resolution at an empty temporary install root.

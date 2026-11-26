@@ -346,7 +346,7 @@ credentials fail the workflow before any tag moves.
 |---|---|---|---|:---:|:---:|---|
 | `python:3.14-slim` | 3.14-slim | PSF-2.0 (CPython) AND mixed (Debian base) | Base layer of the EMS image and the Admin image | ✅ | ✅ | https://hub.docker.com/_/python |
 | `influxdb:2.10` | 2.10 | MIT | EMS image build stage; only `/usr/local/bin/influx` is copied out of it | ❌ | ✅ | https://hub.docker.com/_/influxdb |
-| `influxdb:2.9.1` | 2.9.1 | MIT | Optional bundled Analytics database, pinned in `deploy/docker/compose.influxdb.yml` and repeated by `tools/bundled_influxdb.py` | ✅ | ❌ | https://hub.docker.com/_/influxdb |
+| `influxdb:2.10.1` | 2.10.1 | MIT | Optional bundled Analytics database, pinned in `deploy/docker/compose.influxdb.yml` and repeated by `tools/bundled_influxdb.py` | ✅ | ❌ | https://hub.docker.com/_/influxdb |
 | `eclipse-mosquitto:2` | 2 | EPL-2.0 OR BSD-3-Clause | Local development broker and the ephemeral broker for optional real-MQTT tests | ❌ | ❌ | https://hub.docker.com/_/eclipse-mosquitto |
 | `eclipse-mosquitto:2.1.2-alpine` | 2.1.2-alpine | EPL-2.0 OR BSD-3-Clause (Mosquitto) AND mixed (Alpine base) | Optional built-in MQTT broker the Admin pulls and starts in the `ems-mqtt` project when an operator switches it on | ✅ | ❌ | https://hub.docker.com/_/eclipse-mosquitto |
 | `grafana/grafana-oss:latest` | latest | AGPL-3.0-only | Optional local telemetry analysis under `develop/grafana/` | ❌ | ❌ | https://github.com/grafana/grafana |

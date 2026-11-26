@@ -21,7 +21,7 @@ import sqlite3
 import stat
 import tarfile
 import tempfile
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from datetime import datetime, timezone
 
 from ems import backup_crypto
@@ -37,7 +37,7 @@ from ems.mqtt_credentials import (
     DISCOVERY_CONNECTIONS_FILENAME,
     MANAGED_RECORD_NAME,
 )
-from ems.paths import BASE_DIR, resolve_schedules_path
+from ems.paths import BASE_DIR, resolve_data_dir, resolve_schedules_path
 from ems.zendure_mqtt.builtin_broker import broker_settings_path, mappings_path
 
 APP_NAME = "ems-solarflow-api-control"
@@ -811,11 +811,16 @@ def _emit_archive(
         if not encrypted:
             _write_tar(tmp_archive, manifest, included, compression_level)
         else:
-            tmp_plain = staging.new_file("archive.tar.gz")
-            _write_tar(tmp_plain, manifest, included, compression_level)
-            backup_crypto.encrypt_file(
-                tmp_plain, tmp_archive, password, **(encryption_options or {})
-            )
+            try:
+                plain_staging = _plaintext_staging(plaintext_dir())
+            except OSError as exc:
+                raise BackupError(f"cannot stage the archive to encrypt: {exc}") from exc
+            with plain_staging:
+                tmp_plain = plain_staging.new_file(PLAINTEXT_ARCHIVE_NAME)
+                _write_tar(tmp_plain, manifest, included, compression_level)
+                backup_crypto.encrypt_file(
+                    tmp_plain, tmp_archive, password, **(encryption_options or {})
+                )
         return _link_unique(tmp_archive, preferred_path)
 
 
@@ -1059,7 +1064,8 @@ def _staging_beside(database_path, staging_dirs):
     parent = os.path.dirname(os.path.abspath(database_path))
     if parent not in staging_dirs:
         backup_staging.sweep_abandoned(
-            parent, (backup_staging.DATABASE_SNAPSHOTS, backup_staging.RESTORE_PARTS)
+            parent,
+            (backup_staging.DATABASE_SNAPSHOTS, backup_staging.RESTORE_PARTS, backup_staging.DECRYPTED_ARCHIVES),
         )
         try:
             staging_dirs[parent] = backup_staging.claim_staging(
@@ -1473,29 +1479,42 @@ def is_encrypted(path, allowed_root=None):
 
 @contextmanager
 def open_backup_archive(archive_path, password=None, allowed_root=None):
-    """Yield an open ``tarfile`` for ``archive_path``, decrypting if needed."""
+    """Yield an open ``tarfile`` for ``archive_path``, decrypting if needed.
+
+    An encrypted archive is decrypted into a hidden staging folder in the
+    installation's data folder (plaintext_dir), on disk: the Admin
+    Console's system temp folder is a 16 MiB RAM disk a grown archive does
+    not fit. Never in the backup folder, which the appliance exports to its
+    backup account, nor beside the archive, which may sit on the stick or
+    share the encryption protects. The folder goes when the archive is
+    closed, and one a killed process left goes with the next decryption or
+    database backup there. Only a data folder that is missing or takes no
+    files sends the decryption to the system temp folder.
+    """
 
     archive_path = _validated_existing_archive_path(
         archive_path, allowed_root=allowed_root
     )
-
-    tmp_path = None
     encrypted = backup_crypto.is_encrypted_backup(
         archive_path, allowed_root=allowed_root
     )
-    try:
+    with ExitStack() as stack:
         if encrypted:
             if not password:
                 raise BackupError(
                     "backup is password protected; a password is required"
                 )
             try:
-                tmp_path = backup_crypto.decrypt_file_to_temp(
-                    archive_path, password, allowed_root=allowed_root
-                )
+                staging = stack.enter_context(_plaintext_staging(plaintext_dir()))
+                with os.fdopen(staging.create(PLAINTEXT_ARCHIVE_NAME), "wb") as out:
+                    backup_crypto.decrypt_file_into(
+                        archive_path, password, out, allowed_root=allowed_root
+                    )
             except backup_crypto.BackupFormatError as exc:
                 raise BackupError(f"cannot read encrypted backup: {exc}") from exc
-            tar_path = tmp_path
+            except OSError as exc:
+                raise BackupError(f"cannot decrypt backup: {exc}") from exc
+            tar_path = staging.reach(PLAINTEXT_ARCHIVE_NAME)
         else:
             tar_path = archive_path
 
@@ -1507,9 +1526,29 @@ def open_backup_archive(archive_path, password=None, allowed_root=None):
             yield tar
         finally:
             tar.close()
-    finally:
-        if tmp_path and os.path.exists(tmp_path):
-            os.remove(tmp_path)
+
+
+PLAINTEXT_ARCHIVE_NAME = "archive.tar.gz"
+
+
+def plaintext_dir():
+    """The installation's data folder, where a password-protected archive's plaintext is staged: ``EMS_INSTALL_DIR``'s in the Admin Console, else this installation's.
+
+    Decrypted to be read, or written before it is encrypted; never in the
+    backup folder, which the appliance exports to its backup account.
+    """
+
+    install_root = os.environ.get("EMS_INSTALL_DIR")
+    return str(resolve_data_dir(base_dir=install_root or None))
+
+
+def _plaintext_staging(parent):
+    """A claimed ``DECRYPTED_ARCHIVES`` folder in ``parent``, else in the system temp folder where ``parent`` is missing or takes no files."""
+
+    if not (os.path.isdir(parent) and os.access(parent, os.W_OK | os.X_OK)):
+        parent = tempfile.gettempdir()
+    backup_staging.sweep_abandoned(parent, (backup_staging.DECRYPTED_ARCHIVES,))
+    return backup_staging.claim_staging(parent, backup_staging.DECRYPTED_ARCHIVES)
 
 
 def _is_safe_member_path(name):

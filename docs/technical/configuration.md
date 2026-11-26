@@ -217,7 +217,8 @@ changed by hand, so the EMS moves it to today's default once:
 
 A switch is `true` or `false`. One written as text, such as
 `"allow_hardware_writes": "false"`, is read by the EMS differently from how it
-looks, and the Admin console shows what the file says. So the EMS writes such
+looks, and the Admin console shows what the file says (a device's `enabled`
+excepted, below). So the EMS writes such
 a switch as the value it already read from it, at a live start once the
 old-defaults refresh above has recorded its revision, behind the same backup,
 and logs each one as a warning (`Config switches written as text were
@@ -230,6 +231,10 @@ before:
   `true` or `false`, `null` included, is written on its blocking side, the
   side the EMS read it on. A text `simulation_mode` also forced a dry run, so
   `system.dry_run` is written `true` with it.
+- A device's `enabled` holding anything but `true`, `false` or `null` is
+  written `false`: the EMS builds a device only for `true` or no value, so it
+  ran without that device. The Admin console reads `enabled` the same way, so
+  a device stored as `"true"` or `1` shows as switched off there too.
 - One of the other switches outside the device and grid-meter entries that the
   EMS reads by their words (`ems/spelled_switches.py` lists them) is written
   when it holds a word all its EMS readers agree on — `true`/`false`,
@@ -305,16 +310,18 @@ out of `config.json`, behind the upgrade backup, and logs "Operating values
 moved". A value the file held differently from the running one is not taken:
 the running value stays, and the log names both, at the first move as
 information (the dashboard's changes never reached the file before), after it
-as a warning, since only a hand edit puts one there. A device the EMS does not build (switched off, telemetry-only) keeps
-its values in its entry until it is switched on; those the runtime state
-held for it when it was switched off wait there (`parked_devices`), where the
-Admin changes them, and come back when it is built again. Nothing moves when the
+as a warning, since only a hand edit puts one there. A switched-off device has a runtime entry like a running one and
+loses them too; a device without one (never run, or read over MQTT without
+control) keeps its values in its entry. Nothing moves when the
 runtime-state file cannot be read or `config.json` changed since the start
 read it. The config upgrade never adds an operating value back and `diagnose`
 does not miss one.
-Deleting the runtime-state file resets the operating values to the built-in
-defaults, not to saved ones: control comes back on and every device may
-discharge again. Do not delete it to reset values.
+A deleted or unreadable runtime-state file comes back from its last good copy
+(`runtime-state.json.last-good`); where that copy cannot be read, or an
+unreadable file has none, the EMS starts with control off and logs
+`runtime_state_unusable`
+([runtime-state.md](runtime-state.md#last-good-copy)). Do not delete it to
+reset values.
 
 ## Former Home Assistant Section
 
@@ -993,7 +1000,8 @@ transport: `"enabled": false` removes the device from the control loop, for a
 local-API device exactly as for a Zendure MQTT control device. A non-boolean
 value (for example the string `"false"`) is never trusted as enabled and also
 removes the device, so a mistyped flag cannot silently keep an inverter under
-EMS control. A disabled device gets no runtime defaults and diagnose does not
+EMS control; the EMS writes it as `false` at start
+([Switches Written As Text](#switches-written-as-text)). A disabled device gets no runtime defaults and diagnose does not
 list it as controllable, and a disabled Zendure MQTT device that only reports
 telemetry is not read, shown on the dashboard or counted either. A config whose only devices
 are disabled has no control device and does not start.

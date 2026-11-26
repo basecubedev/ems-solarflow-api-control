@@ -340,7 +340,6 @@
   .verdict { margin: 0; font-size: 13px; color: var(--m-muted); }
   .release { display: flex; flex-direction: column; gap: var(--s3); }
   .badges { display: flex; gap: var(--s2); flex-wrap: wrap; margin: 0; }
-  .badge.warn { color: var(--m-warn); }
   .message { margin: 0; font-weight: 560; }
   .checks li { display: flex; gap: var(--s2); align-items: center; font-size: 13px; }
   .buttons { gap: var(--s2); }

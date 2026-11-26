@@ -29,7 +29,8 @@ from ems.runtime_commands import (
 from ems import config as cfg
 from ems.config_catalog import device_common_defaults
 from ems.read_only_devices import is_read_only_device_config
-from ems.runtime_state import PARKED_DEVICES_KEY, owned_runtime_device, parked_key, parked_values, runtime_state_path_under
+from ems.runtime_state import owned_runtime_device, read_last_good_runtime_state, runtime_state_path_under
+from ems.runtime_devices import device_key as device_group, device_seed
 
 _EMS_DEFAULTS = cfg.default_runtime_config()
 _SYSTEM_DEFAULTS = {key: _EMS_DEFAULTS["system"].get(key) for key in SYSTEM_FIELDS}
@@ -38,6 +39,12 @@ _SECTION_DEFAULTS = {
     for section, fields in SECTION_FIELDS.items()
 }
 _DEVICE_COMMON_DEFAULTS = device_common_defaults()
+
+
+def device_power_fallback(config):
+    """The ``max_power`` the EMS gives a device of ``config`` whose own is no positive number: ``system.max_device_power``."""
+
+    return _device_defaults(config)["max_power"]
 
 
 def _device_defaults(config, entry=None):
@@ -102,10 +109,10 @@ def _device_name(entry):
 def runtime_device_entries(context, config):
     """The ``devices`` map of the runtime-state file of this install now; empty when it cannot be read.
 
-    EMS seeds one entry for each device it builds to control when it starts,
-    over HTTP or MQTT, and prunes the rest then: a device switched off, a
-    read-only one, and one read over MQTT without control, which it builds from
-    ``config.json`` alone. These are the entries the mirror can write.
+    EMS keeps one entry for each device it can control, over HTTP or MQTT,
+    switched on or off (ems.runtime_devices.stored_devices), and drops one only
+    when its device leaves ``config.json``; a read-only device has none. These
+    are the entries the mirror can write.
     """
 
     try:
@@ -113,30 +120,6 @@ def runtime_device_entries(context, config):
     except (OSError, TypeError, ValueError):
         return {}
     return devices if isinstance(devices, dict) else {}
-
-
-def device_group(entry):
-    """The device a config entry stands for: ``("serial", serial)``, or ``("name", name)`` for an entry naming no serial.
-
-    The serial is read as the EMS stamps it: ``sn``, else ``serial_number``,
-    else ``mqtt.device_id``, as text. None for a read-only entry, a nameless
-    one without a serial, and one whose ``sn`` and ``serial_number`` name
-    different serials: the EMS stamps an HTTP device with the one and an MQTT
-    device with the other, so neither is safe to follow.
-    """
-
-    if not isinstance(entry, dict) or is_read_only_device_config(entry):
-        return None
-    serials = [_text(entry.get(key)) for key in ("sn", "serial_number")]
-    serials = [serial for serial in serials if serial]
-    if len(set(serials)) > 1:
-        return None
-    mqtt = entry.get("mqtt") if isinstance(entry.get("mqtt"), dict) else {}
-    identity = (serials or [_text(mqtt.get("device_id"))])[0]
-    if identity:
-        return ("serial", identity)
-    name = _device_name(entry)
-    return ("name", name) if name else None
 
 
 def _text(value):
@@ -254,31 +237,26 @@ def _address(entry):
 
 
 def _effective_values(entry, config):
-    """The whitelisted values the EMS seeds a device's runtime entry with from ``entry`` (ems.runtime_state.build_runtime_defaults).
+    """The whitelisted values the EMS seeds a device's runtime entry with from ``entry`` (ems.runtime_devices.device_seed)."""
 
-    The device clients' coercions and the seed's are applied in turn, so a
-    ``max_power`` of 0 is the installation's device ceiling and one of 799.5
-    is 799, as at the EMS's start.
-    """
-
-    ceiling = _device_defaults(config)["max_power"]
-    return {
-        "max_power": cfg.safe_int(cfg.device_power_ceiling(entry.get("max_power", ceiling), ceiling), ceiling, minimum=0),
-        "offgrid_socket_mode": cfg.offgrid_socket_mode_for(entry.get("grid_off_mode")),
-        "pv_priority_factor": cfg.safe_float(entry.get("pv_priority_factor", 1.0) or 1.0, 1.0, minimum=0.01),
-        "ac_charge_enabled": bool(entry.get("ac_charge_enabled", True)),
-        "ac_discharge_enabled": bool(entry.get("ac_discharge_enabled", True)),
-    }
+    seed = device_seed(entry, _device_defaults(config)["max_power"])
+    return {key: seed[key] for key in ("max_power", "offgrid_socket_mode", "pv_priority_factor", "ac_charge_enabled", "ac_discharge_enabled")}
 
 
 def live_device_paths(previous, merged, runtime_devices):
-    """The device paths a save makes live: those device_runtime_plan changes, validated as the mirror validates them, for a device that owns an entry in ``runtime_devices``."""
+    """The device paths a save makes live: those device_runtime_plan changes, validated as the mirror validates them, for a device that owns an entry in ``runtime_devices``.
+
+    Switching a device on is not among them: its entry takes control on at
+    once, but the EMS builds the device only at its next start.
+    """
 
     if not isinstance(runtime_devices, dict):
         return frozenset()
     context = build_validation_context(merged, None)
     live = set()
     for path, name, identity, key, value in device_runtime_plan(previous, merged):
+        if key == "enabled" and value is True:
+            continue
         if owned_runtime_device(runtime_devices, name, identity) is None:
             continue
         try:
@@ -331,14 +309,21 @@ def resolve_runtime_state_path(context, config):
 
 
 def read_runtime_state(path):
-    """Best-effort read of the raw runtime-state file; ``{}`` on any problem."""
+    """Best-effort read of the raw runtime-state file; ``{}`` on any problem.
+
+    A missing or unreadable file is read from its last good copy: the EMS
+    puts that back at its next start (ems.runtime_state), so it is what will
+    run.
+    """
 
     try:
         with open(path) as handle:
             data = json.load(handle)
     except (OSError, ValueError):
-        return {}
-    return data if isinstance(data, dict) else {}
+        data = None
+    if isinstance(data, dict):
+        return data
+    return read_last_good_runtime_state(str(path), log=False) or {}
 
 
 def _coerce(value, value_type):
@@ -391,27 +376,6 @@ def _entry(config_value, runtime_section, key, value_type, default):
         "effective_value": coerced_runtime,
         "source": "dashboard_override" if overridden else "config",
     }
-
-
-def parked_for(device, runtime_data):
-    """The values the runtime state parked for a device it does not build: those it gets back when built again."""
-
-    group = device_group(device)
-    if group is None:
-        return {}
-    identity = group[1] if group[0] == "serial" else None
-    parked = runtime_data.get(PARKED_DEVICES_KEY)
-    values = parked_values(parked, _device_name(device), identity)
-    if identity is not None and isinstance(parked, dict) and parked_key(_device_name(device), identity) not in parked:
-        return {key: value for key, value in values.items() if key not in device}
-    return values
-
-
-def parked_identity(device):
-    """The serial a device's parked values are kept under, None for a device without one."""
-
-    group = device_group(device)
-    return group[1] if group is not None and group[0] == "serial" else None
 
 
 def compute_overlap_provenance(config, runtime_data):
@@ -472,8 +436,6 @@ def compute_overlap_provenance(config, runtime_data):
             continue
         entry_name = runtime_entry_for(device, config, runtime_devices)
         runtime_device = runtime_devices.get(entry_name)
-        if entry_name is None:
-            runtime_device = parked_for(device, runtime_data) or None
         built = device_state(config, device_group(device))[1] if entry_name is not None else None
         entries = {}
         effective = _effective_values(device, config)

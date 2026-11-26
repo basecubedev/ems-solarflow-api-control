@@ -292,6 +292,12 @@ the one to set is `max_charge_power_w`. `0` there means "ask the device for its
 own ceiling", which is what `chargeMaxLimit` reports, or the model's rated
 charge power when it reports none — never "no charging".
 
+A start that found neither `runtime-state.json` nor its last good copy
+readable, and so runs with control off, is reported as the error
+`runtime_state_unusable` once that state is in the file, until control is
+switched on again (see
+[Runtime state](technical/runtime-state.md)).
+
 A config that still holds template placeholders is reported as a warning,
 `template_placeholders_safe_mode`, with every field that keeps EMS in safe mode
 (a device field also names the device). It is judged the way EMS loads the
@@ -630,8 +636,10 @@ python3 emsctl.py --runtime-state runtime-state.json status
 python3 emsctl.py --runtime-state data/runtime-state.json status
 ```
 
-`status` creates the configured runtime-state file from config defaults when
-the file is missing. While the EMS runs, `device_settings` lists each device's
+`status` creates the configured runtime-state file when it is missing: from its
+last good copy where there is one, from config defaults on a first start, and
+not at all where the copy cannot be read
+([runtime-state.md](technical/runtime-state.md#last-good-copy)). While the EMS runs, `device_settings` lists each device's
 [settings](technical/runtime-state.md#device-settings) as the EMS last saw
 them: `reported` on the inverter, `desired` as set.
 

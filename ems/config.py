@@ -2170,11 +2170,12 @@ def move_startup_operating_values(runtime_data, persist, *, path=None, base_dir=
     """Move the operating values still in ``config.json`` into the runtime state, once.
 
     docs/developer/settings-operation-store.md: an operating value lives in
-    ``runtime-state.json`` only, except for a device the EMS does not build,
-    whose config entry keeps it. The starting EMS has filled ``runtime_data``
-    with every one, its runtime value where one was set, the config's as its
-    own readers took it otherwise; ``persist`` writes that to disk, and then
-    each value the runtime state holds for a built device leaves the config,
+    ``runtime-state.json`` only, except for a device without a runtime entry
+    (one that never ran, one read without control), whose config entry keeps
+    it. The starting EMS has filled ``runtime_data`` with every one, its
+    runtime value where one was set, the config's as its own readers took it
+    otherwise; ``persist`` writes that to disk, and then each value the
+    runtime state holds for a device that owns an entry leaves the config,
     behind the same backup as an auto-upgrade. A value the file held
     differently is named: at the first move as information, since the
     dashboard's changes never reached the file before; after it as a warning,
@@ -2253,6 +2254,24 @@ def move_startup_operating_values(runtime_data, persist, *, path=None, base_dir=
     return moved
 
 
+def held_operating_device_values(device):
+    """The operating values (ems.runtime_commands.OPERATION_DEVICE_KEYS) a config device entry holds in a form the EMS reads as itself.
+
+    The ones a start's move takes out of ``config.json`` once the runtime
+    entry holds them (_without_operating_values).
+    """
+
+    from ems.runtime_commands import DEVICE_FIELDS, OPERATION_DEVICE_KEYS
+
+    if not isinstance(device, dict):
+        return {}
+    return {
+        key: copy.deepcopy(device[key])
+        for key in sorted(OPERATION_DEVICE_KEYS)
+        if key in device and _readable(device[key], DEVICE_FIELDS.get(key))
+    }
+
+
 def without_operating_values(data):
     """``data``, a config or the template, without any operating value.
 
@@ -2314,9 +2333,11 @@ def _holds_same(block, key, value):
 def _without_operating_values(raw_config, runtime_data):
     """``raw_config`` without the operating values the runtime state holds for it: ``(config, moved paths, dropped)``.
 
-    A device the EMS does not build keeps its own: it has no runtime entry.
-    A value the runtime state holds in a form the EMS cannot read stays in
-    the config too, since the EMS falls back to it.
+    Every device that owns a runtime entry (ems.runtime_devices.stored_devices),
+    switched on or off, loses its own; an entry that owns none, a switched-off
+    copy under a running device's name, keeps them. A value the runtime state
+    holds in a form the EMS cannot read stays in the config too, since the EMS
+    falls back to it.
     ``dropped`` names each moved value the config held differently from the
     runtime state, ``(path, config value, running value)``: the running one
     is kept, so a value edited into the file by hand does not take effect.
@@ -2338,13 +2359,17 @@ def _without_operating_values(raw_config, runtime_data):
                 dropped.append((setting, block[key], held[key]))
             del block[key]
             moved.append(setting)
+    from ems.runtime_devices import runtime_device_for, stored_devices
+
     devices = remaining.get("devices") if isinstance(remaining.get("devices"), list) else []
-    built = {id(entry) for entry in http_control_device_configs(devices) + mqtt_control_device_configs(devices)}
     runtime_devices = runtime_data.get("devices") if isinstance(runtime_data.get("devices"), dict) else {}
+    owners = {id(entry): runtime_device_for(runtime_devices, name, serial) for name, serial, entry in stored_devices(devices)}
+    for entry in http_control_device_configs(devices) + mqtt_control_device_configs(devices):
+        owners.setdefault(id(entry), str(entry.get("name") or "").strip())
     for index, device in enumerate(devices):
-        if id(device) not in built:
+        if id(device) not in owners:
             continue
-        held = runtime_devices.get(str(device.get("name") or "").strip())
+        held = runtime_devices.get(owners[id(device)])
         if not isinstance(held, dict):
             continue
         for key in sorted(OPERATION_DEVICE_KEYS):

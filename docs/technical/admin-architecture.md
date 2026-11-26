@@ -45,7 +45,7 @@ property. Operating settings (`OPERATION_SETTING_PATHS`,
 `OPERATION_DEVICE_KEYS`) live in `runtime-state.json`: Maintenance shows
 them as the EMS runs them and an Apply writes the changed ones there
 (`admin/operation_settings.py`, creating the file where the EMS has not). Only
-a device the EMS has no runtime entry or parked values for (new, never run),
+a device the EMS has no runtime entry for (new, never run),
 one whose serial the save changes, and every value while a fresh setup's reset
 is pending keep them in `config.json`, until a live start moves them; see
 [settings-operation-store.md](../developer/settings-operation-store.md).

@@ -247,7 +247,7 @@ def test_an_archive_is_written_in_a_claimed_folder_that_a_later_backup_sweeps(tm
 
     monkeypatch.setattr(backup, "_write_tar", recording_write)
 
-    path = create(tmp_path, config, base, config_path, password="pw-secret")
+    path = create(tmp_path, config, base, config_path)
 
     staging = os.path.dirname(written[0])
     assert os.path.dirname(staging) == backup_dir

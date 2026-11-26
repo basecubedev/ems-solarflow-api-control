@@ -821,6 +821,28 @@ test.describe("Modern Admin: settings", { tag: ["@smoke"] }, () => {
     await expect(total.getByTestId("operating-value")).toHaveText(/^Operating value: 500\sW$/);
   });
 
+  test("in Midnight the operating value stays readable on its badge", async ({ page, seedAdminScenario }) => {
+    await seededAt(page, seedAdminScenario, "#/settings/safety");
+    await page.getByTestId("appearance-button").click();
+    await page.getByTestId("appearance").getByRole("button", { name: "Midnight", exact: true }).click();
+    await page.keyboard.press("Escape");
+    await expect(page.locator("html")).toHaveAttribute("data-m-theme", "midnight");
+
+    const badge = page.locator('[data-path="system.max_total_power"]').getByTestId("operating-value");
+    await expect(badge).toHaveText(/^Operating value: /);
+    const ratio = await badge.evaluate((node) => {
+      const luminance = (colour: string) => {
+        const channels = (colour.match(/\d+(\.\d+)?/g) ?? []).slice(0, 3).map((part) => Number(part) / 255);
+        const linear = channels.map((c) => (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4));
+        return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2];
+      };
+      const style = getComputedStyle(node);
+      const [high, low] = [luminance(style.color), luminance(style.backgroundColor)].sort((a, b) => b - a);
+      return (high + 0.05) / (low + 0.05);
+    });
+    expect(ratio).toBeGreaterThanOrEqual(4.5);
+  });
+
   test("the Customized tab lists each saved value away from its default and leads to where it is set", async ({ page, seedAdminScenario }) => {
     await seededAt(page, seedAdminScenario, "#/settings/defaults");
     await expect(page.getByRole("button", { name: "Customized (0)", exact: true })).toBeVisible();

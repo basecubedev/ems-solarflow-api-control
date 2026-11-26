@@ -88,3 +88,21 @@ def test_the_dashboard_hands_the_runtime_defaults_to_the_editor():
         "system": {"enabled": False},
         "devices": {"WR1": {"ac_charge_enabled": False}},
     }
+
+
+def test_the_editor_lists_only_the_devices_the_ems_controls():
+    """Backlog 73: a switched-off device keeps its runtime entry; the dashboard controls what runs."""
+
+    from tests.test_dashboard_server import RuntimeStateStub, direct_handler
+    import dashboard.server as dashboard_server
+
+    runtime_state = RuntimeStateStub()
+    runtime_state.data["devices"]["WR2"] = {"enabled": True, "max_power": 600}
+    server = type("Server", (), {"built_devices": frozenset({"WR1"})})()
+
+    payload = dashboard_server._built_devices_only(server, runtime_state.data)
+    status, _, body = direct_handler("/api/runtime", runtime_state=runtime_state)
+
+    assert set(payload["devices"]) == {"WR1"}
+    assert set(runtime_state.data["devices"]) == {"WR1", "WR2"}
+    assert status == 200 and set(json.loads(body)["devices"]) == {"WR1", "WR2"}

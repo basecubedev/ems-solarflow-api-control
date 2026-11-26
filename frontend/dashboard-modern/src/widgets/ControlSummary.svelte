@@ -17,6 +17,7 @@
   const snapshot = $derived(live.snapshot);
   const explain = $derived(snapshot?.control_explain || null);
   const enabled = $derived(snapshot?.controller?.enabled !== false);
+  const startedOff = $derived(!enabled && snapshot?.controller?.started_control_off === true);
   const limits = $derived(activeLimits(explain));
   const inactive = $derived(inactiveLimits(explain).map((limit) => codesText(codeItems(limit.name)) || limit.name));
   const notes = $derived((Array.isArray(explain?.notes) ? explain.notes : []).filter(Boolean));
@@ -25,6 +26,8 @@
 <Card icon="gauge" tone="c-inv" title={t("control.now")} span="span-12">
   {#if !snapshot}
     <div class="skeleton"></div>
+  {:else if startedOff}
+    <p class="sentence warn" data-testid="control-started-off"><Icon name="triangle-alert" />{t("control.sentenceStartedOff")}</p>
   {:else if !enabled}
     <p class="sentence warn"><Icon name="circle-pause" />{t("control.sentenceOff")}</p>
   {:else if !explain}

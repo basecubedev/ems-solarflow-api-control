@@ -1700,9 +1700,12 @@ def build_test_runtime(*, data_dir):
         """A seeded scenario starts from its config alone: the operating values a test saved live in the runtime state."""
 
         from admin.config_runtime_overlap import resolve_runtime_state_path
+        from ems.runtime_state import last_good_runtime_state_path
 
         context = detect_install_context()
-        Path(resolve_runtime_state_path(context, {})).unlink(missing_ok=True)
+        path = resolve_runtime_state_path(context, {})
+        Path(path).unlink(missing_ok=True)
+        Path(last_good_runtime_state_path(str(path))).unlink(missing_ok=True)
 
     def write_install_config(config):
         target = detect_install_context().config_path

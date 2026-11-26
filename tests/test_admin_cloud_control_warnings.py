@@ -84,6 +84,15 @@ def test_maintenance_warns_for_enabled_cloud_control_device(
     assert WARNING_CODE in _maintenance_warnings(tmp_path, _config())
 
 
+@pytest.mark.parametrize(("enabled", "warned"), [(None, True), ("true", False), (1, False), ("false", False)])
+def test_the_cloud_control_warning_follows_the_switch_the_ems_reads(
+    tmp_path, isolated_install_root, enabled, warned
+):
+    """Backlog 59: the EMS runs ``null`` and never ``"true"`` or ``1``."""
+
+    assert (WARNING_CODE in _maintenance_warnings(tmp_path, _config(enabled=enabled))) is warned
+
+
 def test_maintenance_does_not_warn_for_local_mqtt_control(
     tmp_path, isolated_install_root
 ):

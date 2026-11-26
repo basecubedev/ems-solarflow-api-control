@@ -131,7 +131,7 @@ services:
       - ./data:/app/data
 
   influxdb:
-    image: influxdb:2.9.1
+    image: influxdb:2.10.1
     container_name: ems-influxdb
     profiles:
       - with-analytics
