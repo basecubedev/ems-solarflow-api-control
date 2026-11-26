@@ -110,22 +110,27 @@ def test_dependabot_watches_the_pin_and_only_the_pin():
 
 
 def test_sync_rewrites_a_copy_that_fell_behind(tmp_path):
+    """The pin moves one patch past today's, so the copies are behind whatever the pin is."""
+
     tool = _tool()
     for relative in (influx_image.PIN_FILE, *tool.COMPOSE_COPIES, tool.INVENTORY):
         target = tmp_path / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text((ROOT / relative).read_text(encoding="utf-8"), encoding="utf-8")
+    current = parse_image(pinned_image(ROOT))
+    newer = InfluxVersion(current.major, current.minor, (current.patch or 0) + 1)
+    image = f"influxdb:{newer}"
     pin_path = tmp_path / influx_image.PIN_FILE
-    pin_path.write_text(replace_image(pin_path.read_text(encoding="utf-8"), "influxdb:2.10.1"), encoding="utf-8")
+    pin_path.write_text(replace_image(pin_path.read_text(encoding="utf-8"), image), encoding="utf-8")
 
-    image, stale = tool.differing(tmp_path)
-    assert image == "influxdb:2.10.1"
+    found, stale = tool.differing(tmp_path)
+    assert found == image
     assert stale == sorted((*tool.COMPOSE_COPIES, tool.INVENTORY))
 
     tool.sync(tmp_path)
 
-    assert tool.differing(tmp_path) == ("influxdb:2.10.1", [])
-    assert "| `influxdb:2.10.1` | 2.10.1 | MIT | Optional bundled Analytics database" in (
+    assert tool.differing(tmp_path) == (image, [])
+    assert f"| `{image}` | {newer} | MIT | Optional bundled Analytics database" in (
         tmp_path / tool.INVENTORY
     ).read_text(encoding="utf-8")
 
