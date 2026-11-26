@@ -30,6 +30,7 @@ from admin import deployment
 from admin.guided_setup_workflow import GuidedSetupWorkflowStore
 from admin.releases import ReleaseError
 from tests.helpers.setup_config import adopt_generated_config
+from ems import config as ems_config
 from ems.runtime_state import pending_runtime_reset, runtime_state_path_for_config
 
 pytestmark = [
@@ -245,10 +246,10 @@ def _make_release(tmp_path, tag="v0.6.0", influx_image="influxdb:2.7"):
     return releases_dir
 
 
-def _write_config(tmp_path, influx=None):
+def _write_config(tmp_path, influx=None, config=None):
     target = tmp_path / "generated" / "config.json"
     target.parent.mkdir(parents=True, exist_ok=True)
-    config = {"system": {"max_total_power": 800}}
+    config = config if config is not None else {"system": {"max_total_power": 800}}
     if influx is not None:
         config["influxdb"] = influx
     target.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
@@ -263,10 +264,11 @@ def _service(
     influx_image="influxdb:2.7",
     compose=None,
     dashboard_probe=None,
+    config=None,
 ):
     releases_dir = _make_release(tmp_path, influx_image=influx_image)
     manager = _FakeReleaseManager(releases_dir)
-    target = _write_config(tmp_path, influx)
+    target = _write_config(tmp_path, influx, config)
     service = DeploymentService(
         manager,
         _ConfigExport(target),
@@ -2020,6 +2022,30 @@ def test_failed_start_job_includes_safe_compose_detail(tmp_path):
     assert "port is already allocated" in job["error"]["detail"]
 
 
+def test_start_waits_for_a_dashboard_slower_than_four_probes(tmp_path):
+    """A Raspberry Pi 4 answered five seconds after its EMS container started.
+
+    The first start of a fresh setup backs up the config and moves its
+    operating values before the dashboard listens; four probes one second
+    apart failed that setup, and slower boards need longer still.
+    """
+
+    attempts = []
+
+    def _probe(_url):
+        attempts.append(True)
+        return len(attempts) == 15
+
+    service = _service(tmp_path, dashboard_probe=_probe)
+    _run_prepare(service)
+
+    _, job = _run_start(service)
+
+    assert job["status"] == "succeeded"
+    assert job["dashboard_reachable"] is True
+    assert len(attempts) == 15
+
+
 def test_start_retries_dashboard_probe_without_restarting_containers(tmp_path):
     attempts = []
 
@@ -2273,6 +2299,129 @@ def test_start_running_selected_image_is_not_a_name_conflict(tmp_path):
 
     assert job["status"] == "succeeded"
     assert job.get("conflict") is None
+
+
+SELECTED_EMS_IMAGE = "ghcr.io/basecubedev/ems-solarflow-api-control:v0.6.0"
+
+
+def _config_with_operating_values():
+    return {
+        "config_defaults_revision": ems_config.DEFAULTS_REVISION,
+        "config_upgrade": {"on_startup": "check", "backup_before_apply": False},
+        "system": {"enabled": True, "max_total_power": 800, "loop_interval": 5, "min_output_limit": 35},
+        "grid_meter": {"type": "shelly", "ip": "192.0.2.50"},
+        "devices": [
+            {"name": "WR1", "ip": "192.0.2.5", "sn": "A", "max_power": 800, "enabled": True,
+             "pv_priority_factor": 1.0},
+        ],
+    }
+
+
+def _running_service(tmp_path):
+    name = "ems-solarflow-api-control"
+    docker = _FakeDocker(containers={name: {"image": SELECTED_EMS_IMAGE, "status": "running"}})
+    compose = _FakeCompose(
+        services=[{"name": name, "service": "ems", "image": SELECTED_EMS_IMAGE, "state": "running"}]
+    )
+    service = _service(tmp_path, docker=docker, compose=compose, config=_config_with_operating_values())
+    _run_prepare(service)
+    _set_fixed_ems_container(service)
+    return service
+
+
+def _ems_first_start_moves_operating_values(service, monkeypatch):
+    """Run the EMS's own switch-over on the installed config, as its first live start does."""
+
+    path = service.workspace_dir / "config" / "config.json"
+    before = path.read_bytes()
+    monkeypatch.setattr(ems_config, "START_MAY_MOVE_OPERATING_VALUES", True)
+    monkeypatch.setattr(ems_config, "STARTED_RAW_CONFIG", json.loads(before))
+    moved = ems_config.move_startup_operating_values(
+        {
+            "system": {"enabled": True, "loop_interval": 5, "min_output_limit": 35},
+            "devices": {"WR1": {"pv_priority_factor": 1.0}},
+        },
+        lambda: None,
+        path=str(path),
+        base_dir=str(service.workspace_dir),
+        emit_message=lambda _level, _text: None,
+    )
+    assert moved
+    assert path.read_bytes() != before
+    return path
+
+
+def test_status_keeps_the_deployment_after_the_ems_moved_its_operating_values(tmp_path, monkeypatch):
+    service = _running_service(tmp_path)
+    assert service.status()["prepared"] is True
+
+    _ems_first_start_moves_operating_values(service, monkeypatch)
+    status = service.status()
+
+    assert status["prepared"] is True
+    assert status["running"] is True
+    assert status["dashboard_reachable"] is True
+
+
+def test_status_drops_a_deployment_whose_installation_changed_beside_the_move(tmp_path, monkeypatch):
+    service = _running_service(tmp_path)
+    path = _ems_first_start_moves_operating_values(service, monkeypatch)
+    config = json.loads(path.read_text(encoding="utf-8"))
+    config["grid_meter"]["ip"] = "192.0.2.51"
+    path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
+
+    status = service.status()
+
+    assert status["prepared"] is False
+    assert status["running"] is False
+
+
+@pytest.mark.parametrize("moved", [False, True], ids=["before the move", "after the move"])
+def test_status_drops_a_deployment_whose_operating_value_changed_by_hand(tmp_path, monkeypatch, moved):
+    service = _running_service(tmp_path)
+    path = service.workspace_dir / "config" / "config.json"
+    if moved:
+        _ems_first_start_moves_operating_values(service, monkeypatch)
+    config = json.loads(path.read_text(encoding="utf-8"))
+    config["system"]["enabled"] = False
+    config["devices"][0]["pv_priority_factor"] = 50
+    path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
+
+    assert service.status()["prepared"] is False
+    assert service.start()["reason"] == "deployment_config_mismatch"
+
+
+def test_status_drops_the_deployment_when_the_generated_config_changed_after_the_move(tmp_path, monkeypatch):
+    service = _running_service(tmp_path)
+    _ems_first_start_moves_operating_values(service, monkeypatch)
+    generated = Path(service.config_export.target_path)
+    config = json.loads(generated.read_text(encoding="utf-8"))
+    config["system"]["min_output_limit"] = 50
+    generated.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
+
+    assert service.status()["prepared"] is False
+
+
+def test_prepare_again_after_the_move_redeploys_the_same_config(tmp_path, monkeypatch):
+    service = _running_service(tmp_path)
+    live = _ems_first_start_moves_operating_values(service, monkeypatch)
+
+    result, job = _run_prepare(service)
+
+    assert result["ok"] is True, result
+    assert job["status"] == "succeeded"
+    assert live.read_bytes() == Path(service.config_export.target_path).read_bytes()
+
+
+def test_start_accepts_the_config_the_ems_moved_operating_values_out_of(tmp_path, monkeypatch):
+    service = _service(tmp_path, config=_config_with_operating_values())
+    _run_prepare(service)
+    _ems_first_start_moves_operating_values(service, monkeypatch)
+
+    result, job = _run_start(service)
+
+    assert result["ok"] is True, result
+    assert job["status"] == "succeeded"
 
 
 def test_status_running_different_image_is_not_selected_deployment(tmp_path):

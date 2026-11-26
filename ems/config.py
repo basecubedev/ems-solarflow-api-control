@@ -2278,6 +2278,39 @@ def without_operating_values(data):
     return stripped
 
 
+def only_operating_values_removed(original, current):
+    """Whether ``current`` is ``original`` with none, some or all of its operating values removed, and nothing else.
+
+    That is all the switch-over (``move_startup_operating_values``) does to a
+    config: it deletes operating values and rewrites none, so an operating
+    value ``current`` still holds is the one ``original`` holds.
+    """
+
+    from ems.runtime_commands import OPERATION_DEVICE_KEYS, OPERATION_SETTING_PATHS
+
+    if not isinstance(original, dict) or not isinstance(current, dict):
+        return False
+    if not _same_config(without_operating_values(original), without_operating_values(current)):
+        return False
+    for setting in OPERATION_SETTING_PATHS:
+        section, _, key = setting.partition(".")
+        block = current.get(section)
+        if isinstance(block, dict) and key in block and not _holds_same(original.get(section), key, block[key]):
+            return False
+    original_devices = original.get("devices") if isinstance(original.get("devices"), list) else []
+    current_devices = current.get("devices") if isinstance(current.get("devices"), list) else []
+    for source, device in zip(original_devices, current_devices):
+        if isinstance(device, dict) and any(
+            key in device and not _holds_same(source, key, device[key]) for key in OPERATION_DEVICE_KEYS
+        ):
+            return False
+    return True
+
+
+def _holds_same(block, key, value):
+    return isinstance(block, dict) and key in block and _same_config(block[key], value)
+
+
 def _without_operating_values(raw_config, runtime_data):
     """``raw_config`` without the operating values the runtime state holds for it: ``(config, moved paths, dropped)``.
 

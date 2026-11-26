@@ -151,6 +151,10 @@ Phase 3, switch-over:
   output limit, winter mode). The config upgrade and `diagnose` skip them
   (`ems.config.without_operating_values`), so a moved value is never added
   back or reported missing, and the next live start moves a seeded one.
+  Guided Setup's deployment marker accepts the installed config with seeded
+  values removed (`ems.config.only_operating_values_removed`), so that move
+  does not unprepare the deployment it started
+  ([Docker setup](../technical/admin-discovery.md#docker-setup-default-deployment-capable)).
 - The `ac_discharge_config_overridden` event is gone: the runtime switch is
   the one permission.
 
