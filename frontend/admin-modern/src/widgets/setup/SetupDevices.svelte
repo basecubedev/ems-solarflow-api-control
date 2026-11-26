@@ -9,8 +9,9 @@
   import SourcesPanel from "../SourcesPanel.svelte";
   import MqttBrokerCard from "../MqttBrokerCard.svelte";
   import MqttMappingPanel from "../MqttMappingPanel.svelte";
-  import { routeMqtt } from "../../state/mqtt.svelte.js";
-  import { mappedProposal } from "../../lib/mqtt.js";
+  import { untrack } from "svelte";
+  import { mqtt, routeMqtt } from "../../state/mqtt.svelte.js";
+  import { brokerState, mappedProposal } from "../../lib/mqtt.js";
   import { t, tn } from "../../i18n/i18n.svelte.js";
   import { errorView } from "../../lib/errors.js";
   import { reasonKey } from "../../lib/devices.js";
@@ -27,6 +28,7 @@
   let resetting = $state(false);
   let replacing = $state.raw(null);
   let details = $state.raw({});
+  const folds = $state({ networks: false, manual: false, details: false, sources: false, broker: false, mapping: false });
 
   const busy = $derived(setupDiscovery.running || setupDiscovery.scanning);
   const enabled = $derived(setupDiscovery.preparation.discovery_priority.filter((source) => setupDiscovery.preparation.sources?.[source]?.enabled !== false));
@@ -43,6 +45,27 @@
   const mdnsState = $derived(mdnsStateOf(setupDiscovery.mdns));
   const percent = $derived(progressPercent());
   const running = $derived(setupDiscovery.scans.find((entry) => entry.status === "running") || null);
+
+  const networksKnown = $derived(!setupDiscovery.detecting && !["idle", "probing"].includes(setupDiscovery.gatewayState || "idle"));
+  const lanMissing = $derived(networksKnown && lan.length === 0);
+  const networkWarned = $derived(networksKnown && setupDiscovery.networkWarnings.length > 0);
+  const brokerIssues = $derived((mqtt.broker?.issues || []).length > 0);
+  const networksSummary = $derived(networksKnown ? `${tn("setup.devices.networkCount", lan.length)} · ${tn("setup.devices.routerCount", setupDiscovery.gateways.length)}` : t("setup.devices.detecting"));
+  const detailsSummary = $derived(`${t("setup.source.local_api")} ${found.length} · ${t("setup.source.local_mqtt")} ${brokerDevices} · ${t("setup.source.zendure_mqtt")} ${cloudDevices.length}`);
+  const sourcesKnown = $derived(Array.isArray(sources.credentials) && Array.isArray(sources.bridgePasswords) && Boolean(sources.cloud));
+  const sourcesSummary = $derived(sourcesKnown ? [tn("setup.devices.credentialCount", sources.credentials.length), sources.cloud.token_saved ? t("setup.devices.keySaved") : t("setup.devices.noKey"), tn("setup.devices.bridgePasswordCount", sources.bridgePasswords.length)].join(" · ") : "—");
+  const brokerSummary = $derived(t(`mqtt.state.${brokerState(mqtt.broker)}`));
+  const mappingSummary = $derived(Array.isArray(mqtt.mapping?.document?.devices) ? tn("setup.devices.mappingCount", mqtt.mapping.document.devices.length) : "—");
+
+  $effect(() => {
+    if (lanMissing) untrack(() => Object.assign(folds, { networks: true, manual: true }));
+  });
+  $effect(() => {
+    if (networkWarned) untrack(() => Object.assign(folds, { networks: true, manual: true }));
+  });
+  $effect(() => {
+    if (brokerIssues) untrack(() => (folds.broker = true));
+  });
 
   const proposalFor = (device) => mappedProposal(setupDiscovery.proposals, device.id, device.broker_ref);
   /** A saved mapping's device joins the setup draft through the proposal the server makes from the mapping. */
@@ -118,6 +141,7 @@
   }
 
   function openDetail(source) {
+    folds.details = true;
     details = { ...details, [source]: true };
     queueMicrotask(() => document.getElementById(`setup-detail-${source}`)?.scrollIntoView({ behavior: "smooth", block: "start" }));
   }
@@ -278,7 +302,7 @@
   </div>
 </Card>
 
-<Card icon="network" tone="c-out" title={t("setup.devices.networksTitle")} span="span-6">
+<Card icon="network" tone="c-out" title={t("setup.devices.networksTitle")} span="span-6" fold bind:open={folds.networks} summary={networksSummary} testid="setup-fold-networks">
   <div class="stack" data-testid="setup-networks">
     {#each setupDiscovery.networkWarnings as warning, index (index)}<p class="note warn"><Icon name="triangle-alert" /><span lang="en">{warning}</span></p>{/each}
     {#if lan.length}
@@ -309,7 +333,7 @@
   </div>
 </Card>
 
-<Card icon="pencil" tone="c-pv" title={t("setup.devices.manualTitle")} span="span-6">
+<Card icon="pencil" tone="c-pv" title={t("setup.devices.manualTitle")} span="span-6" fold bind:open={folds.manual} summary={t("setup.devices.manualSummary")} testid="setup-fold-manual">
   <form class="stack" onsubmit={runManual}>
     <p class="muted small">{t("setup.devices.manualLead")}</p>
     <div class="row-wrap">
@@ -320,7 +344,7 @@
   </form>
 </Card>
 
-<Card icon="file-check" tone="c-inv" title={t("setup.devices.details")} span="span-12">
+<Card icon="file-check" tone="c-inv" title={t("setup.devices.details")} span="span-12" fold bind:open={folds.details} summary={detailsSummary} testid="setup-fold-details">
   <div class="stack">
     <details id="setup-detail-local_api" open={details.local_api} ontoggle={(event) => (details = { ...details, local_api: event.currentTarget.open })}>
       <summary>{t("setup.source.local_api")} <span class="muted num">({tn("setup.devices.deviceCount", found.length)})</span></summary>
@@ -439,15 +463,15 @@
   </div>
 </Card>
 
-<Card icon="radio-tower" tone="c-soc" title={t("setup.devices.sourcesTitle")} subtitle={t("setup.devices.sourcesSub")} span="span-12">
+<Card icon="radio-tower" tone="c-soc" title={t("setup.devices.sourcesTitle")} subtitle={t("setup.devices.sourcesSub")} span="span-12" fold bind:open={folds.sources} summary={sourcesSummary} testid="setup-fold-sources">
   <SourcesPanel onchanged={() => { loadSourceStatus(); refresh(); }} />
 </Card>
 
-<Card icon="boxes" tone="c-grid" title={t("mqtt.broker.title")} subtitle={t("mqtt.broker.setupSub")} span="span-12">
+<Card icon="boxes" tone="c-grid" title={t("mqtt.broker.title")} subtitle={t("mqtt.broker.setupSub")} span="span-12" fold bind:open={folds.broker} summary={brokerSummary} testid="setup-fold-broker">
   <MqttBrokerCard />
 </Card>
 
-<Card icon="list-checks" tone="c-grid" title={t("mqtt.mapping.title")} subtitle={t("mqtt.mapping.sub")} span="span-12">
+<Card icon="list-checks" tone="c-grid" title={t("mqtt.mapping.title")} subtitle={t("mqtt.mapping.sub")} span="span-12" fold bind:open={folds.mapping} summary={mappingSummary} testid="setup-fold-mapping">
   <MqttMappingPanel adoption={mqttAdoption} />
 </Card>
 

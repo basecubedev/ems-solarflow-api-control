@@ -116,6 +116,17 @@ Admin Console (see **Start** above), open `http://127.0.0.1:8090`, choose **Set
 up a new system** on the assistant, then **Start guided setup**. The
 step-by-step guide with screenshots is [Guided setup](admin/guided-setup.md).
 
+The bar with **Back** and **Next** stays at the bottom of the window, on a phone
+just above the menu bar, however long a step is. What a step only needs now and
+then starts folded, with a line that says how it stands: in **02 Devices** the
+networks, the network to scan by hand, what each source found, the credentials
+for the search, the built-in MQTT broker and the MQTT mapping; in **03
+Settings** **Control and safety** and **Advanced and system**. A click on a
+title opens it. A card opens on its own when something there needs you: no
+network was found, the networks come with a warning, the built-in broker
+reports a problem, or, as you enter **03 Settings**, a value in it is away from
+its default, a power limit included. The step-by-step guide shows each card.
+
 1. **01 System Build** — choose one paired Admin + EMS **System Build**, then
    verify it. The list is grouped **Latest**, **Stable**, **Unstable** and
    **Experimental**; choosing an Experimental build is itself the explicit

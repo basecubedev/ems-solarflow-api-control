@@ -210,6 +210,9 @@ test("every generated key family is complete", () => {
     ...["starting", "conflict", "failed", "running", "notPrepared", "noDocker", "ready"].map((key) => `setup.run.status.${key}`),
     ...["ems", "influxdb"].map((service) => `setup.run.conflict.existing.${service}`),
     ...["ems", "influxdb", "admin"].map((service) => `setup.service.${service}`),
+    ...["controlOn", "controlOff", "writesOn", "writesSome", "writesOff", "dryRun", "simulation", "max", "device", "min"].map((part) => `setup.config.safetySummary.${part}`),
+    ...["networkCount", "routerCount", "credentialCount", "bridgePasswordCount", "mappingCount"].flatMap((key) => ["one", "other"].map((form) => `setup.devices.${key}.${form}`)),
+    ...["one", "other"].map((form) => `setup.config.advancedChanged.${form}`),
   ];
   assert.deepEqual([...new Set(required)].filter((key) => !exists(key)), []);
 });
@@ -237,6 +240,8 @@ test("no orphan keys: each key is used literally or belongs to a generated famil
     "setup.manualControl.", "setup.deploy.status.", "setup.docker.", "setup.dockerMode.", "setup.run.status.", "setup.run.conflict.existing.", "setup.service.",
     "setup.devices.sourcesEnabled.", "setup.devices.found.", "setup.devices.brokerCount.", "setup.devices.deviceCount.", "setup.devices.ignored.",
     "setup.devices.proposalCount.", "setup.hardware.metersFound.", "setup.hardware.ready.", "setup.recovery.",
+    "setup.devices.networkCount.", "setup.devices.routerCount.", "setup.devices.credentialCount.", "setup.devices.bridgePasswordCount.",
+    "setup.devices.mappingCount.", "setup.config.safetySummary.", "setup.config.advancedChanged.",
     "feature.", "ems.", "assistant.state.", "assistant.lead.", "assistant.task.", "assistant.step.devices.done.", "history.question.",
     ...STEP_IDS.map((id) => `assistant.step.${id}.title`),
     ...["off", "stopped", "docker", "noAddress"].map((reason) => `assistant.step.dashboard.${reason}`),
