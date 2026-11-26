@@ -346,6 +346,11 @@
   .pipeline { margin-bottom: var(--s3); }
   .recovery { display: flex; flex-direction: column; gap: var(--s2); margin-bottom: var(--s3); }
   .recovery p { margin: 0; }
-  .step-nav { gap: var(--s2); align-items: center; }
+  .step-nav { gap: var(--s2); align-items: center; position: sticky; bottom: 0; z-index: 4; padding: var(--s3) 0; background: var(--m-surface-1); border-top: 1px solid var(--m-line); }
+  :global(html:has(.step-nav)) { scroll-padding-bottom: 96px; }
+  @media (max-width: 760px) {
+    .step-nav { bottom: calc(var(--bottom-nav-height) + env(safe-area-inset-bottom)); }
+    :global(html:has(.step-nav)) { scroll-padding-bottom: calc(96px + var(--bottom-nav-height) + env(safe-area-inset-bottom)); }
+  }
   @container content (max-width: 720px) { .stepper { grid-template-columns: repeat(5, minmax(0, 1fr)); } .step-tab .words { display: none; } }
 </style>
