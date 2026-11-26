@@ -2,5 +2,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 pytest
 ruff==0.17.6
-PyYAML>=6.0.3
+PyYAML>=6.0.4
 reuse==6.3.0
