@@ -199,6 +199,7 @@ COPY LICENSE THIRD_PARTY_LICENSES.md ./
 # The developer launcher replaces these with the repository's real Git identity.
 ARG EMS_REVISION=0000000000000000000000000000000000000000
 ARG EMS_BUILD_ID=local-0000000
+ARG EMS_BUILD_SERIAL=0
 ARG EMS_CHANNEL=development
 ARG EMS_RELEASE_TAG=local
 ARG EMS_SYSTEM_TAG=local
@@ -225,7 +226,7 @@ RUN python scripts/generate_release_resources.py \
       --ems-image "${EMS_IMAGE_REPO}:${EMS_SYSTEM_TAG}" \
     && rm -rf /tmp/release-src \
     && chown -R admin:admin /app/release-resources
-RUN python -c 'import json, os; json.dump({"version": os.environ["EMS_RELEASE_TAG"], "revision": os.environ["EMS_REVISION"], "build_id": os.environ["EMS_BUILD_ID"], "channel": os.environ["EMS_CHANNEL"]}, open("/app/admin/static/modern/build.json", "w"))'
+RUN python -c 'import json, os; json.dump({"version": os.environ["EMS_RELEASE_TAG"], "revision": os.environ["EMS_REVISION"], "build_id": os.environ["EMS_BUILD_ID"], "build_serial": os.environ["EMS_BUILD_SERIAL"], "channel": os.environ["EMS_CHANNEL"]}, open("/app/admin/static/modern/build.json", "w"))'
 
 # OCI + EMS build-identity labels; identical stamping is applied to the EMS
 # image so a paired system build validates by identity, not tag name.

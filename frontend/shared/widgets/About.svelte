@@ -7,7 +7,6 @@
   import { t } from "../i18n/i18n.svelte.js";
   import { useShell } from "../shell/context.js";
   import {
-    BUILD_FILE,
     BUNDLED_FILE,
     COPYRIGHT,
     DEVICE_REPORT,
@@ -15,12 +14,13 @@
     REPOSITORY,
     SHARED_NOTICES,
     SUPPORTED_SETUPS,
-    buildFacts,
     noticeEntries,
     noticeKey,
     sourceLinks,
     sourceRef,
+    versionText,
   } from "../lib/about.js";
+  import { build, loadBuild } from "../state/build.svelte.js";
 
   /**
    * The project's copyright and license, the source of the running version and
@@ -32,7 +32,6 @@
   const about = shell.about || {};
   const product = t("app.name");
 
-  let build = $state({ version: "", revision: "" });
   let notices = $state({ loading: true, entries: [], failed: [] });
 
   async function readJson(path) {
@@ -48,10 +47,7 @@
   }
 
   $effect(() => {
-    readJson(BUILD_FILE).then(
-      (value) => (build = buildFacts(value)),
-      () => (build = buildFacts(null)),
-    );
+    loadBuild();
   });
 
   $effect(() => {
@@ -71,15 +67,15 @@
     });
   });
 
-  const version = $derived(about.version || build.version);
-  const ref = $derived(sourceRef({ revision: build.revision, version, tagPrefix: about.tagPrefix || "v" }));
+  const version = $derived(about.version || versionText(build.facts, t));
+  const ref = $derived(sourceRef({ revision: build.facts.revision, version: about.version || build.facts.version, tagPrefix: about.tagPrefix || "v" }));
   const links = $derived(sourceLinks(ref));
 </script>
 
 <Card icon="info" tone="c-pv" title={product} subtitle={t("about.title")} span="span-6">
   <div class="facts two">
     <Fact label={t("about.version")} value={version || t("about.development")} missing={!version} />
-    <Fact label={t("about.revision")} value={build.revision ? build.revision.slice(0, 12) : "—"} title={build.revision} missing={!build.revision} />
+    <Fact label={t("about.revision")} value={build.facts.revision ? build.facts.revision.slice(0, 12) : "—"} title={build.facts.revision} missing={!build.facts.revision} />
   </div>
   <div class="row-wrap">
     <a class="btn secondary small" href={links.tree} target="_blank" rel="noopener" data-testid="about-source">

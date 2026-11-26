@@ -6,8 +6,16 @@
   import { t } from "../i18n/i18n.svelte.js";
   import { prefs, setPref } from "../state/prefs.svelte.js";
   import { useShell } from "./context.js";
+  import { versionText } from "../lib/about.js";
+  import { build, loadBuild } from "../state/build.svelte.js";
 
-  let { version = "" } = $props();
+  /** version: the app's own name for what runs (the Appliance Manager's); without one, the image's build file names it. */
+  let { version: given = "" } = $props();
+  const version = $derived(given || versionText(build.facts, t));
+
+  $effect(() => {
+    if (!given) loadBuild();
+  });
   const shell = useShell();
   const { router, href } = shell.nav;
   const hasAbout = shell.pageSet.pages.some((page) => page.id === "about");
@@ -70,6 +78,6 @@
         <Icon name="info" /><span>{t("nav.about")}</span>
       </a>
     {/if}
-    {#if version}<div class="version">{version}</div>{/if}
+    {#if version}<div class="version" title={t("about.version")} data-testid="nav-version">{version}</div>{/if}
   </div>
 </aside>
