@@ -298,6 +298,7 @@ def test_a_snapshot_that_cannot_be_built_leaves_the_last_one_intact(tmp_path):
     assert sorted(path.name for path in tmp_path.iterdir()) == [
         "control-status.json",
         "runtime-state.json",
+        "runtime-state.json.last-good",
         "runtime-state.json.lock",
     ]
 

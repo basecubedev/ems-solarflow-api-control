@@ -312,9 +312,12 @@ Admin changes them, and come back when it is built again. Nothing moves when the
 runtime-state file cannot be read or `config.json` changed since the start
 read it. The config upgrade never adds an operating value back and `diagnose`
 does not miss one.
-Deleting the runtime-state file resets the operating values to the built-in
-defaults, not to saved ones: control comes back on and every device may
-discharge again. Do not delete it to reset values.
+A deleted or unreadable runtime-state file comes back from its last good copy
+(`runtime-state.json.last-good`); where that copy cannot be read, or an
+unreadable file has none, the EMS starts with control off and logs
+`runtime_state_unusable`
+([runtime-state.md](runtime-state.md#last-good-copy)). Do not delete it to
+reset values.
 
 ## Former Home Assistant Section
 

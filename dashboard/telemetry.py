@@ -8,6 +8,8 @@ from dataclasses import asdict, is_dataclass
 from ems.models import BATTERY_ABSENT, battery_presence, parse_pack_count
 from ems.power_direction import derive_house_load_w
 from ems.pv_inputs import pv_inputs_kept, unused_pv_inputs
+from ems.config import safe_bool
+from ems.runtime_state import CONTROL_OFF_START_KEY
 from ems.state_store import describe_full_charge_assist_status
 from ems.mqtt_control.zendure_profiles import (
     device_model_class,
@@ -561,6 +563,16 @@ def _battery_full_charge_assist_payload(controller, dev, state, now):
     }
 
 
+def _started_control_off(controller):
+    """Whether the EMS runs on the control-off start (runtime_state.CONTROL_OFF_START_KEY) and control is still off."""
+
+    state = getattr(getattr(controller, "runtime_state", None), "data", None)
+    if not isinstance(state, dict) or not state.get(CONTROL_OFF_START_KEY):
+        return False
+    system = state.get("system") if isinstance(state.get("system"), dict) else {}
+    return not safe_bool(system.get("enabled"), False)
+
+
 def build_dashboard_snapshot(
     controller,
     load_w,
@@ -825,6 +837,7 @@ def build_dashboard_snapshot(
         "average_soc": average_soc,
         "controller": {
             "enabled": bool(enabled),
+            "started_control_off": _started_control_off(controller),
             "max_total_power_w": _rounded(max_total_power),
             "min_output_limit_w": _rounded(min_output_limit),
             "allocated_target_total_w": _rounded(allocated_total_w),

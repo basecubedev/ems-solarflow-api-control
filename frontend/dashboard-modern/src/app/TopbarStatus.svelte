@@ -11,10 +11,12 @@
   const transportTone = $derived(
     status.level === "stale" || live.transport === "offline" ? "fault" : live.transport === "live" ? "ok" : "warn",
   );
+  const paused = $derived(live.snapshot?.controller?.enabled === false);
+  const startedOff = $derived(paused && live.snapshot?.controller?.started_control_off === true);
   const emsKey = $derived(
-    status.level === "waiting" ? "top.waiting" : live.snapshot?.controller?.enabled === false ? "top.emsPaused" : "top.emsActive",
+    status.level === "waiting" ? "top.waiting" : startedOff ? "top.emsStartedOff" : paused ? "top.emsPaused" : "top.emsActive",
   );
-  const emsTone = $derived(status.level === "waiting" ? "idle" : live.snapshot?.controller?.enabled === false ? "warn" : "ok");
+  const emsTone = $derived(status.level === "waiting" ? "idle" : startedOff ? "fault" : paused ? "warn" : "ok");
 
   function ageText(seconds) {
     if (seconds === null) return "";

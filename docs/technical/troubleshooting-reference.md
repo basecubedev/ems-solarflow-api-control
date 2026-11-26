@@ -233,11 +233,16 @@ changing group membership.
 on or off, the loop interval, the grid targets, winter mode, AC charging and
 battery care, and each device's PV priority and AC charging and discharging
 permissions ([runtime-state.md](runtime-state.md)). Deleting it does not reset
-them to your saved settings: the EMS recreates it with the built-in defaults,
-so control comes back on and every device may discharge again. Change a value
-on the dashboard or in the Admin's **Settings & devices** instead, and restore
-a backup to go back to an earlier state. If you must remove the file, stop the
-EMS, keep a copy, and set every operating value again after the next start.
+them: every save leaves a last good copy, `runtime-state.json.last-good`, and
+the EMS puts a deleted or unreadable file back from it
+(`runtime_state_restored`). Where that copy cannot be read, or an unreadable
+file has none, it starts with control off (`runtime_state_unusable`, on the
+dashboard **Control off: settings unreadable**, in `emsctl diagnose` the root
+cause of that name); switch control on again on the dashboard once the
+settings are right. Change a value on the dashboard or in the Admin's
+**Settings & devices** instead, and restore a backup to go back to an earlier
+state. To start over from the built-in defaults, stop the EMS and remove both
+files; the next start creates the file as a first start does, control on.
 
 Older root-level `runtime-state.json` files from previous setups are no longer
 required after switching to `data/runtime-state.json` and may be removed
@@ -251,6 +256,13 @@ runtime_state_loaded
 runtime_state_changed
 runtime_state_saved
 runtime_state_load_error
+runtime_state_restored
+runtime_state_unusable
+runtime_state_last_good_failed
+runtime_state_last_good_unusable
+runtime_state_set_aside_failed
+runtime_state_restore_failed
+runtime_state_save_failed
 runtime_values_updated
 schedule_switch_applied
 schedule_switch_refused

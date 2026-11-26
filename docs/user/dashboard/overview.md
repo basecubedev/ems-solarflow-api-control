@@ -25,7 +25,7 @@ Every day. **Overview** is the page to leave open.
 | Element | Meaning |
 | --- | --- |
 | Page title and subtitle | Here **Overview** — *Your energy system right now* |
-| **EMS active** / **EMS paused** | Whether the control loop is switched on; *Waiting for data* before the first snapshot |
+| **EMS active** / **EMS paused** | Whether the control loop is switched on; *Waiting for data* before the first snapshot; **Control off: settings unreadable** after a start that could read neither `runtime-state.json` nor its last good copy, until control is switched on again |
 | **Live · updated 4 s ago** | How the values arrive and how old the newest is. **Live** is the event stream; **Polling** a fallback that asks every 2 s; **Reconnecting**, **Offline** or **Stale** mean the values are not current |
 | **All good**, signed in | In one word how the installation is; it leads to the Admin's **Status**, see [Admin console](../admin-console.md) |
 | **Sign in** / **Sign out** | Starts or ends the app's one session, for the Dashboard and the Admin pages; the Dashboard pages stay readable either way, see [Runtime settings](runtime-settings.md#1--sign-in) |

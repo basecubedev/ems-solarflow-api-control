@@ -29,7 +29,7 @@ from ems.runtime_commands import (
 from ems import config as cfg
 from ems.config_catalog import device_common_defaults
 from ems.read_only_devices import is_read_only_device_config
-from ems.runtime_state import PARKED_DEVICES_KEY, owned_runtime_device, parked_key, parked_values, runtime_state_path_under
+from ems.runtime_state import PARKED_DEVICES_KEY, owned_runtime_device, parked_key, parked_values, runtime_state_path_under, read_last_good_runtime_state
 
 _EMS_DEFAULTS = cfg.default_runtime_config()
 _SYSTEM_DEFAULTS = {key: _EMS_DEFAULTS["system"].get(key) for key in SYSTEM_FIELDS}
@@ -331,14 +331,21 @@ def resolve_runtime_state_path(context, config):
 
 
 def read_runtime_state(path):
-    """Best-effort read of the raw runtime-state file; ``{}`` on any problem."""
+    """Best-effort read of the raw runtime-state file; ``{}`` on any problem.
+
+    A missing or unreadable file is read from its last good copy: the EMS
+    puts that back at its next start (ems.runtime_state), so it is what will
+    run.
+    """
 
     try:
         with open(path) as handle:
             data = json.load(handle)
     except (OSError, ValueError):
-        return {}
-    return data if isinstance(data, dict) else {}
+        data = None
+    if isinstance(data, dict):
+        return data
+    return read_last_good_runtime_state(str(path), log=False) or {}
 
 
 def _coerce(value, value_type):

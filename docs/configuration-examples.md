@@ -559,10 +559,10 @@ Runtime-state contains operator values like:
 
 Runtime state holds the operating settings, and is their only home: a value
 the dashboard or the Admin sets lives there, not in `config.json`. Do not copy
-it into `config.json`, and do not delete it to reset values: the EMS would
-recreate it with the built-in defaults, not with your saved settings (see
-[runtime-state.md](technical/runtime-state.md)). Change the values on the
-dashboard or in the Admin instead.
+it into `config.json`, and do not delete it to reset values: the EMS puts it
+back from its last good copy, and starts with control off where that copy
+cannot be read (see [runtime-state.md](technical/runtime-state.md#last-good-copy)).
+Change the values on the dashboard or in the Admin instead.
 
 Older root-level `runtime-state.json` files from previous setups are no longer
 required after switching to `data/runtime-state.json` and may be removed

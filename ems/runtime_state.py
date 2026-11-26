@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import copy
+import shutil
 import hashlib
 import tempfile
 import threading
@@ -302,6 +303,9 @@ def merge_runtime_defaults(data, defaults):
 
 RESET_REQUEST_SUFFIX = ".reset-requested"
 SETUP_BACKUP_SUFFIX = ".before-setup"
+LAST_GOOD_SUFFIX = ".last-good"
+CONTROL_OFF_START_KEY = "started_control_off"
+UNREADABLE_SUFFIX = ".unreadable"
 
 
 def runtime_reset_request_path(path):
@@ -412,13 +416,62 @@ def cancel_runtime_reset(path):
 
 
 def _setup_backup_path(path):
+    return _stamped_path(path, SETUP_BACKUP_SUFFIX)
+
+
+def _stamped_path(path, suffix):
     stamp = time.strftime("%Y%m%d-%H%M%S", time.gmtime())
-    candidate = f"{path}{SETUP_BACKUP_SUFFIX}-{stamp}"
+    candidate = f"{path}{suffix}-{stamp}"
     counter = 1
     while os.path.exists(candidate):
-        candidate = f"{path}{SETUP_BACKUP_SUFFIX}-{stamp}-{counter}"
+        candidate = f"{path}{suffix}-{stamp}-{counter}"
         counter += 1
     return candidate
+
+
+def last_good_runtime_state_path(path):
+    """The copy of the runtime state its last save or start-up read left beside it."""
+
+    return f"{path}{LAST_GOOD_SUFFIX}"
+
+
+def read_last_good_runtime_state(path, *, log=True):
+    """The last good copy of the runtime state at ``path``, or ``None`` where there is no usable one; ``log`` names an unusable one."""
+
+    copy_path = last_good_runtime_state_path(path)
+    try:
+        return _read_usable(copy_path)[0]
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError) as e:
+        if log:
+            log_event(logging.WARNING, "runtime_state_last_good_unusable", path=copy_path, error=e)
+        return None
+
+
+def _released_control_off_start(state):
+    """Drop the control-off start's mark from ``state`` once control in it reads on; whether it did.
+
+    Switched on by any means -- the dashboard, a schedule, a hand edit, a
+    restored backup -- the state is the one that runs.
+    """
+
+    if not isinstance(state, dict) or not state.get(CONTROL_OFF_START_KEY):
+        return False
+    system = state.get("system") if isinstance(state.get("system"), dict) else {}
+    if not cfg.safe_bool(system.get("enabled"), False):
+        return False
+    del state[CONTROL_OFF_START_KEY]
+    return True
+
+
+def _read_usable(path):
+    """The runtime state at ``path`` and its signature; ValueError where it is no JSON object."""
+
+    loaded, signature = RuntimeState.read_file(path)
+    if not isinstance(loaded, dict):
+        raise ValueError("runtime state is not a JSON object")
+    return loaded, signature
 
 
 def runtime_reset_pending(path, config_path):
@@ -458,16 +511,15 @@ def start_runtime_state(path, defaults, config_path, defaults_revision=None, pla
     runtime_state_lock_busy and the reset goes on without it.
     """
 
-    for stale_path in (path, str(resolve_schedules_path(path))):
+    for stale_path in (path, last_good_runtime_state_path(path), str(resolve_schedules_path(path))):
         removed = remove_stale_temp_files(stale_path)
         if removed:
             log_event(logging.INFO, "stale_temp_files_removed", path=stale_path, files=",".join(removed))
     state = RuntimeState(path, defaults, defaults_revision)
     with state._file_lock(strict=False):
-        _settle_runtime_reset(path, config_path)
-        existed = os.path.exists(path)
-        state.load_or_create()
-        _settle_placeholder_seed(state, existed, placeholder_start)
+        reset = _settle_runtime_reset(path, config_path)
+        state.load_or_create(fresh=reset)
+        _settle_placeholder_seed(state, not (state.created or state.started_control_off), placeholder_start)
     return state
 
 
@@ -484,23 +536,44 @@ def _settle_placeholder_seed(state, existed, placeholder_start):
     if placeholder_start:
         if not existed:
             state.data[PLACEHOLDER_SEEDED_KEY] = True
-            state.save_atomic()
+            _save_seed(state)
         return
     if state.data.get(PLACEHOLDER_SEEDED_KEY):
         state.data = state._fresh_data()
-        state.save_atomic()
+        _save_seed(state)
         log_event(logging.INFO, "runtime_state_reseeded", path=state.path, reason="first start without template placeholders")
 
 
+def _save_seed(state):
+    """Save the placeholder seed's change, unless an unreadable file was left in place; a failed write keeps it in memory."""
+
+    if state.left_unreadable:
+        return
+    try:
+        state.save_atomic()
+    except OSError as e:
+        log_event(logging.WARNING, "runtime_state_save_failed", path=state.path, error=e)
+
+
 def _settle_runtime_reset(path, config_path):
+    """Settle a fresh setup's request; whether the state is to be built afresh from the config."""
+
     marker = runtime_reset_request_path(path)
+    reset = False
     if os.path.exists(marker):
         wanted = pending_runtime_reset(path)
         if wanted is not None and wanted == _config_file_digest(config_path):
+            reset = True
             backup = _setup_backup_path(path)
             moved = os.path.exists(path)
             if moved:
                 os.replace(path, backup)
+            try:
+                os.remove(last_good_runtime_state_path(path))
+            except FileNotFoundError:
+                pass
+            except OSError as e:
+                log_event(logging.WARNING, "runtime_state_last_good_failed", path=path, error=e)
             schedules = str(resolve_schedules_path(path))
             schedules_backup = None
             with contextlib.ExitStack() as stack:
@@ -526,6 +599,7 @@ def _settle_runtime_reset(path, config_path):
                 reason="config_replaced",
             )
         os.remove(marker)
+    return reset
 
 
 class RuntimeState:
@@ -544,6 +618,11 @@ class RuntimeState:
         self.refresh_defaults = refresh_defaults
         self.data = self._fresh_data()
         self.load_failed = False
+        self.created = False
+        self.trusted = False
+        self.holds_state = False
+        self.left_unreadable = False
+        self.started_control_off = False
         self.last_signature = None
         self.lock = threading.RLock()
         self._held = threading.local()
@@ -586,10 +665,33 @@ class RuntimeState:
             finally:
                 self._held.depth = 0
 
-    def load_or_create(self):
+    def load_or_create(self, *, fresh=False):
+        """Load the file, put a missing one back from the last good copy, or create it.
+
+        Only where neither the file nor a copy exists, and this instance holds
+        no state it read or ran, is the state new: a first start, or ``fresh``,
+        a fresh setup's reset, whose first save also replaces a copy it could
+        not remove. A file removed while an instance runs comes back as the
+        state it runs (_write_back), which may be newer than the copy; at a
+        start it comes back from its copy. One whose copy cannot be used, or
+        that went missing while control was already off for want of one,
+        starts with control off.
+        """
+
         with self._file_lock(strict=False):
             if not os.path.exists(self.path):
+                if not fresh and self.holds_state:
+                    return self._write_back("missing")
+                if not fresh and self._restore_last_good("missing"):
+                    return self._reconcile_on_load(restored=True)
+                if not fresh and self._run_on_copy("missing"):
+                    return self.data
+                if not fresh and (self.data.get(CONTROL_OFF_START_KEY) or os.path.lexists(last_good_runtime_state_path(self.path))):
+                    return self._start_control_off(None)
                 self.data = self._fresh_data()
+                self.created = True
+                self.trusted = True
+                self.holds_state = True
                 log_event(
                     logging.INFO,
                     "runtime_state_created",
@@ -600,7 +702,7 @@ class RuntimeState:
 
             return self._reconcile_on_load()
 
-    def _reconcile_on_load(self):
+    def _reconcile_on_load(self, *, restored=False):
         """Load the file and reconcile device entries against config (EMS-owned).
 
         The EMS is authoritative for runtime device state: on load it migrates
@@ -611,7 +713,7 @@ class RuntimeState:
         """
 
         with self._file_lock(strict=False):
-            return self._reconcile_locked()
+            return self._reconcile_locked(restored=restored)
 
     @staticmethod
     def read_file(path):
@@ -627,13 +729,15 @@ class RuntimeState:
         with self.lock:
             self.data = merge_runtime_defaults(loaded, self.defaults)
             self.last_signature = signature
+            self.trusted = True
+            self.holds_state = True
 
-    def _reconcile_locked(self):
+    def _reconcile_locked(self, *, restored=False):
         if not os.path.exists(self.path):
             return self.load_or_create()
 
         try:
-            loaded, signature = self.read_file(self.path)
+            loaded, signature = _read_usable(self.path)
         except FileNotFoundError:
             return self.load_or_create()
         except Exception as e:
@@ -643,10 +747,11 @@ class RuntimeState:
                 path=self.path,
                 error=e
             )
-            self.load_failed = True
-            return self.data
+            return self._recover_unreadable(try_copy=not restored)
 
         self.load_failed = False
+        self.trusted = True
+        self.holds_state = True
         merged = merge_runtime_defaults(loaded, self.defaults)
         loaded_devices = loaded.get("devices") if isinstance(loaded, dict) else {}
         loaded_parked = loaded.get(PARKED_DEVICES_KEY) if isinstance(loaded, dict) else None
@@ -667,8 +772,9 @@ class RuntimeState:
         parked_changed = parked != (loaded_parked if isinstance(loaded_parked, dict) else {})
 
         merged, refreshed = self._refresh_retired_defaults(merged)
+        released = _released_control_off_start(merged)
         destructive = bool(changes["renamed"] or changes["pruned"])
-        changed = destructive or refreshed or parked_changed or bool(changes["added"] or changes["rekeyed"])
+        changed = destructive or refreshed or parked_changed or released or bool(changes["added"] or changes["rekeyed"])
 
         if destructive:
             self._backup_runtime_state()
@@ -719,8 +825,144 @@ class RuntimeState:
 
         if changed:
             self.save_atomic()
+        else:
+            self._keep_last_good(self._serialized(loaded), loaded)
 
         return self.data
+
+    def _recover_unreadable(self, *, try_copy=True):
+        """The state for a file that exists but cannot be read as one.
+
+        The file is kept as ``<path>.unreadable-<UTC time>`` for the operator,
+        linked there before anything replaces it, and the last good copy takes
+        its place. Without a usable copy the EMS starts on its defaults with
+        control off (_start_control_off). A file that cannot be kept aside is
+        left where it is at this start: the EMS runs on the copy in memory, or
+        with control off without one, and its next save replaces the file.
+        """
+
+        aside = _stamped_path(self.path, UNREADABLE_SUFFIX)
+        try:
+            os.link(self.path, aside)
+        except OSError:
+            try:
+                shutil.copy2(self.path, aside)
+            except OSError as e:
+                log_event(logging.WARNING, "runtime_state_set_aside_failed", path=self.path, error=e)
+                aside = None
+                self.left_unreadable = True
+        if try_copy and aside is not None and self._restore_last_good("unreadable", unreadable=aside):
+            return self._reconcile_locked(restored=True)
+        if try_copy and self._run_on_copy("unreadable"):
+            return self.data
+        return self._start_control_off(aside, replace=aside is not None)
+
+    def _run_on_copy(self, reason):
+        """Run on a usable copy in memory where it cannot be put in place of the file; whether there was one.
+
+        Nothing is written at this start (``load_failed``); the next save puts
+        the state where the file is.
+        """
+
+        loaded = read_last_good_runtime_state(self.path, log=False)
+        if loaded is None:
+            return False
+        self.data = merge_runtime_defaults(loaded, self.defaults)
+        self.load_failed = True
+        self.trusted = True
+        self.holds_state = True
+        log_event(logging.WARNING, "runtime_state_restored", path=self.path, source="last_good", reason=reason, unreadable=None)
+        return True
+
+    def _write_back(self, reason):
+        """Put the state this instance holds, read or run by it, where the file went missing.
+
+        It is no first start and no copy to fall back on is needed: the state
+        that runs is known. A write that fails keeps it in memory, as a failed
+        save does.
+        """
+
+        try:
+            self.save_atomic()
+        except OSError as e:
+            log_event(logging.WARNING, "runtime_state_save_failed", path=self.path, error=e)
+            return self.data
+        log_event(logging.WARNING, "runtime_state_restored", path=self.path, source="memory", reason=reason)
+        return self.data
+
+    def _start_control_off(self, unreadable, *, replace=True):
+        """The built-in defaults with control off, for a state neither the file nor its copy can give.
+
+        Written to the file so the dashboard and ``emsctl status`` show what
+        runs, unless ``replace`` is false (an unreadable file not kept aside).
+        It carries ``CONTROL_OFF_START_KEY`` until a save or a read finds
+        control on in it (_released_control_off_start): while a copy exists,
+        no state before that becomes the copy, which keeps what an operator
+        saved.
+        """
+
+        self.data = self._fresh_data()
+        self.data.setdefault("system", {})["enabled"] = False
+        self.data[CONTROL_OFF_START_KEY] = True
+        self.load_failed = True
+        self.trusted = True
+        self.started_control_off = True
+        log_event(
+            logging.WARNING,
+            "runtime_state_unusable",
+            path=self.path,
+            unreadable=unreadable,
+            control="off",
+        )
+        if replace:
+            try:
+                self.save_atomic()
+            except OSError as e:
+                log_event(logging.WARNING, "runtime_state_save_failed", path=self.path, error=e)
+        return self.data
+
+    def _restore_last_good(self, reason, *, unreadable=None):
+        """Put the last good copy in place of the file; whether it was usable."""
+
+        loaded = read_last_good_runtime_state(self.path)
+        if loaded is None:
+            return False
+        try:
+            atomic_write_bytes(self.path, self._serialized(loaded))
+        except OSError as e:
+            log_event(logging.WARNING, "runtime_state_restore_failed", path=self.path, error=e)
+            return False
+        log_event(
+            logging.WARNING,
+            "runtime_state_restored",
+            path=self.path,
+            source="last_good",
+            reason=reason,
+            unreadable=unreadable,
+        )
+        return True
+
+    @staticmethod
+    def _serialized(data):
+        return (json.dumps(data, indent=2, sort_keys=True) + "\n").encode("utf-8")
+
+    def _keep_last_good(self, raw, state):
+        """Write ``raw``, the ``state`` just saved or read, as the last good copy; a failure only warns.
+
+        Not a state the control-off start made (CONTROL_OFF_START_KEY, which a
+        state reading control on no longer carries) while a copy exists: it is
+        no operator's, and the copy may still hold what one saved. Without any
+        copy there is nothing to keep, and it becomes the copy, so a file lost
+        later comes back with control off.
+        """
+
+        copy_path = last_good_runtime_state_path(self.path)
+        if isinstance(state, dict) and state.get(CONTROL_OFF_START_KEY) and os.path.lexists(copy_path):
+            return
+        try:
+            atomic_write_bytes(copy_path, raw)
+        except OSError as e:
+            log_event(logging.WARNING, "runtime_state_last_good_failed", path=self.path, error=e)
 
     def _fresh_data(self):
         data = merge_runtime_defaults({}, self.defaults)
@@ -762,8 +1004,6 @@ class RuntimeState:
         """Best-effort one-step backup of the current file before pruning."""
 
         try:
-            import shutil
-
             shutil.copy2(self.path, f"{self.path}.bak")
             log_event(
                 logging.INFO,
@@ -779,7 +1019,7 @@ class RuntimeState:
             )
 
     def load_if_changed(self, force=False):
-        """Re-read the file when it changed. A missing file is created, and
+        """Re-read the file when it changed. A missing file is put back (load_or_create), and
         that waits for the cross-process lock outside ``self.lock``, since a
         writer holding the flock takes ``self.lock`` next, and no longer than
         an edit would: the control loop calls this every cycle."""
@@ -804,7 +1044,7 @@ class RuntimeState:
                 return self.data
 
             try:
-                loaded, signature = self.read_file(self.path)
+                loaded, signature = _read_usable(self.path)
                 new = signature != self.last_signature
 
                 if new and self.last_signature is not None:
@@ -815,7 +1055,10 @@ class RuntimeState:
                     )
 
                 self.data = merge_runtime_defaults(loaded, self.defaults)
+                _released_control_off_start(self.data)
                 self.last_signature = signature
+                self.trusted = True
+                self.holds_state = True
 
                 if new:
                     log_event(
@@ -847,10 +1090,23 @@ class RuntimeState:
             self.load_if_changed(force=force)
 
     def save_atomic(self):
+        """Write the state, and as the last good copy (_keep_last_good).
+
+        An instance that never read the file it would replace (it exists, but
+        could not be read) refuses with ValueError: what it holds is no
+        operator's state, and saving it would also overwrite the copy that
+        is to rescue exactly that file.
+        """
+
         with self._file_lock(strict=False):
-            raw = (json.dumps(self.data, indent=2, sort_keys=True) + "\n").encode("utf-8")
+            if not self.trusted and os.path.exists(self.path):
+                raise ValueError(f"runtime state {self.path} could not be read; it is not overwritten")
+            _released_control_off_start(self.data)
+            raw = self._serialized(self.data)
             atomic_write_bytes(self.path, raw)
             self.last_signature = file_signature(os.stat(self.path))
+            self.trusted = True
+            self._keep_last_good(raw, self.data)
 
             log_event(
                 logging.INFO,
