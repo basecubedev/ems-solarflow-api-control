@@ -127,7 +127,8 @@ built stylesheet.
 | `--m-line`, `--m-line-strong` | hairlines and control borders |
 | `--m-text`, `--m-muted`, `--m-muted-2` | three levels of ink |
 | `--m-accent`, `--m-accent-ink` | the one interactive colour: focus ring, selected navigation, primary button (a destructive one wears `--m-fault`, the start of a checked update `--m-ok`) |
-| `--m-selected-bg`, `--m-selected-ink` | the chosen segment of a segmented control |
+| `--m-selected-bg`, `--m-selected-ink` | the chosen segment of a segmented control, and a badge's fill and ink |
+| `--m-quiet-bg` | the fill of a badge that brings its own ink (a warning, the Admin's operating value): grey in Graphite, deep navy in Midnight |
 | `--m-ok`, `--m-warn`, `--m-fault` | status, always with an icon and a word; `--m-fault` and `--m-ok` also fill the two primary buttons above |
 
 A colour scheme is one value set for those roles, as an
@@ -137,7 +138,20 @@ one more block plus its id in `THEMES` and its name in `THEME_NAMES`, both in
 `frontend/shared/state/prefs.svelte.js`; a scheme's name is not translated. The contract
 test reads `THEMES` and requires a block that defines every role, and it holds
 every scheme to WCAG AA contrast: 4.5:1 for each ink on the surfaces and fills
-it is written on.
+it is written on. A badge (`.badge`) writes `--m-selected-ink` on
+`--m-selected-bg`, which is the accent blue in Midnight; a variant that changes
+the ink brings its own fill or none, for example `--m-quiet-bg` (grey in
+Graphite, deep navy in Midnight) as `.badge.warn` in `base.css` and the
+Admin's operating value do, or a transparent one read on every surface. A
+component restyles a badge only through a variant class, never a bare
+`.badge` rule, which would outrank the variants in `base.css`.
+The same test reads each badge variant a Svelte source names in a static
+`class="badge …"` against both schemes, and fails on one whose ink or fill is
+no token pair it can check. A state pill (`.status` with `c-ok`, `c-warn`,
+`c-fault`, `c-acc`, `c-idle`) writes its tone on 12 % of that tone over the
+card; the accent and idle tones write `--m-text` and `--m-muted` instead:
+Midnight's accent blue on its own tint is not readable, and the idle grey
+stayed just below 4.5:1 on a card's inner surface in both schemes.
 
 The energy colours mean the same thing everywhere and never change with the
 scheme: PV is the warm one, battery the green one, output the cyan one, grid

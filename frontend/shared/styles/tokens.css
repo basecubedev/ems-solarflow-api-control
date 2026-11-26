@@ -53,6 +53,7 @@
   --m-accent: #e6ebf2;
   --m-accent-ink: #0b0e13;
   --m-selected-bg: #2a313d;
+  --m-quiet-bg: #2a313d;
   --m-selected-ink: #ffffff;
   --m-glow: rgba(148, 163, 184, 0.07);
   --m-scrim: rgba(3, 5, 8, 0.72);
@@ -88,6 +89,7 @@
   --m-accent: #2d70e4;
   --m-accent-ink: #ffffff;
   --m-selected-bg: #2d70e4;
+  --m-quiet-bg: #182742;
   --m-selected-ink: #ffffff;
   --m-glow: rgba(45, 112, 228, 0.15);
   --m-scrim: rgba(2, 6, 14, 0.74);

@@ -492,7 +492,6 @@
   .name { font-weight: 600; }
   .badges { display: flex; flex-wrap: wrap; gap: var(--s2); align-items: center; margin: 0; }
   .badge.chosen { border-color: var(--m-accent); }
-  .badge.warn { color: var(--m-warn); }
   .chip { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2); }
   .chip.recommended { border-color: var(--m-accent); }
   .chips { gap: var(--s2); }
