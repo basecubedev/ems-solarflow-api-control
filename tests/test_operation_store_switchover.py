@@ -77,6 +77,30 @@ def _move(tmp_path, config, runtime, monkeypatch, *, may=True, started=None, loa
     return moved, json.loads(path.read_text()), persisted, messages
 
 
+def test_the_switch_over_only_removes_operating_values(tmp_path, monkeypatch):
+    """Guided Setup's deployment marker relies on it (admin/deployment.py ``_is_prepared_config``)."""
+
+    config = _config()
+    _moved, after, _persisted, _messages = _move(tmp_path, config, _runtime(), monkeypatch)
+    assert cfg.only_operating_values_removed(config, after) is True
+
+    rewritten = json.loads(json.dumps(after))
+    rewritten["devices"][1]["pv_priority_factor"] = 3.0
+    assert cfg.only_operating_values_removed(config, rewritten) is False
+
+    retyped = json.loads(json.dumps(after))
+    retyped["devices"][1]["pv_priority_factor"] = 2
+    assert cfg.only_operating_values_removed(config, retyped) is False
+
+    added = json.loads(json.dumps(after))
+    added["system"]["loop_interval"] = 6
+    assert cfg.only_operating_values_removed(config, added) is False
+
+    installation = json.loads(json.dumps(after))
+    installation["grid_meter"]["ip"] = "10.20.30.51"
+    assert cfg.only_operating_values_removed(config, installation) is False
+
+
 def test_the_operating_values_the_runtime_state_holds_leave_the_config(tmp_path, monkeypatch):
     moved, saved, persisted, messages = _move(tmp_path, _config(), _runtime(), monkeypatch)
 
