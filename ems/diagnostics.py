@@ -35,6 +35,7 @@ from urllib.request import Request, urlopen
 
 from dashboard import auth as dashboard_auth
 from ems import config as config_mod
+from ems.runtime_state import CONTROL_OFF_START_KEY
 from ems.external_status import sanitize_external_mqtt_status
 from ems.health import (
     CommHealth,
@@ -297,6 +298,8 @@ def diagnose_finalize_report(report):
         )
 
     root_causes = []
+    if report.get("runtime_state"):
+        root_causes.extend(report["runtime_state"].get("root_causes", []))
     if report.get("control"):
         root_causes.extend(report["control"].get("root_causes", []))
     if report.get("control_quality"):
@@ -1759,17 +1762,49 @@ def diagnose_deprecated_keys(checks, config_data):
             )
 
 
+RUNTIME_STATE_UNUSABLE_CAUSE = {
+    "code": "runtime_state_unusable",
+    "severity": "error",
+    "title": "Control started off: runtime-state.json was unusable",
+    "message": "When the EMS started, neither runtime-state.json nor its last good copy "
+    "could be read, so it runs on built-in defaults with control switched off. Operating "
+    "settings saved before (device roles, AC charging, power limits) may be lost.",
+    "suggested_next_check": "Check the operating settings in the dashboard, or restore a "
+    "backup, then switch control on; this clears once control is on.",
+}
+
+
 def diagnose_runtime_state_plausibility(checks, runtime_path, config_data):
+    """Add the runtime state's checks to ``checks``; return its root causes.
+
+    A control-off start (``CONTROL_OFF_START_KEY`` while control reads off)
+    is the one: the EMS writes nothing until someone switches control on.
+    """
+
     if not os.path.exists(runtime_path) or os.path.getsize(runtime_path) == 0:
-        return
+        return []
 
     runtime_data, runtime_error = diagnose_json_file(runtime_path)
     if runtime_error:
-        return
+        return []
     if not isinstance(runtime_data, dict):
         diagnose_add(checks, "runtime_state", "error", "runtime_state_not_object", "runtime-state.json root must be a JSON object")
-        return
+        return []
     diagnose_add(checks, "runtime_state", "ok", "runtime_state_object", "runtime-state.json root is a JSON object")
+    causes = []
+    system_state = runtime_data.get("system") if isinstance(runtime_data.get("system"), dict) else {}
+    if runtime_data.get(CONTROL_OFF_START_KEY) and not config_mod.safe_bool(system_state.get("enabled"), False):
+        cause = dict(RUNTIME_STATE_UNUSABLE_CAUSE)
+        causes.append(cause)
+        diagnose_add(
+            checks,
+            "runtime_state",
+            "error",
+            cause["code"],
+            cause["title"],
+            root_cause_code=cause["code"],
+            suggested_next_check=cause["suggested_next_check"],
+        )
 
     system = runtime_data.get("system")
     if isinstance(system, dict):
@@ -1820,6 +1855,7 @@ def diagnose_runtime_state_plausibility(checks, runtime_path, config_data):
             age_seconds = (datetime.now(timezone.utc) - parsed).total_seconds()
             if age_seconds > 3600:
                 diagnose_add(checks, "runtime_state", "warning", "runtime_state_stale", "runtime-state timestamp is older than 1 hour", age_seconds=round(age_seconds, 1))
+    return causes
 
 
 def diagnose_parse_timestamp(value):
@@ -4593,7 +4629,9 @@ def diagnose_collect(args):
         diagnose_add(checks, "runtime_state", "ok", "runtime_state_valid_json", "runtime-state.json is valid JSON", path=runtime_path)
     elif runtime_json_error:
         diagnose_add(checks, "runtime_state", "error", "runtime_state_invalid_json", f"runtime-state.json is invalid JSON: {runtime_json_error}", path=runtime_path)
-    diagnose_runtime_state_plausibility(checks, runtime_path, config_data)
+    runtime_state_report = {
+        "root_causes": diagnose_runtime_state_plausibility(checks, runtime_path, config_data),
+    }
     builtin_mqtt = diagnose_builtin_mqtt(checks, config_data, config_path, runtime_path)
 
     if database_path:
@@ -4702,6 +4740,7 @@ def diagnose_collect(args):
         "battery_full_charge_assist": battery_full_charge_report,
         "hardware_health": hardware_health,
         "builtin_mqtt": builtin_mqtt,
+        "runtime_state": runtime_state_report,
     }
     return sanitize_external_mqtt_status(
         report, sensitive_context=config_data

@@ -243,6 +243,7 @@ def test_a_save_leaves_another_writers_temp_file_alone(tmp_path):
     assert json.loads(path.read_text())["system"]["enabled"] is False
     assert sorted(entry.name for entry in tmp_path.iterdir()) == [
         "runtime-state.json",
+        "runtime-state.json.last-good",
         "runtime-state.json.lock",
         "runtime-state.json.tmp",
     ]
@@ -259,7 +260,12 @@ def test_a_save_that_fails_leaves_no_temp_file_and_the_file_unchanged(tmp_path):
         state.save_atomic()
 
     assert path.read_bytes() == before
-    assert sorted(entry.name for entry in tmp_path.iterdir()) == ["runtime-state.json", "runtime-state.json.lock"]
+    assert sorted(entry.name for entry in tmp_path.iterdir()) == [
+        "runtime-state.json",
+        "runtime-state.json.last-good",
+        "runtime-state.json.lock",
+    ]
+    assert (tmp_path / "runtime-state.json.last-good").read_bytes() == before
 
 
 @pytest.mark.parametrize(

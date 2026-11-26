@@ -137,7 +137,8 @@ def write_targets(context, config, targets, *, create=False):
     creates the file where the EMS has not yet, recording the config's
     defaults revision as the EMS would, so its first start takes no value set
     here for an old default; a mirror of a config value leaves a missing file
-    to the EMS, which seeds it from the config.
+    to the EMS, which puts it back from its last good copy or seeds it from
+    the config.
     """
 
     result = {"applied": [], "skipped": [], "warnings": []}
@@ -155,7 +156,7 @@ def write_targets(context, config, targets, *, create=False):
         for display_path, *_ in targets:
             result["skipped"].append({"path": display_path, "reason": RUNTIME_ABSENT_REASON})
         result["warnings"].append(
-            "runtime-state file not present; the EMS will seed these values "
+            "runtime-state file not present; the EMS restores it from its last good copy, or seeds these values "
             "from config on its next start"
         )
         return result

@@ -35,10 +35,10 @@ afresh from the config at the first start without them, so a new installation
 runs with the values it was set up with. Until then, and before any EMS start
 while the config still holds placeholders, **Settings & devices** writes the
 operating values it changes into `config.json`, which that start reads;
-values the dashboard or `emsctl` set meanwhile are not kept. The file is ignored by Git. A missing file is recreated with the built-in defaults,
-not with the values it held: once a live start has moved the operating values
-out of `config.json`, deleting it switches control back on and allows every
-device to discharge again. Older
+values the dashboard or `emsctl` set meanwhile are not kept. The file is ignored by Git. A missing or unreadable file comes back from its
+last good copy, and where that copy cannot be read, or an unreadable file has
+none, the EMS starts with control off ([Last good copy](#last-good-copy));
+deleting it does not reset the values. Older
 root-level `runtime-state.json` files from previous setups are no longer
 required after switching to `data/runtime-state.json` and may be removed
 manually.
@@ -299,6 +299,63 @@ through `write_config_json_atomic` -- so the reset survives the edit. Setup's st
 EMS that already runs, because Compose leaves a running service alone when only
 its mounted config changed. A running EMS reloading the file, a `--preflight`
 run, the Admin's maintenance mirror and `emsctl` never settle the request.
+
+## Last good copy
+
+Every save writes the same bytes to `runtime-state.json.last-good` beside the
+file, and an EMS start that reads the file without changing it refreshes the
+copy from what it read, so a hand edit becomes the copy at the next start or
+save. A copy that cannot be written only warns (`runtime_state_last_good_failed`);
+the save itself stands, and a later fallback finds the copy the last
+successful write left. While the file is missing or unreadable, the Admin
+shows the copy, which the next EMS start puts back.
+
+- **Unreadable file** -- no JSON object, or a read that fails: the EMS start
+  logs `runtime_state_load_error`, keeps the file as
+  `runtime-state.json.unreadable-<UTC time>` for the operator (linked there
+  before anything replaces it, so a write that fails leaves it in place), and
+  puts the copy in its place (`runtime_state_restored`, `source=last_good`). It then
+  starts as on any other read, so the operating values move from `config.json`
+  as they would have. A copy that cannot be written in place -- a full card --
+  runs in memory, nothing is written at that start, and the next save puts it
+  where the file is; the same holds for a missing file.
+- **No usable copy either** -- missing, or itself unreadable: the EMS starts on
+  the built-in defaults with control **off**, writes that to the file so the
+  dashboard and `emsctl status` show it, and logs `runtime_state_unusable`.
+  Until control is on again the dashboard's top bar reads **Control off:
+  settings unreadable** and its **Control** page says what to do, and
+  `emsctl diagnose` names it as the error root cause `runtime_state_unusable`
+  once that state is in the file; while the file itself cannot be read, or
+  the state could not be written, only the dashboard says so.
+  The values in `config.json` stay where they are for this start. The state
+  carries `started_control_off` until a save or a start finds control
+  switched on in it, by whatever means: while a copy exists, no save makes
+  such a state the copy, which keeps only what an operator saved. Without
+  any copy it becomes the copy, so a file lost later comes back with control
+  off. A save of the Admin that would create a missing file whose copy cannot
+  be read does the same.
+- **A file that cannot be kept aside** -- the directory refuses the link and
+  the copy -- stays where it is at that start: the EMS runs on the copy in
+  memory, or with control off without one, and its next save replaces the
+  file.
+- **Missing file** -- deleted, or lost: the EMS and `emsctl` put the copy back
+  (the EMS logs `runtime_state_restored`, `reason=missing`) rather than
+  creating a new state, and so does the Admin where a save would create the
+  file. A running EMS writes back the state it runs instead (`source=memory`),
+  which may be newer than the copy. A copy that is there but cannot be used starts the EMS with control
+  off, as above, and `emsctl` refuses to create the file. Only where neither
+  the file nor a copy exists is the state created afresh, as on a first start.
+- A writer that never read the file it would replace -- the Admin's or
+  `emsctl`'s own instance over a file it cannot read -- refuses to save, so
+  neither the file nor its copy is overwritten with what it does not know.
+- A running EMS that reads an unreadable file between its saves keeps the
+  state in memory, as before, and its next save writes it back.
+
+A [fresh Setup reset](#fresh-setup-reset) removes the copy with the file it
+sets aside, so the new installation does not get the old values back; a copy
+it cannot remove is named in the log (`runtime_state_last_good_failed`), the
+start builds the state afresh all the same, and its first save replaces it. To start
+over from the built-in defaults by hand, stop the EMS and remove both files.
 
 ## Admin save → runtime state
 

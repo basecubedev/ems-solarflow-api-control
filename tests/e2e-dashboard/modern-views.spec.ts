@@ -250,6 +250,27 @@ test.describe("Modern dashboard views: only the parts a system has @smoke", () =
 });
 
 test.describe("Modern dashboard views: control @smoke", () => {
+  test("a start with control off over an unreadable runtime state says so at the top and says what to do", async ({ page }) => {
+    await shapeLive(page, (body) => Object.assign(body.controller, { enabled: false, started_control_off: true }));
+    await openModern(page, "#/control");
+
+    await expect(page.getByTestId("ems-state")).toHaveText("Control off: settings unreadable");
+    await expect(page.getByTestId("ems-state").locator(".dot")).toHaveClass(/fault/);
+    const now = page.getByRole("region", { name: "What the EMS is doing now" });
+    await expect(now.getByTestId("control-started-off")).toContainText("neither runtime-state.json nor its last good copy could be read");
+    await expect(now.getByTestId("control-started-off")).toContainText("then switch control on");
+  });
+
+  test("control switched off by hand stays a plain pause", async ({ page }) => {
+    await shapeLive(page, (body) => Object.assign(body.controller, { enabled: false, started_control_off: false }));
+    await openModern(page, "#/control");
+
+    await expect(page.getByTestId("ems-state")).toHaveText("EMS paused");
+    const now = page.getByRole("region", { name: "What the EMS is doing now" });
+    await expect(now.getByTestId("control-started-off")).toHaveCount(0);
+    await expect(now).toContainText("Control is switched off.");
+  });
+
   test("the cycle is said in a sentence with its figures, its active limit and reason, the gates not active, and the EMS's notes", async ({ page }) => {
     await shapeLive(page, distinctCycle);
     await openModern(page, "#/control");

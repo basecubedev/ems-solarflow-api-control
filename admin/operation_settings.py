@@ -149,9 +149,10 @@ def held_by_config(context, config):
         path = resolve_runtime_state_path(context, config)
         if runtime_reset_pending(path, str(context.config_path)):
             return True
-        if not os.path.exists(path):
+        data = read_runtime_state(path)
+        if not data and not os.path.exists(path):
             return bool(template_placeholder_paths(apply_runtime_config_defaults(config)))
-        return bool(read_runtime_state(path).get(PLACEHOLDER_SEEDED_KEY))
+        return bool(data.get(PLACEHOLDER_SEEDED_KEY))
     except (OSError, AttributeError, TypeError, ValueError):
         return False
 
