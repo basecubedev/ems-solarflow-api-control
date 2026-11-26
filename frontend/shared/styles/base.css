@@ -188,7 +188,10 @@ svg.i.lg { width: 22px; height: 22px; }
   border: 1px solid color-mix(in srgb, var(--c, var(--m-muted)) 30%, transparent);
 }
 .status svg.i { width: 14px; height: 14px; }
+.status.c-acc { color: var(--m-text); }
+.status.c-idle { color: var(--m-muted); }
 .badge { font-size: 10.5px; font-weight: 600; padding: 2px 7px; border-radius: var(--m-radius-pill); color: var(--m-selected-ink); background: var(--m-selected-bg); white-space: nowrap; }
+.badge.warn { color: var(--m-warn); background: var(--m-quiet-bg); }
 
 .bar { height: 8px; border-radius: var(--m-radius-pill); background: var(--m-well); overflow: hidden; box-shadow: inset 0 0 0 1px var(--m-line); }
 .bar > span { display: block; height: 100%; width: 100%; border-radius: inherit; transform-origin: left center; background: linear-gradient(90deg, color-mix(in srgb, var(--battery) 60%, var(--m-bg)), var(--battery)); transition: transform 0.6s ease; }

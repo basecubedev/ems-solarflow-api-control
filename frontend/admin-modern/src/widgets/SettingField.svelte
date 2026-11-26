@@ -84,7 +84,7 @@
   {#if description}<p class="desc" lang={description.lang}>{description.text}</p>{/if}
   {#if risk || operating || departedText}
     <p class="badges">
-      {#if risk}<span class="badge risk" title={t(`settings.risk.${risk}.hint`)}>{t(`settings.risk.${risk}`)}</span>{/if}
+      {#if risk}<span class="badge warn" title={t(`settings.risk.${risk}.hint`)}>{t(`settings.risk.${risk}`)}</span>{/if}
       {#if operating}<span class="badge operating num" title={operating.hint} data-testid="operating-value">{operating.text}</span>{/if}
       {#if departedText}<span class="badge default">{t("settings.edit.defaultBadge", { value: departedText })}</span>{/if}
     </p>
@@ -98,8 +98,7 @@
   .unit { color: var(--m-muted); font-size: 12px; font-weight: 450; }
   .desc { margin: 0; color: var(--m-muted); font-size: 12.5px; overflow-wrap: anywhere; }
   .badges { display: flex; flex-wrap: wrap; gap: var(--s2); margin: 0; }
-  .risk { color: var(--m-warn); }
   .badge.default { color: var(--m-muted); background: transparent; box-shadow: inset 0 0 0 1px var(--m-line-strong); }
-  .badge.operating { color: var(--m-accent); }
+  .badge.operating { color: var(--m-text); background: var(--m-quiet-bg); }
   .live { color: var(--m-accent); }
 </style>
