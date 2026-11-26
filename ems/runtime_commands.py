@@ -315,6 +315,32 @@ def apply_configured_device_update(
     return {"device": entry_name, "state": device}
 
 
+def create_configured_device(runtime_state, name, identity, values, validation_context=None, *, source):
+    """Give a device a save adds its runtime entry ``values`` (ems.runtime_devices.new_runtime_entry); return the entry's name.
+
+    Validated as apply_configured_device_update validates a change, against
+    the config being saved; the serial is stamped as ``identity``. Written
+    under the file lock by RuntimeState.create_configured_device, which
+    names the cases it refuses; an entry the device owns by its name alone
+    is one, since the next start gives that entry its own values.
+    """
+
+    payload = {key: value for key, value in values.items() if key != "identity"}
+    checked = validate_device_values(name, payload, validation_context)
+    if "runtime_role" in checked:
+        checked["runtime_role_reason"] = source
+    if identity is not None:
+        checked["identity"] = identity
+    try:
+        entry_name = runtime_state.create_configured_device(name, identity, checked)
+    except ValueError as exc:
+        raise RuntimeWriteError(str(exc)) from exc
+    if entry_name is None:
+        raise RuntimeWriteError(f"runtime entry {name} changed since the review; reload and review again")
+    _log_update(source, "device", checked, device=entry_name)
+    return entry_name
+
+
 def _log_update(source, scope, values, device=None):
     where = {"device": device} if device else {}
     log_event(

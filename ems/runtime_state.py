@@ -22,6 +22,8 @@ from ems.file_io import (
     remove_stale_temp_files,
 )
 from ems.paths import install_root_for_config, resolve_schedules_path
+from ems.runtime_devices import clean_identity as _clean_identity
+from ems.runtime_devices import config_device_keys, config_entry_named, device_key, device_name, device_seed, owned_runtime_device, parked_values_for, runtime_device_for, serial_candidates, stored_devices
 from ems.logging_utils import log_event
 from ems.retired_defaults import (
     DEFAULTS_REVISION,
@@ -29,15 +31,6 @@ from ems.retired_defaults import (
     refresh_retired_defaults,
     stored_revision,
 )
-
-
-def _clean_identity(value):
-    """Return a non-empty stable identity string, or None."""
-
-    if not isinstance(value, str):
-        return None
-    value = value.strip()
-    return value or None
 
 
 def _sanitized_device(state):
@@ -50,97 +43,17 @@ def _sanitized_device(state):
     return entry
 
 
-def runtime_device_for(devices, name, identity):
-    """The runtime-state entry a configured device owns, by the rule the EMS starts with.
-
-    That is the entry stamped with the device's serial, else the entry under its
-    name unless that one carries another serial; None when there is neither.
-    Every caller that joins a config device to its runtime entry asks this, so
-    the EMS and the Admin cannot disagree about which device an entry is.
-    """
-
-    ident = _clean_identity(identity)
-    if ident is not None:
-        for entry_name, state in devices.items():
-            if isinstance(state, dict) and _clean_identity(state.get("identity")) == ident:
-                return entry_name
-    state = devices.get(name)
-    if isinstance(state, dict) and _clean_identity(state.get("identity")) in (None, ident):
-        return name
-    return None
-
-
-def owned_runtime_device(devices, name, identity):
-    """runtime_device_for for a writer: None also where several entries carry the serial.
-
-    The EMS's own matching cannot tell such devices apart, so a writer that
-    followed the first of them could reach the wrong one.
-    """
-
-    ident = _clean_identity(identity)
-    carriers = [state for state in devices.values() if isinstance(state, dict) and ident is not None and _clean_identity(state.get("identity")) == ident]
-    return None if len(carriers) > 1 else runtime_device_for(devices, name, identity)
-
-
 PARKED_DEVICES_KEY = "parked_devices"
 
 
 def parked_key(name, identity):
-    """The key a pruned device's operating values are parked under: its serial, else its name."""
+    """The key v0.10.8 parked a pruned device's operating values under: its serial, else its name."""
 
     return f"identity:{identity}" if identity is not None else f"name:{name}"
 
 
-def config_parked_keys(devices):
-    """The parked keys the config's device entries still name: each entry's serial, as the EMS stamps it, and its name.
-
-    None when the config names no device, as before it is loaded: then nothing
-    parked is dropped.
-    """
-
-    from ems.read_only_devices import is_read_only_device_config
-
-    if not isinstance(devices, list) or not devices:
-        return None
-    keys = set()
-    for entry in devices:
-        if not isinstance(entry, dict) or is_read_only_device_config(entry):
-            continue
-        name = str(entry.get("name") or "").strip()
-        if name:
-            keys.add(parked_key(name, None))
-        mqtt = entry.get("mqtt") if isinstance(entry.get("mqtt"), dict) else {}
-        for value in (entry.get("sn"), entry.get("serial_number"), mqtt.get("device_id")):
-            text = "" if value is None or isinstance(value, (bool, dict, list)) else str(value).strip()
-            if text:
-                keys.add(parked_key(name, text))
-    return keys
-
-
-def _park(parked, name, state):
-    from ems.runtime_commands import OPERATION_DEVICE_KEYS
-
-    if not isinstance(state, dict):
-        return
-    values = {key: copy.deepcopy(state[key]) for key in sorted(OPERATION_DEVICE_KEYS) if key in state}
-    if values:
-        parked[parked_key(name, _clean_identity(state.get("identity")))] = values
-
-
-def parked_values(parked, name, identity):
-    """The operating values parked for the device ``name`` with serial ``identity``: by its serial, else its name."""
-
-    if not isinstance(parked, dict):
-        return {}
-    keys = [parked_key(name, identity)] + ([parked_key(name, None)] if identity is not None else [])
-    for key in keys:
-        if isinstance(parked.get(key), dict):
-            return parked[key]
-    return {}
-
-
 def _unpark(parked, name, identity, configured=None):
-    """The parked values a device built again gets back, and drops them from ``parked``.
+    """The values v0.10.8 parked for a device that has no runtime entry, dropped from ``parked``.
 
     Found under its name instead of its serial, they belonged to another
     serial (a replaced inverter): they fill only what the device's config
@@ -156,32 +69,50 @@ def _unpark(parked, name, identity, configured=None):
     return {}
 
 
-def reconcile_runtime_devices(loaded_devices, default_devices, *, prune, parked=None, named=None, configured=None):
+def _saved_device_keys(config_path):
+    """config_device_keys of the devices ``config.json`` at ``config_path`` names now; empty where it cannot be read.
+
+    An Admin save that adds a device writes the device's runtime entry before
+    the config, holding the runtime-state lock until the config is written; a
+    start that read the config before that save keeps the entry by this.
+    """
+
+    if not config_path:
+        return set()
+    try:
+        with open(config_path, encoding="utf-8") as handle:
+            data = json.load(handle)
+    except (OSError, ValueError):
+        return set()
+    devices = data.get("devices") if isinstance(data, dict) else None
+    return config_device_keys(devices) if isinstance(devices, list) else set()
+
+
+def reconcile_runtime_devices(loaded_devices, default_devices, *, prune, parked=None, keep=None, configured=None):
     """Reconcile loaded runtime device state against the configured devices.
 
-    Devices are matched to their config entry by stable identity (serial),
-    falling back to the device name for entries written before an identity was
-    stamped. A matched entry keeps its operator settings under the (possibly
-    new) config name, so renaming a device in config never loses its runtime
-    settings. Unmatched loaded entries are orphans: dropped when ``prune`` is
-    true (a device removed from config), kept otherwise.
+    ``default_devices`` holds an entry for every device the EMS can control,
+    switched on or off (ems.runtime_devices.stored_devices). Devices are
+    matched to their entry by stable identity (serial), falling back to the
+    device name for entries written before an identity was stamped. A matched
+    entry keeps its operator settings under the (possibly new) config name, so
+    renaming a device in config never loses its runtime settings. With
+    ``prune``, an unmatched entry is dropped only when no config entry names
+    it any more (``keep``, ems.runtime_devices.config_device_keys): a device
+    removed from ``config.json``. One read over MQTT without control keeps its
+    entry until it controls again.
 
-    ``parked``, when given, keeps the operating values (OPERATION_DEVICE_KEYS)
-    of a pruned entry, under its serial or else its name: they live in the
-    runtime state only (docs/developer/settings-operation-store.md), so a
-    device switched off, turned telemetry-only or no longer built gets them
-    back when it is built again, over what its config entry seeds: they are
-    the values it ran with, and the Admin changes them where they are parked
-    (RuntimeState.update_parked). ``named``, the parked keys the config's
-    device entries still name (config_parked_keys), drops the values of a
-    device removed from the config: one added back starts from its entry, and
-    so does one whose serial was changed by hand (a replaced inverter).
+    ``parked``, the operating values v0.10.8 kept for pruned devices, fills a
+    device that gets a new entry here, once; what is left of it belongs to
+    devices the config no longer names.
 
     Returns ``(devices, changes)`` where ``changes`` carries ``added``,
     ``renamed``, ``pruned``, ``rekeyed`` and ``restored`` lists for auditing. When no
     configured devices are known (empty/unreadable config) reconciliation is a
     fail-closed no-op: the loaded devices are kept verbatim and never pruned.
     """
+
+    from ems.runtime_devices import names_a_runtime_entry
 
     if not isinstance(loaded_devices, dict):
         loaded_devices = {}
@@ -226,23 +157,18 @@ def reconcile_runtime_devices(loaded_devices, default_devices, *, prune, parked=
     for name, state in loaded_devices.items():
         if name in consumed:
             continue
-        if prune:
+        if prune and (keep is None or name in merged or not names_a_runtime_entry(keep, name, state)):
             ident = _clean_identity(state.get("identity")) if isinstance(state, dict) else None
-            if parked is not None and (named is None or parked_key(name, ident) in named):
-                _park(parked, name, state)
             changes["pruned"].append({"name": name, "identity": ident})
         elif name not in merged:
             merged[name] = _sanitized_device(state)
 
-    if parked is not None:
+    if parked:
         for added in changes["added"]:
             restored = _unpark(parked, added["name"], added["identity"], configured)
             if restored:
                 merged[added["name"]].update(restored)
                 changes["restored"].append({**added, "keys": sorted(restored)})
-    if parked is not None and named is not None:
-        for key in [key for key in parked if key not in named]:
-            del parked[key]
     return merged, changes
 
 
@@ -252,8 +178,8 @@ def merge_runtime_defaults(data, defaults):
     Non-destructive: orphaned device entries (present on disk but not in the
     configured devices) are kept. Authoritative pruning of removed devices
     happens only in :meth:`RuntimeState.load_or_create`. A device the defaults
-    add gets its parked values back here too, so a writer that saves the
-    merge (emsctl before the EMS restarts) cannot leave it at its seed.
+    add gets the values v0.10.8 parked for it here too, so a writer that saves
+    the merge (emsctl before the EMS restarts) cannot leave it at its seed.
     """
 
     if not isinstance(data, dict):
@@ -516,6 +442,7 @@ def start_runtime_state(path, defaults, config_path, defaults_revision=None, pla
         if removed:
             log_event(logging.INFO, "stale_temp_files_removed", path=stale_path, files=",".join(removed))
     state = RuntimeState(path, defaults, defaults_revision)
+    state.config_path = config_path
     with state._file_lock(strict=False):
         reset = _settle_runtime_reset(path, config_path)
         state.load_or_create(fresh=reset)
@@ -624,6 +551,7 @@ class RuntimeState:
         self.left_unreadable = False
         self.started_control_off = False
         self.last_signature = None
+        self.config_path = None
         self.lock = threading.RLock()
         self._held = threading.local()
 
@@ -756,20 +684,20 @@ class RuntimeState:
         loaded_devices = loaded.get("devices") if isinstance(loaded, dict) else {}
         loaded_parked = loaded.get(PARKED_DEVICES_KEY) if isinstance(loaded, dict) else None
         parked = copy.deepcopy(loaded_parked) if isinstance(loaded_parked, dict) else {}
+        default_devices = self.defaults.get("devices", {})
         reconciled_devices, changes = reconcile_runtime_devices(
             loaded_devices if isinstance(loaded_devices, dict) else {},
-            self.defaults.get("devices", {}),
+            default_devices,
             prune=True,
             parked=parked,
-            named=config_parked_keys(cfg.ZENDURE_CONFIG),
-            configured=cfg.device_config_entry,
+            keep=config_device_keys(cfg.ZENDURE_CONFIG) | _saved_device_keys(self.config_path),
+            configured=lambda name: config_entry_named(cfg.ZENDURE_CONFIG, name),
         )
         merged["devices"] = reconciled_devices
-        if parked:
-            merged[PARKED_DEVICES_KEY] = parked
-        else:
-            merged.pop(PARKED_DEVICES_KEY, None)
-        parked_changed = parked != (loaded_parked if isinstance(loaded_parked, dict) else {})
+        parked_changed = bool(default_devices) and PARKED_DEVICES_KEY in merged
+        if parked_changed:
+            self._keep_parked_for_unstored(reconciled_devices, parked, changes)
+            merged.pop(PARKED_DEVICES_KEY)
 
         merged, refreshed = self._refresh_retired_defaults(merged)
         released = _released_control_off_start(merged)
@@ -964,6 +892,28 @@ class RuntimeState:
         except OSError as e:
             log_event(logging.WARNING, "runtime_state_last_good_failed", path=self.path, error=e)
 
+    @staticmethod
+    def _keep_parked_for_unstored(devices, parked, changes):
+        """Give a device still in the config that gets no entry of its own the values v0.10.8 parked for it, as its entry.
+
+        Read over MQTT without control, or with an ``sn`` and ``serial_number``
+        that disagree, it keeps such an entry until it leaves ``config.json``
+        (config_device_keys); what is left belongs to removed devices.
+        """
+
+        entries = cfg.ZENDURE_CONFIG if isinstance(cfg.ZENDURE_CONFIG, list) else []
+        for entry in entries:
+            name = device_name(entry)
+            if not parked or not name or name in devices or (device_key(entry) is None and not serial_candidates(entry)):
+                continue
+            values, serial = parked_values_for(parked, entry)
+            if serial is None and serial_candidates(entry):
+                values = {key: value for key, value in values.items() if key not in entry}
+                serial = serial_candidates(entry)[0]
+            if values:
+                devices[name] = {**values, **({"identity": serial} if serial else {})}
+                changes["restored"].append({"name": name, "identity": serial, "keys": sorted(values)})
+
     def _fresh_data(self):
         data = merge_runtime_defaults({}, self.defaults)
         if self.defaults_revision is not None:
@@ -1114,6 +1064,30 @@ class RuntimeState:
                 path=self.path
             )
 
+    def save_unless_changed(self):
+        """save_atomic, refused with OSError where the file changed since this instance read or wrote it.
+
+        The start's move of operating values persists the state the start
+        built; a runtime writer that wrote in between, such as the Admin
+        creating an added device's entry, is not overwritten with it.
+        """
+
+        with self._file_lock(strict=False):
+            try:
+                current = file_signature(os.stat(self.path))
+            except FileNotFoundError:
+                current = None
+            if current != self.last_signature:
+                raise OSError(f"{self.path} changed since the EMS read it")
+            self.save_atomic()
+
+    @contextlib.contextmanager
+    def holding_lock(self):
+        """The cross-process lock, strict, for a writer that must finish another write before any other writer sees this one."""
+
+        with self._file_lock(strict=True):
+            yield
+
     def snapshot(self):
         with self.lock:
             return copy.deepcopy(self.data)
@@ -1128,19 +1102,6 @@ class RuntimeState:
             result = copy.deepcopy(section)
             self.save_atomic()
             return result
-
-    def update_parked(self, name, identity, values):
-        """Change the operating values parked for the device ``name`` with serial ``identity``; False when none are parked."""
-
-        with self._file_lock(strict=True):
-            self._refresh_from_disk(force=True)
-            parked = self.data.get(PARKED_DEVICES_KEY)
-            entry = parked_values(parked, name, identity)
-            if not entry:
-                return False
-            entry.update(values)
-            self.save_atomic()
-            return True
 
     def update_device(self, device_name, values):
         with self._file_lock(strict=True):
@@ -1164,6 +1125,33 @@ class RuntimeState:
                 known = ", ".join(sorted(devices)) if isinstance(devices, dict) and devices else "(none)"
                 raise KeyError(f"no runtime entry for device {name}; known devices: {known}")
             return entry_name, self._write_device(entry_name, values)
+
+    def create_configured_device(self, name, identity, values):
+        """Give a device the config is about to name its runtime entry ``values``; return the entry's name, or None.
+
+        Under the file lock, by the rule the EMS starts with: an entry the
+        device owns by its serial (owned_runtime_device) takes the values in
+        place; one it owns by its name alone is left untouched and answers
+        None. A name an entry of another device holds is never taken over
+        (ValueError): until its next start the running EMS still drives that
+        device under that name, and reads and saves that entry as its own.
+        """
+
+        with self._file_lock(strict=True):
+            self._refresh_from_disk(force=True)
+            devices = self.data.setdefault("devices", {})
+            if not isinstance(devices, dict):
+                raise ValueError("runtime devices must be an object")
+            entry_name = owned_runtime_device(devices, name, identity)
+            if entry_name is not None and _clean_identity((devices.get(entry_name) or {}).get("identity")) is None:
+                return None
+            if entry_name is None:
+                if name in devices:
+                    raise ValueError(f"runtime entry {name} belongs to another device")
+                entry_name = name
+            devices[entry_name] = copy.deepcopy(values)
+            self.save_atomic()
+            return entry_name
 
     def _write_device(self, device_name, values):
         devices = self.data.setdefault("devices", {})
@@ -1206,8 +1194,14 @@ class RuntimeState:
             return previous != value
 
 
-def build_runtime_defaults(devices):
-    """Build runtime defaults from current device configuration."""
+def build_runtime_defaults(devices, config_devices=None):
+    """Build runtime defaults from current device configuration.
+
+    One entry for each built device in ``devices``, and with
+    ``config_devices``, the config's device list, one seeded from its entry
+    for each device the EMS can control but does not build: switched off,
+    its values wait in its own entry (ems.runtime_devices.stored_devices).
+    """
 
     device_defaults = {}
 
@@ -1234,6 +1228,13 @@ def build_runtime_defaults(devices):
         if identity is not None:
             entry["identity"] = identity
         device_defaults[dev.name] = entry
+
+    if config_devices is not None:
+        identities = {entry.get("identity") for entry in device_defaults.values()} - {None}
+        for name, serial, config_entry in stored_devices(config_devices):
+            if name in device_defaults or (serial is not None and serial in identities):
+                continue
+            device_defaults[name] = device_seed(config_entry, cfg.MAX_DEVICE_POWER)
 
     return {
         "system": {

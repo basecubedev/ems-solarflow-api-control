@@ -196,16 +196,24 @@ def test_a_switched_off_entry_sharing_a_running_devices_name_keeps_its_values(tm
     assert saved["devices"][2]["pv_priority_factor"] == 4.0
 
 
-def test_the_move_leaves_parked_values_where_they_wait(tmp_path, monkeypatch):
-    """A switched-off device's parked values come back when it is built again, not through config.json."""
+def test_a_device_without_a_runtime_entry_keeps_its_values_in_its_config_entry(tmp_path, monkeypatch):
+    """It never ran: its next start seeds its entry from them."""
 
-    runtime = _runtime()
-    runtime["parked_devices"] = {"identity:B": {"pv_priority_factor": 3.0, "ac_discharge_enabled": False}}
-
-    _, saved, _, _ = _move(tmp_path, _config(), runtime, monkeypatch)
+    _, saved, _, _ = _move(tmp_path, _config(), _runtime(), monkeypatch)
 
     assert saved["devices"][1] == _config()["devices"][1]
-    assert runtime["parked_devices"] == {"identity:B": {"pv_priority_factor": 3.0, "ac_discharge_enabled": False}}
+
+
+def test_a_switched_off_device_with_a_runtime_entry_loses_its_values_from_the_config(tmp_path, monkeypatch):
+    """Backlog 73: its entry is its one place, switched on or off."""
+
+    runtime = _runtime()
+    runtime["devices"]["WR2"] = {"identity": "B", "enabled": True, "max_power": 600, "pv_priority_factor": 2.0}
+
+    moved, saved, _, _ = _move(tmp_path, _config(), runtime, monkeypatch)
+
+    assert "pv_priority_factor" not in saved["devices"][1]
+    assert "devices[1].pv_priority_factor" in moved
 
 
 def test_a_runtime_state_that_cannot_be_saved_moves_nothing_and_starts(tmp_path, monkeypatch):
@@ -233,7 +241,9 @@ def _device_defaults(identity):
             "ac_charge_enabled": True, "ac_discharge_enabled": True, "offgrid_socket_mode": "off"}
 
 
-def test_a_pruned_device_parks_its_operating_values_and_gets_them_back_when_built_again(tmp_path, monkeypatch):
+def test_a_switched_off_device_keeps_its_runtime_entry_and_runs_with_it_when_built_again(tmp_path, monkeypatch):
+    """Backlog 73: one place per device; switching it off no longer moves its values anywhere."""
+
     from ems.runtime_state import RuntimeState
 
     monkeypatch.setattr(cfg, "ZENDURE_CONFIG", [{"name": "WR1", "sn": "A"}, {"name": "WR2", "sn": "B", "enabled": False}])
@@ -248,17 +258,14 @@ def test_a_pruned_device_parks_its_operating_values_and_gets_them_back_when_buil
 
     switched_off = RuntimeState(str(path), one).load_or_create()
 
-    assert "WR2" not in switched_off["devices"]
-    assert json.loads(path.read_text())["parked_devices"] == {"identity:B": {
-        "ac_charge_enabled": True, "ac_discharge_enabled": False, "offgrid_socket_mode": "off", "pv_priority_factor": 3.0,
-    }}
+    assert switched_off["devices"]["WR2"]["pv_priority_factor"] == 3.0
+    assert "parked_devices" not in json.loads(path.read_text())
 
     switched_on = RuntimeState(str(path), both).load_or_create()
 
     assert switched_on["devices"]["WR2"]["pv_priority_factor"] == 3.0
     assert switched_on["devices"]["WR2"]["ac_discharge_enabled"] is False
-    assert switched_on["devices"]["WR2"]["max_power"] == 800
-    assert "parked_devices" not in json.loads(path.read_text())
+    assert switched_on["devices"]["WR2"]["max_power"] == 500
 
 
 def test_a_parked_value_wins_over_what_the_config_entry_seeds(tmp_path, monkeypatch):
@@ -280,16 +287,54 @@ def test_a_parked_value_wins_over_what_the_config_entry_seeds(tmp_path, monkeypa
     assert built["devices"]["WR2"]["ac_discharge_enabled"] is False
 
 
-def test_the_admin_changes_a_parked_value_where_it_is_parked(tmp_path):
+def test_a_device_removed_from_the_config_loses_its_runtime_entry(tmp_path, monkeypatch):
     from ems.runtime_state import RuntimeState
 
     path = tmp_path / "runtime-state.json"
-    path.write_text(json.dumps({"system": {}, "devices": {}, "parked_devices": {"identity:B": {"pv_priority_factor": 3.0}}}))
-    state = RuntimeState(str(path), {"system": {}, "devices": {}})
+    path.write_text(json.dumps({"system": {}, "devices": {
+        "WR1": _device_defaults("A"),
+        "WR2": {**_device_defaults("B"), "ac_discharge_enabled": False},
+        "OLD": {"max_power": 300},
+    }}))
+    monkeypatch.setattr(cfg, "ZENDURE_CONFIG", [{"name": "WR1", "sn": "A"}])
 
-    assert state.update_parked("WR2", "B", {"pv_priority_factor": 1.5}) is True
-    assert state.update_parked("WR9", "Z", {"pv_priority_factor": 1.5}) is False
-    assert json.loads(path.read_text())["parked_devices"] == {"identity:B": {"pv_priority_factor": 1.5}}
+    loaded = RuntimeState(str(path), {"system": {}, "devices": {"WR1": _device_defaults("A")}}).load_or_create()
+
+    assert set(loaded["devices"]) == {"WR1"}
+
+
+def test_a_device_read_without_control_keeps_its_runtime_entry_without_getting_one(tmp_path, monkeypatch):
+    from ems.runtime_state import RuntimeState
+
+    telemetry = {"type": "zendure_mqtt", "name": "MQ", "serial_number": "M1",
+                 "mqtt": {"topic_family": "zensdk_ha_scalar", "device_id": "M1"},
+                 "capabilities": {"read_power": True, "write_output_limit": False}}
+    path = tmp_path / "runtime-state.json"
+    path.write_text(json.dumps({"system": {}, "devices": {
+        "WR1": _device_defaults("A"),
+        "MQ": {**_device_defaults("M1"), "pv_priority_factor": 2.5},
+    }}))
+    monkeypatch.setattr(cfg, "ZENDURE_CONFIG", [{"name": "WR1", "sn": "A"}, telemetry])
+
+    loaded = RuntimeState(str(path), {"system": {}, "devices": {"WR1": _device_defaults("A")}}).load_or_create()
+
+    assert loaded["devices"]["MQ"]["pv_priority_factor"] == 2.5
+
+
+def test_v0_10_8_parked_values_fill_the_entry_of_the_device_they_were_parked_for_once(tmp_path, monkeypatch):
+    from ems.runtime_state import RuntimeState
+
+    path = tmp_path / "runtime-state.json"
+    path.write_text(json.dumps({"system": {}, "devices": {"WR1": _device_defaults("A")}, "parked_devices": {
+        "identity:B": {"pv_priority_factor": 3.0}, "identity:Z": {"pv_priority_factor": 9.0},
+    }}))
+    monkeypatch.setattr(cfg, "ZENDURE_CONFIG", [{"name": "WR1", "sn": "A"}, {"name": "WR2", "sn": "B", "enabled": False}])
+    defaults = {"system": {}, "devices": {"WR1": _device_defaults("A"), "WR2": _device_defaults("B")}}
+
+    loaded = RuntimeState(str(path), defaults).load_or_create()
+
+    assert loaded["devices"]["WR2"]["pv_priority_factor"] == 3.0
+    assert "parked_devices" not in json.loads(path.read_text())
 
 
 def test_a_device_removed_from_the_config_loses_its_parked_values(tmp_path, monkeypatch):

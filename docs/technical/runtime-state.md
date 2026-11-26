@@ -259,11 +259,19 @@ Devices are matched to their config entry by a stable `identity` (serial), so:
   unchanged, the operator's runtime settings (`max_power`,
   `pv_priority_factor`, `ac_charge_power_w`, `offgrid_socket_mode`, …) migrate
   to the new name instead of being lost.
+- **Switch off** — a device switched off, or read over MQTT without control,
+  keeps its entry and its values; the EMS only stops building it. One
+  switched off in the Admin also keeps control off in its entry, so switched
+  back on by hand in `config.json` it comes back with control off; the
+  Admin's switch-on sets control on with it. A rollback to v0.10.8 and back
+  loses that: v0.10.8 parks only the operating values, so the device comes
+  back with control on.
 - **Remove** — a device no longer in config is pruned.
 
 Telemetry-only Zendure MQTT devices carry no controllable runtime settings and
-deliberately have no runtime-state entry (they are not flagged as missing by
-`diagnose`).
+get no runtime-state entry created (they are not flagged as missing by
+`diagnose`); one they had while they controlled stays, and so does one the
+first start of this release makes from values v0.10.8 parked for them.
 
 Reconciliation is **fail-closed**: if the configured device list is empty or the
 config is unreadable, nothing is pruned. Before any destructive change
@@ -368,25 +376,47 @@ service (`admin/operation_settings.py`), creating this file where the EMS has
 not yet, with the config's defaults revision. Only a value the page changed
 from the one it loaded is written (the draft carries the loaded ones as
 `operating_base`), so a value the dashboard, the scheduler or `emsctl` set
-after the page loaded stays. A device the running EMS keeps no runtime entry
-and no parked values for (added since it started, never run) keeps its
-operating values in its config entry until a live start with the device built
-moves them; one that ran keeps them parked (below). The preview lists the
-others as taking effect at once.
+after the page loaded stays. A device the save adds gets its runtime entry
+from the Admin before `config.json` is written, with the values the page set
+for it (the preview's `runtime_entries`) and its serial as `identity`, and its
+config entry keeps no operating value; when that entry cannot be written, or
+`config.json` changed since the review, the apply saves nothing. The Admin
+holds this file's lock from the entry until `config.json` is written, a
+start that read the config before keeps an entry the config on disk names,
+and the start's move of operating values saves nothing over a file another
+writer changed since the start read it (the values stay in `config.json` for
+the next start). An entry written before a later step of the apply failed
+belongs to no device in `config.json`, and the next start removes it.
+Two cases keep the old way, operating values in the config entry until the
+next live start moves them: a save while a fresh setup's reset is pending
+(the next start builds this file from the config), and a device added under a
+name an entry of another device still holds, one renamed or removed since the
+EMS started included (until its next start the running EMS drives that device
+under that name). A device that was in the config
+before but never ran keeps its values there as well. The preview lists the
+values of a device the running EMS drives as taking effect at once, and those
+of a device switched off, added or switched on since the EMS started (by the
+devices its control snapshot names, `loaded_devices`) as waiting for it to
+run.
 
-When the EMS prunes the entry of a device it no longer builds (switched off,
-telemetry-only), it parks that entry's operating values under
-`parked_devices`, keyed by the device's serial or else its name. A device
-built again gets them back (`runtime_device_values_restored`), over what its
-config entry seeds: they are the values it ran with. Its power and its
-control switch are not parked: it comes back at its limit with control on. A
-device whose serial was changed by hand, as for a replaced inverter, starts
-like a new one from what its entry holds. A
-device removed from
-`config.json` loses its parked values at the next start, so one added back
-starts from what its entry holds. **Settings & devices**
-shows such a device's parked values and changes them where they are parked; a
-device that never ran keeps its values in its config entry instead. A save
+Every device the EMS can control has an entry, switched on or off: the EMS
+creates one at its start, seeded from the device's config entry, and drops it
+only when the device is removed from `config.json`, so a device switched off,
+or read over MQTT without control for a while, comes back with the values it
+ran with. A device whose serial was changed by hand, as for a replaced
+inverter, starts like a new one from what its entry holds. The
+`parked_devices` that v0.10.8 kept for a switched-off device fill its entry
+once at the first start of this release (`runtime_device_values_restored`);
+a device that gets no entry of its own (read without control) gets them as its
+entry, and those of a device no longer in `config.json` are dropped.
+Nothing parks values any more. Until that first start the Admin shows such a
+device's values from its config entry, and a value saved there in that window
+gives way to the parked one; the Admin's update restarts the EMS, so the
+window is short. Two devices under one name -- possible only by
+a hand edit -- share one entry: the one the EMS builds keeps it, and the other
+loses what it held. **Settings & devices** shows a switched-off device's values
+from its entry and changes them there; a device that never ran keeps its
+values in its config entry instead. A save
 that changes the serial a device's entry is keyed by writes the device's
 values into its config entry, since the next start finds no entry for the new
 serial. While a fresh setup's reset request still names the
@@ -415,14 +445,15 @@ writers the dashboard uses:
   (`operating_power_above_limit`), so a value written by hand never drives the
   devices past it either.
 
-A device's writes go to the runtime entry the device owns. EMS seeds one for
-each device it builds to control when it starts, over HTTP or MQTT, keeps it
-until it starts again, switched off meanwhile or not, and prunes the rest then:
-a device switched off, a read-only one, and one read over MQTT without control
-(`external_mqtt`, or `zendure_mqtt` without `write_output_limit`). The entries
+A device's writes go to the runtime entry the device owns. EMS seeds one at
+its start for each device it can control over HTTP or MQTT, switched on or
+off, and keeps it until the device leaves `config.json`; a read-only device
+has none, and one read over MQTT without control (`external_mqtt`, or
+`zendure_mqtt` without `write_output_limit`) keeps an entry it had but gets
+none created. The entries
 that name one serial (or, without a serial, one name) are one device, and its
 runtime entry is the one the EMS starts with
-(`ems.runtime_state.runtime_device_for`): the entry stamped with that serial,
+(`ems.runtime_devices.runtime_device_for`): the entry stamped with that serial,
 else the one under the name that carries no other serial. A device renamed
 since the EMS started, or two devices that swapped names, so reach the entry
 the running EMS reads for them. The serial is read as the EMS stamps it (`sn`,

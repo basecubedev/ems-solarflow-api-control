@@ -24,6 +24,7 @@ from admin.maintenance_config import (
     preview_maintenance_config,
 )
 from ems.config_catalog import build_default_template
+from ems.runtime_commands import OPERATION_DEVICE_KEYS
 
 pytestmark = [
     pytest.mark.admin,
@@ -64,9 +65,17 @@ def _base_config(devices):
 
 
 def _merged_devices(draft, tmp_path):
+    """The preview's devices as the EMS starts them: an added device's operating values from the runtime entry the apply creates."""
+
     preview = preview_maintenance_config(draft, base_dir=str(tmp_path))
     assert preview["status"] == "ok"
-    return preview["preview"]["devices"], preview
+    entries = preview.get("runtime_entries") or {}
+    devices = []
+    for device in preview["preview"]["devices"]:
+        entry = entries.get(device.get("name")) or {}
+        assert not set(device) & set(entry) & OPERATION_DEVICE_KEYS
+        devices.append({**device, **{key: value for key, value in entry.items() if key in OPERATION_DEVICE_KEYS}})
+    return devices, preview
 
 
 def _local_broker_config(devices):

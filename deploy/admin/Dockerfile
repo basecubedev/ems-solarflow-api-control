@@ -132,6 +132,7 @@ COPY ems/logging_utils.py ./ems/logging_utils.py
 # reader/writer, so it must ship in the Admin image.
 COPY ems/file_io.py ./ems/file_io.py
 COPY ems/runtime_state.py ./ems/runtime_state.py
+COPY ems/runtime_devices.py ./ems/runtime_devices.py
 COPY ems/history/__init__.py ./ems/history/__init__.py
 COPY ems/history/provider.py ./ems/history/provider.py
 COPY ems/history/schema.py ./ems/history/schema.py

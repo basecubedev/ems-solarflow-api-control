@@ -143,6 +143,7 @@ construction, controller startup, main loop. All real implementation lives in `e
 - `sml.py` — SML 1.04 telegram decoder (frame CRC, list entries, signed grid power) for meters read over their IR port; import-side-effect-free
 - `tibber_pulse.py` — Tibber Pulse IR bridge as an experimental grid meter: a cached background reader that takes the bridge's `/ws` stream and polls only as the fallback, never both at once; the control loop never waits on it; import-side-effect-free
 - `runtime_state.py` — mutable runtime-state read/write
+- `runtime_devices.py` — which runtime-state entry a device's config entry owns (serial, else name) and what a new one starts with; every device the EMS can control keeps one, switched on or off, until it leaves `config.json`; the EMS and the Admin join entries through it; import-side-effect-free
 - `runtime_intents.py` — runtime AC mode intent (`ac_output`/`ac_input`) reconciliation
 - `target_control.py` — capability detection and target/output calculation (core control math)
 - `controller.py` — main EMS control loop, ties everything together (largest module)

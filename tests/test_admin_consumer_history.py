@@ -197,3 +197,30 @@ def test_the_console_has_words_for_every_kind_of_question():
     listed = re.search(r"HISTORY_KINDS = Object\.freeze\((\[[^\]]*\])\)", source)
 
     assert json.loads(listed.group(1)) == [RENAMED, MOVED, REUSED]
+
+
+@pytest.mark.parametrize("adds_a_device", [False, True])
+def test_a_history_answer_reaches_the_saved_config_when_the_save_also_adds_a_device(tmp_path, adds_a_device):
+    """Review: the config without the added device's operating values was copied before the answers were written."""
+
+    from admin.consumer_history import NEW
+    from admin.maintenance_config import load_maintenance_config, prepare_maintenance_config_apply, preview_maintenance_config
+
+    config = _config(_consumer("Washer", "washer"))
+    config["zendure_mqtt"] = {"brokers": {"house": {"enabled": True, "source": "local_mqtt", "host": "10.0.0.5"}}}
+    _install(tmp_path, config)
+    (tmp_path / "runtime-state.json").write_text(json.dumps({"system": {}, "devices": {"WR1": {"identity": "SN1", "enabled": True, "max_power": 800}}}))
+    loaded = load_maintenance_config(base_dir=str(tmp_path), identity_token_key=IDENTITY_KEY)
+    draft = copy.deepcopy(loaded["draft"])
+    next(item for item in draft["devices"] if item.get("name") == "Washer")["name"] = "Waschmaschine"
+    if adds_a_device:
+        draft["devices"].append({"name": "WR2", "ip": "192.0.2.11", "sn": "SN2", "pv_priority_factor": 2.0})
+    draft["consumer_history"] = {"Waschmaschine": NEW}
+
+    preview = preview_maintenance_config(draft, base_dir=str(tmp_path), identity_token_key=IDENTITY_KEY)
+    prepared = prepare_maintenance_config_apply(draft, loaded["revision"], base_dir=str(tmp_path), identity_token_key=IDENTITY_KEY)
+
+    shown = next(item for item in preview["preview"]["devices"] if item.get("name") == "Waschmaschine")
+    saved = next(item for item in json.loads(prepared["payload"])["devices"] if item.get("name") == "Waschmaschine")
+    assert (shown.get("history_id"), saved.get("history_id")) == ("washer-2", "washer-2")
+    assert bool(prepared.get("runtime_entries")) is adds_a_device

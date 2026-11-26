@@ -366,13 +366,13 @@ def main():
 
     runtime_state = start_runtime_state(
         cfg.runtime_state_path(),
-        build_runtime_defaults(devices),
+        build_runtime_defaults(devices, cfg.ZENDURE_CONFIG),
         cfg.config_path(),
         cfg.runtime_defaults_revision(),
         placeholder_start=bool(cfg.template_placeholder_paths(cfg.CONFIG)),
     )
     cfg.move_startup_operating_values(
-        runtime_state.data, runtime_state.save_atomic, loaded=not runtime_state.load_failed
+        runtime_state.data, runtime_state.save_unless_changed, loaded=not runtime_state.load_failed
     )
     runtime_validation = LiveValidationContext(cfg.config_path(), cfg.CONFIG, runtime_state)
     schedule_zone = local_zone()
@@ -474,6 +474,7 @@ def main():
                     device_settings=lambda: offered_by_device(devices),
                 ),
                 device_settings=lambda: offered_by_device(devices),
+                built_devices=[dev.name for dev in devices],
                 socket_path=resolve_dashboard_socket_path(resolve_data_dir(base_dir=base_dir)),
                 signpost=cfg.safe_bool(cfg.DASHBOARD_CONFIG.get("signpost", True), True),
             )
