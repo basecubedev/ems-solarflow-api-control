@@ -91,7 +91,14 @@ gate**. It runs on every pull request and on pushes to `main`:
 - `Repo power-control regression`
 - `Repo System Build compatibility`
 - `Repo docker smoke test`, `Repo docker-first setup e2e`,
-  `Repo InfluxDB analytics e2e`
+  `Repo InfluxDB analytics e2e`. The docker-first job proves the bundled
+  InfluxDB pin on the real images (`tests/test_influx_upgrade_real_images.py`):
+  the upgrade and the way back from the oldest image an installation may run,
+  `influxdb:2.7.12`, and from the pin of the commit the run compares with (a
+  pull request's base, a push's previous commit), which a step before the
+  tests reads and hands over as `EMS_INFLUX_UPGRADE_FROM`. Where the current pin
+  is no upgrade from it -- the same, or a revert of a bump -- only the oldest
+  start runs, and a base commit that cannot be fetched is named as a warning.
 - `Repo Docker browser e2e` — the tests marked both `docker` and `browser`,
   which need a real Mosquitto and Chromium and Firefox at once: the MQTT
   mapping from a played Shelly plug to the EMS reading it

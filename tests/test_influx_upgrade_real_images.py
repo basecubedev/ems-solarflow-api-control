@@ -3,12 +3,17 @@
 """The Admin's InfluxDB upgrade and its way back, against real images and a real Docker.
 
 The installation is the one the Docker-first installer writes, reduced to the
-``influxdb`` service, and it starts on the oldest version installations still
-run (2.7). The upgrade goes to the pinned image, so a Dependabot bump of the
-pin is proven here before it merges: the converted data keeps every point,
-bucket, task and the EMS token. The way back proves the other half: the
-previous image refuses what the new one converted, and the upgrade's backup
-restored on it brings back exactly what InfluxDB held at the backup.
+``influxdb`` service. It starts on the oldest version installations still run
+(2.7) and, where ``EMS_INFLUX_UPGRADE_FROM`` names it, on the image the base
+branch pinned, the one most installations run when a bump arrives; CI sets it
+from the pull request's base, or from the commit a push to main replaced. A
+pin that is no upgrade from it, as in a revert of a bump, starts from 2.7
+alone. The upgrade goes to the pinned image, so a
+Dependabot bump of the pin is proven here before it merges: the converted
+data keeps every point, bucket, task and the EMS token. The way back proves
+the other half: the upgrade's backup restored on the previous image brings
+back exactly what InfluxDB held at the backup, and 2.7 refuses what the new
+image converted.
 
 The backup and restore are the official ``influx backup`` and ``influx
 restore --full`` the EMS runs (ems/influx_setup.py), issued in the InfluxDB
@@ -30,11 +35,22 @@ from admin.ems_tool import BACKUP_RESTORE_TIMEOUT
 from admin.influx_upgrade import ROLLED_BACK, UPGRADED, InfluxUpgradeService
 from admin.install_context import detect_install_context
 from admin.maintenance import run_maintenance_overview
-from ems.influx_image import pinned_image
+from ems.influx_image import is_upgrade, pinned_image
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 OLDEST = "influxdb:2.7.12"
+START_VARIABLE = "EMS_INFLUX_UPGRADE_FROM"
+
+
+def start_images():
+    """Each image an upgrade is proven from: the oldest, and the base branch's pin where the pin upgrades it."""
+
+    images = [OLDEST]
+    previous = os.environ.get(START_VARIABLE, "").strip()
+    if previous and previous not in images and is_upgrade(previous, pinned_image(ROOT)):
+        images.append(previous)
+    return images
 TOKEN = "e2e-upgrade-token-0123456789abcdef"
 POINTS = 5000
 
@@ -49,11 +65,11 @@ pytestmark = [
 ]
 
 
-def _compose(container):
+def _compose(container, start):
     return f"""\
 services:
   influxdb:
-    image: {OLDEST}
+    image: {start}
     container_name: {container}
     profiles:
       - with-analytics
@@ -191,14 +207,15 @@ class TrackingCompose(DockerCompose):
             self.seen.update(_volumes_of(self.container))
 
 
-@pytest.fixture
-def installation(tmp_path, monkeypatch):
+@pytest.fixture(params=start_images())
+def installation(tmp_path, monkeypatch, request):
     monkeypatch.setenv("COMPOSE_PROJECT_NAME", f"ems-influx-upgrade-e2e-{uuid.uuid4().hex[:10]}")
     root = tmp_path / "install"
     for name in ("config", "data/influxdb", "backups"):
         (root / name).mkdir(parents=True)
     container = f"ems-influxdb-e2e-{uuid.uuid4().hex[:10]}"
-    (root / "docker-compose.yml").write_text(_compose(container), encoding="utf-8")
+    start = request.param
+    (root / "docker-compose.yml").write_text(_compose(container, start), encoding="utf-8")
     (root / "config" / "config.json").write_text(
         json.dumps({"influxdb": {"enabled": True, "mode": "bundled", "org": "ems", "bucket_prefix": "ems"}}),
         encoding="utf-8",
@@ -210,12 +227,12 @@ def installation(tmp_path, monkeypatch):
         f"DOCKER_INFLUXDB_INIT_ADMIN_TOKEN={TOKEN}\n",
         encoding="utf-8",
     )
-    for image in (OLDEST, pinned_image(ROOT)):
+    for image in (start, pinned_image(ROOT)):
         pulled = subprocess.run(["docker", "pull", "-q", image], capture_output=True, text=True, timeout=600)
         assert pulled.returncode == 0, pulled.stderr
     seen = set()
     try:
-        yield root, container, TrackingCompose(container, seen)
+        yield root, container, TrackingCompose(container, seen), start
     finally:
         subprocess.run(
             ["docker", "compose", "--profile", "with-analytics", "down", "-v", "--remove-orphans"],
@@ -240,9 +257,9 @@ def _service(root, container, backups, compose):
 
 
 def _upgraded(installation):
-    """An installation on 2.7 with buckets, a task and points, upgraded to the pin, plus 100 points after."""
+    """An installation on its start image with buckets, a task and points, upgraded to the pin, plus 100 points after."""
 
-    root, container, compose = installation
+    root, container, compose, start = installation
     target = pinned_image(ROOT)
     compose.up(root, profiles=("with-analytics",), services=("influxdb",))
     backups = InfluxBackups(root, container)
@@ -272,22 +289,32 @@ def _upgraded(installation):
     assert _count(container) == POINTS
     _write(container, 1767225600 + POINTS * 5, 100)
     assert _count(container) == POINTS + 100
-    return root, container, service, backups
+    return root, container, service, backups, start
 
 
 def test_an_upgrade_keeps_every_point_and_the_way_back_restores_the_backup(installation):
-    root, container, service, _backups = _upgraded(installation)
+    root, container, service, _backups, start = _upgraded(installation)
 
     rollback = service.plan()["rollback"]
-    assert rollback["available"] is True and rollback["to_image"] == OLDEST
-    back = service.rollback(OLDEST)
+    assert rollback["available"] is True and rollback["to_image"] == start
+    back = service.rollback(start)
 
     assert back["ok"] is True, (back, _logs(container))
     record = service.store.read()
     assert record["state"] == ROLLED_BACK
-    assert f"image: {OLDEST}" in (root / "docker-compose.yml").read_text(encoding="utf-8")
+    assert f"image: {start}" in (root / "docker-compose.yml").read_text(encoding="utf-8")
     assert _count(container) == POINTS
     assert {"ems_1m", "ems_5m", "ems_raw"} <= set(record["buckets"])
+
+
+@pytest.mark.parametrize("installation", [OLDEST], indirect=True)
+def test_the_oldest_image_refuses_what_the_pinned_one_converted(installation):
+    """Why the way back restores a backup instead of starting the old image on the converted data."""
+
+    root, container, service, _backups, start = _upgraded(installation)
+    assert service.rollback(start)["ok"] is True, _logs(container)
+    record = service.store.read()
+
     aside = root / "data" / record["set_aside"]
     refused = subprocess.run(
         ["docker", "run", "--rm", "--mount", f"type=bind,src={aside},dst=/var/lib/influxdb2", OLDEST, "influxd"],
@@ -298,10 +325,10 @@ def test_an_upgrade_keeps_every_point_and_the_way_back_restores_the_backup(insta
 
 
 def test_a_way_back_whose_restore_fails_puts_the_upgraded_influxdb_back(installation):
-    root, container, service, backups = _upgraded(installation)
+    root, container, service, backups, start = _upgraded(installation)
     backups.refuse_restore = True
 
-    back = service.rollback(OLDEST)
+    back = service.rollback(start)
 
     assert back["ok"] is False and "Roll back can be tried again" in back["message"], (back, _logs(container))
     assert service.store.read()["state"] == UPGRADED

@@ -273,6 +273,19 @@ jobs:
       - name: Report the selected marker expression
         run: printf 'pytest -q -rs -m "docker and not browser" tests/\n'
 
+      - name: Name the InfluxDB image the base commit pins
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          image=""
+          if git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null || git fetch -q --no-tags --depth=1 origin "$BASE_SHA"; then
+            image="$(git show "$BASE_SHA:deploy/docker/compose.influxdb.yml" 2>/dev/null | python3 -c 'import sys; from ems.influx_image import compose_image; print(compose_image(sys.stdin.read()) or "")')"
+            echo "InfluxDB upgrades are proven from the oldest image and from: ${image:-no pin found at $BASE_SHA}"
+          else
+            echo "::warning::Commit $BASE_SHA could not be fetched; InfluxDB upgrades are proven from the oldest image only."
+          fi
+          echo "EMS_INFLUX_UPGRADE_FROM=$image" >> "$GITHUB_ENV"
+
       - name: Run real-Docker e2e tests
         env:
           # This job's green result is meant to mean the container tiers ran.

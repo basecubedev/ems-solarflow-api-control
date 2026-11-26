@@ -41,7 +41,7 @@
 # files and the licence inventory, and CI reads it.
 services:
   influxdb:
-    image: influxdb:2.9.1
+    image: influxdb:2.10.1
     container_name: ems-influxdb
     ports:
       - "${EMS_INFLUX_PUBLISH:-127.0.0.1:8086}:8086"
