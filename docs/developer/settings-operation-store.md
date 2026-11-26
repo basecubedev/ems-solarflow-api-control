@@ -177,6 +177,7 @@ Phase 4, caps:
 Backlog 59 (a device switch spelled as text) is settled by phase 3: the device
 switches that move leave `config.json`, and the operation store's writer
 accepts only real booleans; the switch-over translates a text value the way
-the EMS read it. The activation `devices[].enabled` stays and joins the
-startup rewrite of switches written as text (`ems.spelled_switches`) once its
-readers agree.
+the EMS read it. The activation `devices[].enabled` stays; the startup
+rewrite of switches written as text (`ems.spelled_switches`) writes anything
+but a boolean or `null` as `false`, as the EMS reads it, and the Admin's device
+drafts read it with the EMS's own reader (`config_entry_enabled`).

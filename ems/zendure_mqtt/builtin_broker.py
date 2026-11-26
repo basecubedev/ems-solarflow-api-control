@@ -15,7 +15,7 @@ from collections.abc import Mapping
 
 from ems.config import grid_meter_mqtt_settings
 from ems.paths import ZENDURE_MQTT_STATUS_FILENAME
-from ems.zendure_mqtt.config_entries import zendure_mqtt_broker_ref
+from ems.zendure_mqtt.config_entries import config_entry_enabled, zendure_mqtt_broker_ref
 
 BUILTIN_PROFILE_REF = "ems-mqtt"
 BUILTIN_CREDENTIALS_REF = "ems-mqtt"
@@ -99,7 +99,7 @@ def builtin_profile_users(config) -> list[str]:
     users = []
     devices = config.get("devices")
     for index, item in enumerate(devices if isinstance(devices, list) else []):
-        if not isinstance(item, Mapping) or item.get("enabled") is False:
+        if not isinstance(item, Mapping) or not config_entry_enabled(item):
             continue
         mqtt = item.get("mqtt")
         if isinstance(mqtt, Mapping) and zendure_mqtt_broker_ref(item) in refs:

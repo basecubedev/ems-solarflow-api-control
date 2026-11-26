@@ -736,7 +736,7 @@ def _device_draft(device, broker_sources=None, *, entry_ref=None, catalog_ids=(N
         "name": name,
         "ip": str(device.get("ip") or "").strip(),
         "sn": str(device.get("sn") or "").strip(),
-        "enabled": bool(device.get("enabled", True)),
+        "enabled": config_entry_enabled(device),
         "has_enabled_key": "enabled" in device,
         "connection_type": str(device.get("connection_type") or "").strip() or "local API",
     }
@@ -826,7 +826,7 @@ def _read_only_device_draft(device):
         "original_name": name,
         "name": name,
         "ip": str(device.get("ip") or "").strip(),
-        "enabled": bool(device.get("enabled", True)),
+        "enabled": config_entry_enabled(device),
         "has_enabled_key": "enabled" in device,
     }
     for key in (*spec.text_keys, *spec.number_keys):
@@ -878,7 +878,7 @@ def _materialize_read_only_device(original, item):
     if spec.pv_inputs:
         _apply_pv_inputs(device, item)
     enabled = bool(item.get("enabled", True))
-    if "enabled" in device or item.get("has_enabled_key") or not enabled:
+    if enabled != config_entry_enabled(device) or ("enabled" not in device and item.get("has_enabled_key")):
         device["enabled"] = enabled
     return device
 
@@ -2441,10 +2441,8 @@ def _apply_device_fields(device, item, refused=None):
         if key in item:
             device[key] = str(item.get(key) or "").strip()
     apply_common_device_values(device, item, issues=refused)
-    # Keep unknown (non-catalog) device keys untouched; only surface an
-    # explicit enabled flag so a disabled draft device reads as a real change.
     enabled = bool(item.get("enabled", True))
-    if "enabled" in device or item.get("has_enabled_key") or not enabled:
+    if enabled != config_entry_enabled(device) or ("enabled" not in device and item.get("has_enabled_key")):
         device["enabled"] = enabled
 
 
@@ -2589,7 +2587,7 @@ def _has_enabled_cloud_control_device(config):
     if not cloud_refs:
         return False
     for device in config.get("devices") or []:
-        if not isinstance(device, dict) or device.get("enabled") is False:
+        if not isinstance(device, dict) or not config_entry_enabled(device):
             continue
         if not is_control_zendure_mqtt_device_config(device):
             continue
@@ -2615,7 +2613,7 @@ def _append_common_value_warning(validation, device, label, transport_label):
     gap.
     """
 
-    if device.get("enabled") is False:
+    if not config_entry_enabled(device):
         return
     missing = [key for key in _COMMON_DEVICE_VALUE_KEYS if key not in device]
     if not missing:

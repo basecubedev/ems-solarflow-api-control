@@ -76,6 +76,75 @@ def test_load_reads_standard_config(tmp_path):
     assert "winter.enabled" in result["draft"]["features"]
 
 
+@pytest.mark.parametrize("stored", ["true", 1, "on"])
+def test_load_shows_a_device_switched_on_as_text_off_as_the_ems_reads_it(tmp_path, stored):
+    """Backlog 59: the EMS builds a device only for ``"enabled": true``; the Admin showed text and 1 on."""
+
+    data = _config()
+    data["devices"] = [
+        {"name": "WR1", "ip": "192.168.1.100", "sn": "AAA", "enabled": stored},
+        {"name": "WR2", "ip": "192.168.1.101", "sn": "BBB", "enabled": None},
+        {"name": "TSUN OpenDTU", "type": "opendtu_http", "ip": "192.168.1.70", "serial": "116491234567", "enabled": stored},
+        {
+            "type": "zendure_mqtt",
+            "name": "MQTT WR",
+            "enabled": stored,
+            "serial_number": "MQTT1",
+            "mqtt": {"topic_family": "zensdk_ha_scalar", "device_id": "MQTT1"},
+            "capabilities": {"read_power": True, "read_soc": True, "write_output_limit": False},
+        },
+    ]
+    _write_config(tmp_path, data)
+
+    result = load_maintenance_config(base_dir=str(tmp_path))
+
+    enabled = {device["original_name"]: device["enabled"] for device in result["draft"]["devices"]}
+    assert enabled == {"WR1": False, "WR2": True, "TSUN OpenDTU": False, "MQTT WR": False}
+    assert result["summary"]["enabled_device_count"] == 1
+
+
+def _three_kinds(enabled):
+    return [
+        {"name": "WR1", "ip": "192.168.1.100", "sn": "AAA", "enabled": enabled},
+        {"name": "TSUN OpenDTU", "type": "opendtu_http", "ip": "192.168.1.70", "serial": "116491234567", "enabled": enabled},
+        {
+            "type": "zendure_mqtt",
+            "name": "MQTT WR",
+            "enabled": enabled,
+            "serial_number": "MQTT1",
+            "mqtt": {"topic_family": "zensdk_ha_scalar", "device_id": "MQTT1"},
+            "capabilities": {"read_power": True, "read_soc": True, "write_output_limit": False},
+        },
+    ]
+
+
+@pytest.mark.parametrize("stored", [None, "true", 1])
+def test_an_unchanged_draft_leaves_a_device_switch_as_written(tmp_path, stored):
+    """The EMS runs ``null`` and never runs ``"true"``; a save that changes neither writes nothing."""
+
+    data = _config()
+    data["devices"] = _three_kinds(stored)
+    _write_config(tmp_path, data)
+
+    loaded = load_maintenance_config(base_dir=str(tmp_path))
+    preview = preview_maintenance_config(loaded["draft"], base_dir=str(tmp_path))
+
+    assert preview["changed"] is False, preview["diff"]
+
+
+def test_a_device_switched_on_in_the_draft_is_written_true_over_its_text(tmp_path):
+    data = _config()
+    data["devices"] = _three_kinds("true")
+    _write_config(tmp_path, data)
+    loaded = load_maintenance_config(base_dir=str(tmp_path))
+    for item in loaded["draft"]["devices"]:
+        item["enabled"] = True
+
+    preview = preview_maintenance_config(loaded["draft"], base_dir=str(tmp_path))
+
+    assert [device["enabled"] for device in preview["preview"]["devices"]] == [True, True, True]
+
+
 @pytest.mark.parametrize(
     ("dashboard", "expected"),
     [(None, True), ({"port": 8081}, True), ({"enabled": False}, False), ({"enabled": "off"}, False), ({"enabled": "yes"}, True)],

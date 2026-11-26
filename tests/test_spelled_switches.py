@@ -86,12 +86,27 @@ def test_booleans_missing_switches_and_other_values_are_left_alone():
     original = {
         "system": {"allow_hardware_writes": True, "dry_run": False, "loop_interval": "5"},
         "winter": {"months": "10,11"},
-        "devices": [{"name": "INV_1", "enabled": "false"}],
+        "devices": [{"name": "INV_1", "enabled": True}, {"name": "INV_2"}, {"name": "INV_3", "enabled": None}, "x"],
     }
 
     config, changes = normalize_spelled_switches(original)
 
     assert config == original and changes == []
+
+
+@pytest.mark.parametrize("stored", ["false", "true", "on", 1, 0, "", [], {}])
+def test_a_device_switched_on_or_off_as_anything_but_a_boolean_is_written_off(stored):
+    """Backlog 59: the EMS builds a device only for ``"enabled": true``, the Admin showed ``"true"`` and ``1`` on."""
+
+    from ems.zendure_mqtt.config_entries import config_entry_enabled
+
+    original = {"devices": [{"name": "INV_1", "enabled": True}, {"name": "INV_2", "enabled": stored}]}
+
+    config, changes = normalize_spelled_switches(original)
+
+    assert config_entry_enabled(original["devices"][1]) is False
+    assert config["devices"] == [{"name": "INV_1", "enabled": True}, {"name": "INV_2", "enabled": False}]
+    assert changes == [{"path": "devices[1].enabled", "from": stored, "to": False}]
 
 
 def test_the_input_is_never_changed_in_place():
@@ -124,7 +139,10 @@ def test_a_switch_the_ems_reads_strictly_stays_so_a_refused_broker_stays_refused
 def _loaded(tmp_path, config):
     data = cfg.default_runtime_config()
     for section, values in config.items():
-        data.setdefault(section, {}).update(values)
+        if isinstance(values, list):
+            data[section] = values
+        else:
+            data.setdefault(section, {}).update(values)
     data["config_upgrade"] = {"on_startup": "disabled"}
     path = tmp_path / "config.json"
     path.write_text(json.dumps(data))
@@ -139,6 +157,7 @@ def _loaded(tmp_path, config):
             "enabled": cfg.SYSTEM_ENABLED,
             "kwp": cfg.PV_KWP_WEIGHTING,
             "redistribute": cfg.REDISTRIBUTE_CLAMPED_POWER,
+            "devices": [item["name"] for item in cfg.http_control_device_configs()],
         }
     finally:
         for name, value in snapshot.items():
@@ -155,6 +174,7 @@ def _loaded(tmp_path, config):
         {"system": {"dry_run": "false"}},
         {"system": {"enabled": "true", "dry_run": False}},
         {"system": {"pv_kwp_weighting": "off", "redistribute_clamped_power": "no", "dry_run": False}},
+        {"system": {"dry_run": False}, "devices": [{"name": "INV_1", "ip": "192.0.2.5", "sn": "A", "enabled": "true"}]},
     ],
 )
 def test_the_ems_reads_the_rewritten_config_as_it_read_the_spelled_one(tmp_path, spelled):
@@ -193,6 +213,23 @@ def test_the_ems_writes_the_booleans_at_start_behind_a_backup_and_says_so(tmp_pa
     assert written["system"]["allow_hardware_writes"] is False
     assert len(backups) == 1
     assert any(level == logging.WARNING and 'system.allow_hardware_writes: "false" -> false' in text for level, text in messages)
+
+
+def test_a_device_switched_on_as_text_is_written_off_at_start(tmp_path):
+    data = cfg.default_runtime_config()
+    data["devices"] = [{"name": "INV_1", "ip": "192.0.2.5", "sn": "A", "enabled": "true"}]
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps(data, indent=2))
+    messages = []
+
+    written = cfg.normalize_startup_config_switches(
+        data, str(path), str(tmp_path), backup=False, backup_factory=None,
+        emit_message=lambda level, text: messages.append(text),
+    )
+
+    assert json.loads(path.read_text())["devices"][0]["enabled"] is False
+    assert written["devices"][0]["enabled"] is False
+    assert any('devices[0].enabled: "true" -> false' in text for text in messages)
 
 
 def test_a_config_with_only_booleans_is_not_written(tmp_path):
