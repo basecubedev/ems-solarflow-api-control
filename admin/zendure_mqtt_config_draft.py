@@ -39,6 +39,7 @@ from ems.mqtt_control.power_capability import (
 from ems.zendure_mqtt.capability import mqtt_output_control_capability
 from ems.zendure_mqtt.config_entries import (
     EXTERNAL_MQTT_TYPE,
+    config_entry_enabled,
     is_control_zendure_mqtt_device_config,
     is_external_mqtt_device_config,
     validate_external_mqtt_device_config,
@@ -924,7 +925,7 @@ def zendure_mqtt_device_draft(device, *, broker_sources=None):
         "kind": "zendure_mqtt",
         "original_name": name,
         "name": name,
-        "enabled": bool(device.get("enabled", True)),
+        "enabled": config_entry_enabled(device),
         "has_enabled_key": "enabled" in device,
         "serial_number": str(device.get("serial_number") or "").strip(),
         # Display device id: the MQTT route id (mqtt.device_id), falling back to a
@@ -1211,7 +1212,7 @@ def apply_zendure_mqtt_draft_fields(device, item, *, broker_sources=None, issues
     apply_common_device_values(device, item, issues=issues)
 
     enabled = bool(item.get("enabled", True))
-    if "enabled" in device or item.get("has_enabled_key") or not enabled:
+    if enabled != config_entry_enabled(device) or ("enabled" not in device and item.get("has_enabled_key")):
         device["enabled"] = enabled
 
 

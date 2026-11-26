@@ -10,13 +10,15 @@ what the file says. So the file says it plainly: each such switch is written
 as the boolean the EMS already read from it, and the EMS does after the
 rewrite exactly what it did before.
 
-Rewritten are a control flag holding anything but a boolean, and a switch of
-``WORD_SWITCH_PATHS``, each of which the EMS reads by its words, holding one
-of the words all those readers agree on (true/false, yes/no, on/off, 1/0, any
-case) or the number 0 or 1. Anything else stays as written, and so does every
-other switch: ``zendure_mqtt.tls`` and ``tls_insecure``, which the EMS
-refuses unless they are booleans, and a switch the catalogue gains later
-until it is placed here.
+Rewritten are a control flag holding anything but a boolean, a device's
+``enabled`` holding anything but a boolean or ``null`` (the EMS builds a
+device only for ``true`` or no value, so it is written ``false``), and a
+switch of ``WORD_SWITCH_PATHS``, each of which the EMS reads by its words,
+holding one of the words all those readers agree on (true/false, yes/no,
+on/off, 1/0, any case) or the number 0 or 1. Anything else stays as written,
+and so does every other switch: ``zendure_mqtt.tls`` and ``tls_insecure``,
+which the EMS refuses unless they are booleans, and a switch the catalogue
+gains later until it is placed here.
 
 Import-side-effect-free.
 """
@@ -79,7 +81,8 @@ def normalize_spelled_switches(config):
     """``config`` with its spelled switches as booleans, and the changes made.
 
     Each change is ``{"path", "from", "to"}``; a text ``simulation_mode`` adds
-    the ``system.dry_run`` it forced. The input is not changed.
+    the ``system.dry_run`` it forced, a device's switch is named by its index,
+    ``devices[1].enabled``. The input is not changed.
     """
 
     normalized = copy.deepcopy(config)
@@ -97,6 +100,12 @@ def normalize_spelled_switches(config):
         if section == "system" and key in CONTROL_FLAGS_INVALID_FORCE_DRY_RUN and block.get("dry_run") is not True:
             changes.append({"path": "system.dry_run", "from": block.get("dry_run"), "to": True})
             block["dry_run"] = True
+    devices = normalized.get("devices")
+    for index, entry in enumerate(devices if isinstance(devices, list) else []):
+        if not isinstance(entry, dict) or entry.get("enabled") is None or isinstance(entry["enabled"], bool):
+            continue
+        changes.append({"path": f"devices[{index}].enabled", "from": entry["enabled"], "to": False})
+        entry["enabled"] = False
     return normalized, changes
 
 

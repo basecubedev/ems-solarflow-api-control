@@ -217,7 +217,8 @@ changed by hand, so the EMS moves it to today's default once:
 
 A switch is `true` or `false`. One written as text, such as
 `"allow_hardware_writes": "false"`, is read by the EMS differently from how it
-looks, and the Admin console shows what the file says. So the EMS writes such
+looks, and the Admin console shows what the file says (a device's `enabled`
+excepted, below). So the EMS writes such
 a switch as the value it already read from it, at a live start once the
 old-defaults refresh above has recorded its revision, behind the same backup,
 and logs each one as a warning (`Config switches written as text were
@@ -230,6 +231,10 @@ before:
   `true` or `false`, `null` included, is written on its blocking side, the
   side the EMS read it on. A text `simulation_mode` also forced a dry run, so
   `system.dry_run` is written `true` with it.
+- A device's `enabled` holding anything but `true`, `false` or `null` is
+  written `false`: the EMS builds a device only for `true` or no value, so it
+  ran without that device. The Admin console reads `enabled` the same way, so
+  a device stored as `"true"` or `1` shows as switched off there too.
 - One of the other switches outside the device and grid-meter entries that the
   EMS reads by their words (`ems/spelled_switches.py` lists them) is written
   when it holds a word all its EMS readers agree on — `true`/`false`,
@@ -993,7 +998,8 @@ transport: `"enabled": false` removes the device from the control loop, for a
 local-API device exactly as for a Zendure MQTT control device. A non-boolean
 value (for example the string `"false"`) is never trusted as enabled and also
 removes the device, so a mistyped flag cannot silently keep an inverter under
-EMS control. A disabled device gets no runtime defaults and diagnose does not
+EMS control; the EMS writes it as `false` at start
+([Switches Written As Text](#switches-written-as-text)). A disabled device gets no runtime defaults and diagnose does not
 list it as controllable, and a disabled Zendure MQTT device that only reports
 telemetry is not read, shown on the dashboard or counted either. A config whose only devices
 are disabled has no control device and does not start.
