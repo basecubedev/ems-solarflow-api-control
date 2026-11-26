@@ -305,10 +305,9 @@ out of `config.json`, behind the upgrade backup, and logs "Operating values
 moved". A value the file held differently from the running one is not taken:
 the running value stays, and the log names both, at the first move as
 information (the dashboard's changes never reached the file before), after it
-as a warning, since only a hand edit puts one there. A device the EMS does not build (switched off, telemetry-only) keeps
-its values in its entry until it is switched on; those the runtime state
-held for it when it was switched off wait there (`parked_devices`), where the
-Admin changes them, and come back when it is built again. Nothing moves when the
+as a warning, since only a hand edit puts one there. A switched-off device has a runtime entry like a running one and
+loses them too; a device without one (never run, or read over MQTT without
+control) keeps its values in its entry. Nothing moves when the
 runtime-state file cannot be read or `config.json` changed since the start
 read it. The config upgrade never adds an operating value back and `diagnose`
 does not miss one.

@@ -36,13 +36,16 @@ from admin.operation_settings import (
     OPERATING_BASE_KEY,
     adopt_operating_values,
     config_held_device_names,
+    unbuilt_device_names,
     held_by_config,
     operating_feature_edits,
     operating_from,
     operating_powers,
     operating_provenance,
-    unbuilt_devices,
     operation_changes,
+    new_device_entries,
+    running_runtime_entries,
+    without_entry_values,
 )
 from admin.connection_planner import (
     INTENT_SWITCH_CONNECTION,
@@ -581,7 +584,7 @@ def load_maintenance_config(base_dir=None, *, identity_token_key=None):
     adopt_operating_values(draft, *operating_from(provenance))
     browser_fields = {
         "draft": copy.deepcopy(draft),
-        "operating": operating_powers(provenance, build_validation_context(config, None), set().union(*unbuilt_devices(context, config))),
+        "operating": operating_powers(provenance, build_validation_context(config, None), unbuilt_device_names(context, config)),
     }
     redact_config_for_browser(
         browser_fields,
@@ -1278,14 +1281,15 @@ def preview_maintenance_config(draft, base_dir=None, *, identity_token_key=None)
     )
     operating, _targets = _operating_changes(context, current, draft, merge_issues, merged, resolved)
     history = _consumer_history(current, merged, draft, context)
-    validation = _validate(merged, merge_issues)
+    entries, written = _new_device_entries(context, current, draft, merge_issues, merged, resolved)
+    validation = _validate(written, merge_issues)
     # Read-only preview surfaces the global MQTT credentials_ref contract early
     # (canonical refs, single-source ownership) so the UI shows a bad reference
     # before an apply is attempted; the apply itself defers to the shared
     # credential-staging layer, which rejects the same references with a stable
     # structured code and a byte-exact rollback.
     _append_mqtt_credential_consumer_issues(validation, merged)
-    diff = _with_operating(summarize_config_changes(current, merged, runtime_device_entries(context, merged)), operating)
+    diff = _with_operating(summarize_config_changes(current, merged, running_runtime_entries(context, current, runtime_device_entries(context, merged))), operating)
     response = {
         "status": "ok",
         "config_path": config_path,
@@ -1298,10 +1302,11 @@ def preview_maintenance_config(draft, base_dir=None, *, identity_token_key=None)
         ),
         "validation": validation,
         "preview": redact_config_for_browser(
-            copy.deepcopy(merged),
+            copy.deepcopy(written),
             identity_token_key=identity_token_key,
             broker_sources=broker_sources_from_config(merged),
         ),
+        "runtime_entries": _runtime_entries(entries),
         "consumer_history": history,
     }
     return sanitize_external_mqtt_status(
@@ -1325,12 +1330,33 @@ def _operating_changes(context, current, draft, merge_issues, merged, resolved):
     return changes, targets
 
 
+def _new_device_entries(context, current, draft, merge_issues, merged, resolved):
+    """The runtime entries the apply creates for devices the draft adds, and the config it then writes: ``(entries, written)``.
+
+    admin.operation_settings.new_device_entries; a value the runtime service
+    refuses joins ``merge_issues``. ``written`` is ``merged`` without the
+    operating values those entries hold.
+    """
+
+    entries, issues = new_device_entries(context, current, draft, merged=merged, resolved=resolved)
+    merge_issues.extend(_issue(issue["code"], issue["message"]) for issue in issues)
+    return entries, without_entry_values(merged, entries)
+
+
+def _runtime_entries(entries):
+    """``{name: values}`` of the runtime entries an apply creates, for the preview."""
+
+    return {name: copy.deepcopy(values) for _index, name, _identity, values in entries}
+
+
 def _with_operating(diff, operating):
     """The config diff with the operating changes as rows that take effect at once.
 
-    An operating value the config diff itself names goes into ``config.json``
-    (a device that never ran, a serial change, a pending setup reset): it
-    takes effect at the next start, not at once. Where the same value also
+    An operating value the config diff itself names takes effect at the next
+    start, not at once: a device the save adds, whose values go into the
+    runtime entry the apply creates for it (``runtime_entries``) or, where it
+    gets none, into ``config.json``; a device that never ran, a serial change,
+    a pending setup reset. Where the same value also
     takes effect at once, only that row is listed.
     """
 
@@ -1387,8 +1413,9 @@ def prepare_maintenance_config_apply(
     )
     operating, targets = _operating_changes(context, current, draft, merge_issues, merged, resolved)
     history = _consumer_history(current, merged, draft, context)
-    validation = _validate(merged, merge_issues)
-    diff = _with_operating(summarize_config_changes(current, merged, runtime_device_entries(context, merged)), operating)
+    entries, written = _new_device_entries(context, current, draft, merge_issues, merged, resolved)
+    validation = _validate(written, merge_issues)
+    diff = _with_operating(summarize_config_changes(current, merged, running_runtime_entries(context, current, runtime_device_entries(context, merged))), operating)
     result = sanitize_external_mqtt_status(
         {
             "status": "ok",
@@ -1402,10 +1429,11 @@ def prepare_maintenance_config_apply(
             ),
             "validation": validation,
             "preview": redact_config_for_browser(
-                copy.deepcopy(merged),
+                copy.deepcopy(written),
                 identity_token_key=identity_token_key,
                 broker_sources=broker_sources_from_config(merged),
             ),
+            "runtime_entries": _runtime_entries(entries),
             "consumer_history": history,
         },
         sensitive_context=merged,
@@ -1425,10 +1453,11 @@ def prepare_maintenance_config_apply(
         result["message"] = "The draft is not valid and was not applied."
         return result
     result["payload"] = (
-        json.dumps(merged, indent=2, ensure_ascii=False) + "\n"
+        json.dumps(written, indent=2, ensure_ascii=False) + "\n"
     ).encode("utf-8")
     result["replaced"] = current
     result["operating_targets"] = targets
+    result["device_entries"] = entries
     return result
 
 

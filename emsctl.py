@@ -1620,6 +1620,7 @@ def runtime_defaults(config, existing=None):
                     "pv_priority_factor": 1.0,
                     "ac_charge_enabled": True,
                     "ac_discharge_enabled": True,
+                    **({"identity": value["identity"]} if isinstance(value.get("identity"), str) and value["identity"].strip() else {}),
                 }
 
     return {

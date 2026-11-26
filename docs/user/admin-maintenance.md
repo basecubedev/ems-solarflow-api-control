@@ -354,10 +354,10 @@ This page edits an existing installation.
   `data/runtime-state.json`, where the Dashboard changes them too: they show
   the value EMS runs, and saving writes those you changed here there, live at
   once, never into `config.json`; a value the Dashboard or a schedule changed
-  after the page loaded stays. A switched-off device that ran keeps its values
-  there for when it runs again, and saving changes them there; a device that
-  never ran (just added) keeps them in `config.json` until it runs. Saving
-  writes the rest into `config.json`.
+  after the page loaded stays. A switched-off device keeps its values there for
+  when it runs again, and saving changes them there; a device just added keeps
+  them in `config.json` until the next EMS start gives it its own entry, also
+  while it is switched off. Saving writes the rest into `config.json`.
   The power limits are hard limits: **Maximum system output** (Safety) and
   each device's **Device output limit** (Devices), with **Fallback device
   limit** for a device without its own. Below each, **Operating value: …**

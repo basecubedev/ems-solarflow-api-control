@@ -200,7 +200,7 @@ def test_the_change_preview_asks_the_runtime_state_file_of_the_install(tmp_path)
     marked = {entry["path"]: entry["applies_live"] for bucket in ("changes", "added", "removed") for entry in diff[bucket]}
 
     assert set(runtime_device_entries(context, current)) == {"WR1", "WR3"}
-    assert (marked["devices[0].enabled"], marked["devices[1].enabled"]) == (True, False)
+    assert (marked["devices[0].enabled"], marked["devices[1].enabled"]) == (False, False)
     assert marked["devices[2].pv_priority_factor"] is False
     assert runtime_device_entries(SimpleNamespace(install_root=tmp_path / "elsewhere"), current) == {}
 

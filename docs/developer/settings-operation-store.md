@@ -116,7 +116,11 @@ Phase 2, Admin reads and writes operating values where the dashboard does:
 - `admin/maintenance_config.py`: the draft carries the operating values for
   those paths and device keys, and the values it loaded (`operating_base`);
   `_merge_draft` writes them into the config only for a new device and a
-  device the running EMS keeps no runtime entry for; the apply writes those
+  device the running EMS keeps no runtime entry for, and the apply then moves
+  a new device's into the runtime entry it creates for it before the config
+  is written, holding the runtime-state lock until it is
+  (`new_device_entries`, `device_entries_written`; refused as a whole when
+  that write fails or the config changed since the review); the apply writes those
   the page changed from the loaded ones through the runtime writer
   (`admin/runtime_convergence.py`), creating `runtime-state.json` where it is
   missing, so a value set elsewhere after the page loaded stays; the preview
@@ -134,14 +138,24 @@ Phase 3, switch-over:
   start filled from its own values first and the config's second, is saved
   before the config is rewritten behind the upgrade backup, with the config's
   own layout, and only while the file is what the start read; not when the
-  runtime state could not be read. Only a built device's values leave; a
-  device the EMS does not build keeps its values in its entry. When the EMS
-  prunes the runtime entry of a device it no longer builds, it parks the
-  entry's operating values (`parked_devices`); the device gets them back when
-  built again, over what its config entry seeds. The Admin shows and changes
-  a parked device's values where they are parked; a device that never ran
-  keeps them in its config entry, and so does one whose serial a save
-  changes, since its next start finds no runtime entry for the new serial.
+  runtime state could not be read. Every device that owns a runtime entry
+  loses its values from `config.json`, switched on or off.
+- One place per device (backlog 73): every device the EMS can control has a
+  runtime entry, switched on or off, from its first start until it is removed
+  from `config.json` (`ems.runtime_devices`, the one module the EMS and the
+  Admin join a config entry to its runtime entry with). Switching a
+  device off moves nothing; one read over MQTT without control keeps its
+  entry while it stays in the config. The values v0.10.8 parked for a
+  switched-off device (`parked_devices`) fill its entry once, a device read
+  without control gets them as its entry, and nothing parks values any more. A
+  device a save adds gets its entry from the Admin before the config names it
+  (`ems.runtime_devices.new_runtime_entry`, the entry its first start would
+  leave), so its config entry never holds an operating value; not while a
+  setup reset is pending, and not under a name an entry of another device
+  still holds (one renamed or removed since the EMS started). Those, a device that was in the config but never
+  ran, and one whose serial a save changes, since its next start finds no
+  runtime entry for the new serial, keep their values in their config entry
+  until the next live start.
 - While a fresh setup's reset request names the installed config, an Admin
   save writes the operating values it changes into `config.json`: the next
   start builds the runtime state from that config.

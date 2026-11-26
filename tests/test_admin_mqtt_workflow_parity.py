@@ -27,6 +27,8 @@ from admin.mqtt_discovery import MqttBrokerDiscovery, MqttBrokerStore
 from admin.server import ScanRegistry, create_server
 from admin.zendure_cloud_mqtt import FakeCloudMqttListener, ZendureCloudDiscovery
 from ems.mqtt_credentials import FileMqttCredentialResolver
+from ems.runtime_commands import OPERATION_DEVICE_KEYS
+from ems.runtime_devices import device_serial, owned_runtime_device
 from ems.zendure_mqtt.config_entries import (
     find_zendure_mqtt_broker_profile_issues,
     is_control_zendure_mqtt_device_config,
@@ -348,6 +350,18 @@ def _mqtt_devices(config):
     return [d for d in config["devices"] if d.get("type") == "zendure_mqtt"]
 
 
+def _installed(devices):
+    """The devices as ``config.json`` keeps them once the runtime state holds their operating values."""
+
+    return [{key: value for key, value in device.items() if key not in OPERATION_DEVICE_KEYS} for device in devices]
+
+
+def _runtime_devices(root):
+    found = sorted(root.rglob("runtime-state.json"))
+    assert len(found) == 1, found
+    return json.loads(found[0].read_text(encoding="utf-8"))["devices"]
+
+
 def _verify_complete_result(raw, secrets_dir, case):
     config = json.loads(raw)
     devices = _mqtt_devices(config)
@@ -434,17 +448,24 @@ def test_setup_and_maintenance_produce_equivalent_mqtt_config(
     setup_raw, _ = _run_setup_workflow(
         tmp_path_factory.mktemp("setup"), case, monkeypatch
     )
-    maintenance_raw, _ = _run_maintenance_workflow(
-        tmp_path_factory.mktemp("maintenance"), case, monkeypatch
-    )
+    maintenance_root = tmp_path_factory.mktemp("maintenance")
+    maintenance_raw, _ = _run_maintenance_workflow(maintenance_root, case, monkeypatch)
     setup_config = json.loads(setup_raw)
     maintenance_config = json.loads(maintenance_raw)
 
     # The complete MQTT configuration must match: every broker profile field
     # (source, endpoint, TLS, credentials_ref) and every device field
     # (identifiers, topic_family, write_protocol, capabilities, broker_ref).
+    # Maintenance adds the device to a running installation, so its operating
+    # values go into the runtime entry the Admin creates for it, where Setup's
+    # first start moves them.
     assert setup_config["zendure_mqtt"] == maintenance_config["zendure_mqtt"]
-    assert _mqtt_devices(setup_config) == _mqtt_devices(maintenance_config)
+    assert _installed(_mqtt_devices(setup_config)) == _installed(_mqtt_devices(maintenance_config))
+    runtime_devices = _runtime_devices(maintenance_root)
+    for device in _mqtt_devices(setup_config):
+        operating = {key: value for key, value in device.items() if key in OPERATION_DEVICE_KEYS}
+        entry = runtime_devices[owned_runtime_device(runtime_devices, device["name"], device_serial(device))]
+        assert operating and {key: entry.get(key) for key in operating} == operating
 
 
 # --- credential-decision parity across the real HTTP Apply paths ------------
@@ -804,7 +825,7 @@ def test_setup_and_maintenance_share_credential_decisions(
             maintenance["config_path"].read_text(encoding="utf-8")
         )
         assert setup_config["zendure_mqtt"] == maintenance_config["zendure_mqtt"]
-        assert _mqtt_devices(setup_config) == _mqtt_devices(maintenance_config)
+        assert _installed(_mqtt_devices(setup_config)) == _installed(_mqtt_devices(maintenance_config))
         assert _runtime_issues(setup) == _runtime_issues(maintenance)
     else:
         # A blocked apply commits nothing: Setup writes no config at all and

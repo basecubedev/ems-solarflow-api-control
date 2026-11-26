@@ -647,6 +647,7 @@ class DashboardHTTPServer(ThreadingHTTPServer):
         schedule_api=None,
         device_settings=None,
         signpost=True,
+        built_devices=None,
     ):
         super().__init__(address, handler)
         self.signpost = bool(signpost)
@@ -654,6 +655,7 @@ class DashboardHTTPServer(ThreadingHTTPServer):
         self.runtime_state = runtime_state
         self.schedule_api = schedule_api
         self.device_settings = device_settings
+        self.built_devices = None if built_devices is None else frozenset(built_devices)
         self.log_buffer = log_buffer
         self.log_redaction = bool(log_redaction)
         # UI-only hint for the frontend bootstrap (no control/auth impact).
@@ -881,7 +883,7 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
                 _external_mqtt_status_payload(
                     self.server,
                     attach_limits(
-                        runtime_payload(self.server.runtime_state),
+                        _built_devices_only(self.server, runtime_payload(self.server.runtime_state)),
                         self.server.runtime_validation,
                         _offered_device_settings(self.server),
                         getattr(self.server.runtime_state, "defaults", None),
@@ -2178,6 +2180,19 @@ def hmac_compare(left, right):
     return hmac.compare_digest(str(left), str(right))
 
 
+def _built_devices_only(server, payload):
+    """The runtime payload with the entries of the devices this EMS controls only.
+
+    A device switched off keeps its runtime entry (ems.runtime_devices), but
+    the dashboard controls what runs; without the EMS's list, all of them.
+    """
+
+    built = getattr(server, "built_devices", None)
+    if built is None or not isinstance(payload.get("devices"), dict):
+        return payload
+    return {**payload, "devices": {name: entry for name, entry in payload["devices"].items() if name in built}}
+
+
 def _offered_device_settings(server):
     """The device settings each device has, as the EMS last saw them; none without the EMS."""
 
@@ -2211,6 +2226,7 @@ def start_dashboard_server(
     device_settings=None,
     socket_path=None,
     signpost=True,
+    built_devices=None,
 ):
     server = DashboardHTTPServer(
         (host, int(port)),
@@ -2233,6 +2249,7 @@ def start_dashboard_server(
         schedule_api=schedule_api,
         device_settings=device_settings,
         signpost=signpost,
+        built_devices=built_devices,
     )
 
     if ssl_enabled:
