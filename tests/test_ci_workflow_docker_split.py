@@ -49,7 +49,7 @@ def test_a_pull_request_never_runs_the_whole_suite_twice():
         name
         for name, job in jobs.items()
         if any(
-            'pytest -q -m "not docker" tests/' in step.get("run", "")
+            "pytest" in step.get("run", "") and '-m "not docker" tests/' in step.get("run", "")
             for step in job.get("steps", [])
         )
     ]
@@ -62,16 +62,26 @@ def test_a_pull_request_never_runs_the_whole_suite_twice():
 
 
 def test_the_full_non_docker_suite_still_runs_somewhere():
-    """It moved out of a nightly schedule and onto the merge. One process rather
-    than five is the only place an interaction between two tests shows up, so
-    losing it would cost a class of failure the groups cannot see."""
+    """It runs on the merge, across the groups, so an interaction between test
+    files of two groups on one worker can still show; a file stays on one
+    worker, as in the groups (testing.md). The strict deprecation run is a job
+    of its own beside it, with the warning filter in PYTHONWARNINGS: ``-W``
+    reaches the controller only, and without the variable a deprecation inside
+    a test passes on a worker."""
 
-    text = CI_WORKFLOW.read_text(encoding="utf-8")
-    assert 'pytest -q -m "not docker" tests/' in text
-    assert (
-        "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -W error::DeprecationWarning "
-        "-m pytest -q -m \"not docker\" tests/" in text
-    ), "the strict deprecation run is not duplicated anywhere else"
+    job = yaml.safe_load(CI_WORKFLOW.read_text(encoding="utf-8"))["jobs"]["full-suite"]
+    assert job["strategy"]["matrix"]["check"] == ["suite", "deprecations"]
+    steps = {step.get("name"): step for step in job["steps"]}
+    suite = steps["Run full test suite (excludes real-Docker e2e, see the docker jobs)"]
+    deprecations = steps["Run strict deprecation warning check"]
+
+    assert suite["if"] == "matrix.check == 'suite'"
+    assert suite["run"].strip() == 'pytest -q -n auto --dist loadfile -m "not docker" tests/'
+    assert deprecations["if"] == "matrix.check == 'deprecations'"
+    assert deprecations["env"] == {"PYTHONWARNINGS": "error::DeprecationWarning", "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1"}
+    assert deprecations["run"].strip() == (
+        'python -W error::DeprecationWarning -m pytest -p xdist -q -n auto --dist loadfile -m "not docker" tests/'
+    )
 
 
 def test_publish_full_suite_excludes_docker_marked_tests():

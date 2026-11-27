@@ -438,17 +438,17 @@ jobs:
           pytest -q -rs tests/test_history_analytics_e2e.py
 
   full-suite:
-    name: Repo full suite (${{ matrix.python-version }})
+    name: Repo full suite (${{ matrix.python-version }}, ${{ matrix.check }})
     # After a merge, not in front of one. The five groups above are an exact
     # partition of this same collection -- tests/test_test_classification.py
     # proves it in both directions -- so no test here is one the pull request
-    # did not run. What one process adds over five is the only place an
-    # interaction between two tests can show up, and the influx readiness
-    # timeout that only ever failed in the full suite is what that looks like.
-    # Forty minutes is a fair price on main and a bad one on a pull request.
+    # did not run. What a run across the groups adds is an interaction between
+    # test files of two groups on one worker; as in the groups, a file stays on
+    # one worker (--dist loadfile). The strict deprecation run is its own job
+    # beside it, so a merge waits for neither twice.
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 60
     permissions:
       contents: read
     strategy:
@@ -457,6 +457,9 @@ jobs:
         python-version:
           - "3.11"
           - "3.14"
+        check:
+          - suite
+          - deprecations
 
     steps:
       - name: Checkout repository
@@ -480,15 +483,22 @@ jobs:
         run: sudo apt-get install -y --no-install-recommends zsh
 
       - name: Report the selected marker expression
-        run: printf 'pytest -q -m "not docker" tests/\n'
+        run: printf 'pytest -q -n auto --dist loadfile -m "not docker" tests/ (%s)\n' "${{ matrix.check }}"
 
       - name: Run full test suite (excludes real-Docker e2e, see the docker jobs)
+        if: matrix.check == 'suite'
         run: |
-          pytest -q -m "not docker" tests/
+          pytest -q -n auto --dist loadfile -m "not docker" tests/
 
+      # -W reaches the controller only; the workers take the filter from
+      # PYTHONWARNINGS, without which a deprecation inside a test passes.
       - name: Run strict deprecation warning check
+        if: matrix.check == 'deprecations'
+        env:
+          PYTHONWARNINGS: error::DeprecationWarning
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
         run: |
-          PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -W error::DeprecationWarning -m pytest -q -m "not docker" tests/
+          python -W error::DeprecationWarning -m pytest -p xdist -q -n auto --dist loadfile -m "not docker" tests/
 
   upstream-generator:
     name: Repo pinned rpi-image-gen tree
