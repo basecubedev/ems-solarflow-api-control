@@ -184,6 +184,8 @@ test.describe("Modern Admin: guided setup, devices to start", { tag: ["@setup"] 
     await openSetup(page);
     await seedDiscoveryState({ local_api_devices: [SHELLY_METER, apiInverter("SNE2EMODERN1", "192.168.100.21")] });
     await confirmLatest(page);
+    await expect(page.getByTestId("setup-discovery-run")).toContainText("Search again");
+    await expect(page.getByTestId("setup-unified").locator("li[data-role='inverter']")).toHaveCount(1);
     const order: string[] = [];
     let refused = false;
     await page.route("**/api/setup/config-preview", async (route: Route) => {
@@ -383,7 +385,6 @@ test.describe("Modern Admin: guided setup, a page that fits the screen", { tag: 
 
   test("a step without a network found, or a broker with an issue, opens that card on its own", async ({ page }) => {
     await page.route("**/api/discovery/networks", (route) => route.fulfill({ json: { networks: [], warnings: [] } }));
-    await page.route("**/discovery/gateway-probe", (route) => route.fulfill({ json: { candidates: [] } }));
     await page.route(/\/api\/discovery\/mqtt-broker$/, (route) => route.request().method() === "GET"
       ? route.fulfill({ json: { configured: true, issues: [{ code: "mqtt_broker_port_in_use", message: "port in use" }], running: false, host_address: "192.0.2.40", settings: { schema_version: 1, enabled: true, port: 1883, anonymous: false, accounts: [] }, accounts: [], containers: {} } })
       : route.fallback());
@@ -401,7 +402,6 @@ test.describe("Modern Admin: guided setup, a page that fits the screen", { tag: 
       networks: [{ cidr: "10.20.0.0/24", original_cidr: "10.20.0.0/24", interface: "eth9", address: "10.20.0.5", is_docker_like: false, scan_recommended: false, label: "Other network", reason: "Not the default route" }],
       warnings: ["No obvious LAN network was found; enter your LAN CIDR manually."],
     } }));
-    await page.route("**/discovery/gateway-probe", (route) => route.fulfill({ json: { candidates: [] } }));
     await devicesStep(page);
 
     await expect(folded(page, "networks")).toHaveAttribute("aria-expanded", "true");
