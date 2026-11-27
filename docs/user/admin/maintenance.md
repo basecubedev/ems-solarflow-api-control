@@ -287,7 +287,7 @@ not mention is shown at that default.
 
 ### 5 — Check and save
 
-![Settings and devices with one unsaved change: Settings are valid, winter.winter_min_soc 40 to 30 under Needs an EMS restart, The settings file this would write, Back up my settings first and Save and apply](../../assets/screenshots/admin/admin-settings-review.png)
+![Settings and devices with one unsaved change: Settings are valid, winter.winter_min_soc 40 to 30 under Takes effect at once, The settings file this would write, Back up my settings first and Save and apply](../../assets/screenshots/admin/admin-settings-review.png)
 
 **What you select:** **Check changes** in the bar at the foot of the page.
 

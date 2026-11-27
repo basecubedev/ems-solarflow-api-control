@@ -1247,7 +1247,8 @@ def build_runtime_defaults(devices, config_devices=None):
             "grid_target_charge_w": cfg.GRID_TARGET_CHARGE_W,
         },
         "winter": {
-            "enabled": cfg.winter_config_bool("enabled", False)
+            "enabled": cfg.winter_config_bool("enabled", False),
+            **cfg.winter_operating_values(cfg.winter_settings()),
         },
         "ac_charge_control": {
             "enabled": cfg.ac_charge_control_enabled()

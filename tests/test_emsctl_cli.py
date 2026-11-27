@@ -822,7 +822,10 @@ def test_emsctl_winter_status_prints_only_winter_state(tmp_path):
 
     assert result.returncode == 0, result.stderr
     payload = json.loads(result.stdout)
-    assert payload["state"] == {"winter": {"enabled": False}}
+    assert set(payload["state"]) == {"winter"}
+    assert payload["state"]["winter"]["enabled"] is False
+    assert payload["state"]["winter"]["months"] == [10, 11, 12, 1, 2, 3]
+    assert payload["state"]["winter"]["winter_min_soc"] == 40
 
 
 def test_emsctl_dashboard_set_status_change_and_disable_auth(tmp_path):

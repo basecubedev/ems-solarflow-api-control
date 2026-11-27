@@ -343,6 +343,47 @@ def test_the_admin_form_offers_each_operating_value_the_range_the_writer_accepts
     assert checked >= 10
 
 
+@pytest.mark.parametrize(
+    "months,accepted",
+    [
+        ([11, 12, 1], [11, 12, 1]),
+        (["11", 12, 12], [11, 12]),
+        ("11, 12, 1", [11, 12, 1]),
+        ("11 12", [11, 12]),
+        ("", None),
+        ("winter", None),
+        ([], None),
+        ([13], None),
+        ([0], None),
+        ([True], None),
+        ([1.5], None),
+        (None, None),
+    ],
+)
+def test_the_winter_months_are_a_list_of_months_each_once(months, accepted):
+    if accepted is None:
+        with pytest.raises(RuntimeWriteError, match="months"):
+            runtime_commands.validate_section_values("winter", {"months": months})
+    else:
+        assert runtime_commands.validate_section_values("winter", {"months": months}) == {"months": accepted}
+
+
+@pytest.mark.parametrize("source", ["dashboard", "emsctl", "schedule"])
+def test_a_value_config_json_keeps_a_copy_of_is_written_by_the_admin_only(tmp_path, source):
+    """Another source would leave the copy a rollback runs behind."""
+
+    state = RuntimeState(str(tmp_path / "runtime-state.json"), {"devices": {}})
+    state.load_if_changed(force=True)
+
+    with pytest.raises(RuntimeWriteError, match="winter.months can be changed in the Admin console only"):
+        runtime_commands.apply_section_update(state, "winter", {"months": [11, 12]}, source=source)
+    runtime_commands.apply_section_update(state, "winter", {"enabled": False}, source=source)
+    runtime_commands.apply_section_update(state, "winter", {"months": [11, 12]}, source="admin")
+
+    assert state.data["winter"]["months"] == [11, 12]
+    assert state.data["winter"]["enabled"] is False
+
+
 def test_the_writer_accepts_exactly_the_offgrid_modes_the_ems_can_write():
     from ems.config import OFFGRID_SOCKET_MODES
 
@@ -374,8 +415,9 @@ def test_catalogue_runtime_defaults_leave_out_installation_values():
             "pv_margin_percent",
             "pv_margin_min_w",
         ),
+        "winter": ("summer_min_soc", "winter_min_soc", "ramp_step_percent", "adjust_hour"),
     }
-    prefixes = {"system": "system", "devices": "devices[]", "battery_care": "battery_care"}
+    prefixes = {"system": "system", "devices": "devices[]", "battery_care": "battery_care", "winter": "winter"}
     assert runtime_commands.catalogue_runtime_defaults() == {
         scope: {key: index[f"{prefixes[scope]}.{key}"]["default"] for key in keys}
         for scope, keys in expected.items()

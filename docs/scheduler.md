@@ -32,10 +32,12 @@ hand.
 | Grid target while discharging | `system.grid_target_discharge_w`; import or export, in `emsctl schedule` a negative value for export | `emsctl system grid-target-discharge W` |
 | Grid target while charging | `system.grid_target_charge_w`; likewise | `emsctl system grid-target-charge W` |
 
-That is every runtime value the EMS has except `system.loop_interval`, a tuning
-value rather than a control target; a test keeps the list complete. Values are
-absolute, as with `emsctl`: "raise the power in the morning" is "06:00 set to
-1000 W" and "09:00 set to 800 W".
+That is every runtime value the EMS has except `system.loop_interval`, a
+tuning value rather than a control target, and the values of battery care and
+of the winter plan beside winter mode itself (months, reserves, step, step
+hour), which are set for the season rather than by the hour; a test keeps the
+list complete. Values are absolute, as with `emsctl`: "raise the power in the
+morning" is "06:00 set to 1000 W" and "09:00 set to 800 W".
 
 *EMS control* and *Device control* off mean the EMS lets go: the inverter keeps
 its last output value. To lower the output, use the output limits.

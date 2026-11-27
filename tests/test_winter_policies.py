@@ -356,9 +356,123 @@ def test_a_battery_only_model_steps_at_noon_and_not_once_it_reports_pv():
 
 def test_the_step_hour_is_configurable():
     controller = EMSController(devices=[], shelly=None, sleep_enabled=False)
-    with patch.object(cfg, "winter_adjust_hour", lambda: 8):
+    with patch.object(cfg, "winter_adjust_hour", lambda runtime_state=None: 8):
         _target(controller, _state(20, soc=20), datetime(2026, 11, 2, 7, 0), entry=BATTERY_ONLY)
         assert _target(controller, _state(20, soc=20), datetime(2026, 11, 2, 8, 30), entry=BATTERY_ONLY) == (23, True)
+
+
+def test_a_step_hour_set_while_the_ems_runs_takes_effect_at_once():
+    """The step hour is an operating value: the runtime state's, read every cycle, not the config's from the start."""
+
+    runtime = SimpleNamespace(data={"winter": {"enabled": True, "adjust_hour": 8}})
+    controller = EMSController(devices=[], shelly=None, sleep_enabled=False, runtime_state=runtime)
+
+    _target(controller, _state(20, soc=20), datetime(2026, 11, 2, 7, 0), entry=BATTERY_ONLY)
+    assert _target(controller, _state(20, soc=20), datetime(2026, 11, 2, 8, 30), entry=BATTERY_ONLY) == (23, True)
+
+
+def _running(**winter):
+    runtime = SimpleNamespace(data={"winter": {"enabled": True, **winter}})
+    return runtime, EMSController(devices=[], shelly=None, sleep_enabled=False, runtime_state=runtime)
+
+
+def test_a_winter_reserve_lowered_while_the_ems_runs_lowers_the_held_target_at_once():
+    runtime, controller = _running()
+    _remember(controller, 34)
+    morning = datetime(2026, 11, 2, 9, 0)
+    assert _target(controller, _state(34, soc=60), morning, entry=BATTERY_ONLY) == (34, False)
+
+    runtime.data["winter"]["winter_min_soc"] = 25
+
+    assert _target(controller, _state(34, soc=60), morning, entry=BATTERY_ONLY) == (25, False)
+
+
+def test_the_daily_step_is_the_running_one():
+    _runtime, controller = _running(ramp_step_percent=1)
+
+    _target(controller, _state(20, soc=20), datetime(2026, 11, 2, 11, 0), entry=BATTERY_ONLY)
+
+    assert _target(controller, _state(20, soc=20), datetime(2026, 11, 2, 12, 30), entry=BATTERY_ONLY) == (21, True)
+
+
+def test_the_daily_step_stops_at_the_running_winter_reserve():
+    _runtime, controller = _running(winter_min_soc=30)
+
+    _target(controller, _state(29, soc=29), datetime(2026, 11, 2, 11, 0), entry=BATTERY_ONLY)
+
+    assert _target(controller, _state(29, soc=29), datetime(2026, 11, 2, 12, 30), entry=BATTERY_ONLY) == (30, True)
+
+
+def test_outside_winter_the_reserve_returns_to_the_running_summer_value():
+    _runtime, controller = _running(summer_min_soc=22)
+
+    with _configured(entry=BATTERY_ONLY):
+        target = controller.winter.reconciliation_target(_device(), _state(15, soc=60), False, datetime(2026, 6, 2, 12, 0))
+
+    assert target == (22, False)
+
+
+def test_a_device_without_its_own_floor_is_held_above_the_running_summer_reserve():
+    _runtime, controller = _running(summer_min_soc=30)
+    _remember(controller, 25)
+    device = SimpleNamespace(name="WR1", min_soc=0, max_soc=95)
+
+    with _configured(entry=BATTERY_ONLY):
+        target, _stepped = controller.winter.reconciliation_target(device, _state(25, soc=60), True, datetime(2026, 11, 2, 9, 0))
+
+    assert target == 30
+
+
+def test_the_soc_is_followed_up_to_the_running_winter_reserve():
+    _runtime, controller = _running(winter_min_soc=30)
+    _remember(controller, 25, step_date="2026-11-02")
+
+    assert _target(controller, _state(25, soc=80), datetime(2026, 11, 2, 14, 0), entry=BATTERY_ONLY) == (30, False)
+
+
+def test_the_ramp_estimate_counts_with_the_running_values():
+    runtime = SimpleNamespace(data={"winter": {"winter_min_soc": 60, "ramp_step_percent": 2}})
+
+    assert cfg.estimate_winter_ramp_days(30, runtime) == 15
+
+
+def test_a_start_after_the_running_step_hour_skips_the_day(caplog):
+    """The first look at a device after the step hour takes no step that day, by the running hour."""
+
+    _runtime, controller = _running(adjust_hour=8)
+
+    assert _target(controller, _state(20, soc=20), datetime(2026, 11, 2, 8, 30), entry=BATTERY_ONLY) == (20, False)
+
+
+def test_the_step_log_estimates_the_days_left_with_the_running_values(caplog):
+    _runtime, controller = _running(winter_min_soc=30)
+    caplog.set_level(logging.INFO)
+
+    _target(controller, _state(20, soc=20), datetime(2026, 11, 2, 11, 0), entry=BATTERY_ONLY)
+    _target(controller, _state(20, soc=20), datetime(2026, 11, 2, 12, 30), entry=BATTERY_ONLY)
+
+    assert "estimated_days_remaining=3" in caplog.text
+
+
+def test_the_running_winter_values_win_over_the_config():
+    runtime = SimpleNamespace(data={"winter": {
+        "enabled": True, "months": [7], "summer_min_soc": 20, "winter_min_soc": 55, "ramp_step_percent": 2, "adjust_hour": 6,
+    }})
+
+    assert cfg.winter_mode_active(datetime(2026, 7, 1, 9, 0), runtime)
+    assert not cfg.winter_mode_active(datetime(2026, 11, 1, 9, 0), runtime)
+    assert cfg.winter_summer_min_soc(runtime) == 20
+    assert cfg.winter_min_soc_percent(runtime) == 55
+    assert cfg.winter_step_percent(runtime) == 2
+    assert cfg.winter_adjust_hour(runtime) == 6
+
+
+def test_an_unreadable_running_winter_value_falls_back_as_a_config_value_does():
+    runtime = SimpleNamespace(data={"winter": {"months": "winter", "ramp_step_percent": 9, "adjust_hour": 25}})
+
+    assert cfg.winter_months(runtime) == cfg.WINTER_DEFAULTS["months"]
+    assert cfg.winter_step_percent(runtime) == wp.MAX_RAISE_ABOVE_SOC
+    assert cfg.winter_adjust_hour(runtime) == 1
 
 
 def test_a_battery_only_device_is_never_held_from_export():
@@ -566,6 +680,21 @@ def test_with_a_store_a_restart_repeats_no_step_and_keeps_the_target(tmp_path, w
     restarted = EMSController(devices=[], shelly=None, sleep_enabled=False, winter_store=store)
     assert _target(restarted, _state(20, soc=21, pv=0), datetime(2026, 11, 2, 10, 0)) == (23, False)
     assert _target(restarted, _state(20, soc=21, pv=300), datetime(2026, 11, 2, 10, 30)) == (23, False)
+
+
+def test_a_reserve_lowered_while_the_ems_runs_is_stored_for_a_restart(tmp_path, writes_allowed):
+    store = _store(tmp_path)
+    runtime = SimpleNamespace(data={"winter": {"enabled": True}})
+    first = EMSController(devices=[], shelly=None, sleep_enabled=False, winter_store=store, runtime_state=runtime)
+    _target(first, _state(20, soc=20, pv=0), datetime(2026, 11, 2, 6, 0))
+    assert _target(first, _state(20, soc=20, pv=60), datetime(2026, 11, 2, 8, 0)) == (23, True)
+
+    runtime.data["winter"]["winter_min_soc"] = 21
+    assert _target(first, _state(23, soc=25, pv=0), datetime(2026, 11, 2, 9, 0)) == (21, False)
+    runtime.data["winter"]["winter_min_soc"] = 40
+
+    restarted = EMSController(devices=[], shelly=None, sleep_enabled=False, winter_store=store, runtime_state=runtime)
+    assert _target(restarted, _state(21, soc=25, pv=0), datetime(2026, 11, 2, 10, 0)) == (21, False)
 
 
 def test_with_a_store_a_start_in_daylight_after_yesterdays_step_takes_todays(tmp_path, writes_allowed):

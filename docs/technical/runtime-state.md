@@ -62,7 +62,12 @@ Example:
     "grid_target_charge_w": 0
   },
   "winter": {
-    "enabled": true
+    "enabled": true,
+    "months": [10, 11, 12, 1, 2, 3],
+    "summer_min_soc": 15,
+    "winter_min_soc": 40,
+    "ramp_step_percent": 3,
+    "adjust_hour": 12
   },
   "ac_charge_control": {
     "enabled": true
@@ -576,9 +581,18 @@ runs neither read nor write it.
 | Field | Meaning |
 |---|---|
 | `enabled` | Enables or disables winter mode at runtime |
+| `months` | The months winter mode is active in, each once |
+| `summer_min_soc` | The reserve outside the winter months, in percent |
+| `winter_min_soc` | The reserve the daily steps climb to in winter, in percent |
+| `ramp_step_percent` | The daily step, 1 to 3 points |
+| `adjust_hour` | The local hour a timed step is due from, 0 to 23 |
 
-Winter months, SOC limits, ramp step, step hour and policies stay static in
-`config.json`.
+The EMS reads them every cycle, so a change applies without a restart.
+`config.json` keeps a copy of them, which the Admin writes as well, so a
+rollback to an earlier v0.10 release runs the same values; for that, only the
+Admin console may change them, and `ems.runtime_commands` refuses them from the
+dashboard's API, `emsctl` and the scheduler. The policy per device type stays
+in `config.json`.
 
 ## AC Charging Fields
 

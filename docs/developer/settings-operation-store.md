@@ -35,7 +35,10 @@ Owner decisions (2026-11-25):
   click and make Admin drafts conflict.
 - First the settings that are live today; feature settings that need a restart
   today (winter months, minimum SoC, full-charge assist, control tuning) move
-  later, one by one, each with live reading in the EMS.
+  later, one by one, each with live reading in the EMS. Owner decision
+  (2026-11-27): each such move makes the values editable in the Admin console
+  first; the dashboard and `emsctl` get their fields later. Winter has moved;
+  the full-charge assist and the control tuning are next.
 - Hard caps stay in `config.json` and change only in the Admin's Safety tab:
   the total (`system.max_total_power`, or `system.max_total_power_limit`
   where a config sets it) and each device's own
@@ -54,6 +57,16 @@ Into the operation store, out of `config.json`:
 - `system.enabled`, `system.loop_interval`, `system.min_output_limit`,
   `system.grid_target_discharge_w`, `system.grid_target_charge_w`
 - `winter.enabled`, `ac_charge_control.enabled`
+- `winter.months`, `summer_min_soc`, `winter_min_soc`, `ramp_step_percent`,
+  `adjust_hour` (the first of the later moves; the per-class
+  `winter.policies` stay installation). Older releases read these only from
+  `config.json`, so it keeps a copy (`ROLLBACK_CONFIG_COPIES`): the Admin
+  writes both, the switch-over does not move them and the template keeps
+  them. Only the Admin may write them (`apply_section_update` refuses every
+  other source), and a save whose runtime write fails after the config was
+  written names the value it could not hand over, while the copy already
+  holds it. Owner decision (2026-11-27): the copy goes in v0.11.0, which
+  cannot be rolled back to v0.10.
 - `battery_care.enabled`, `min_discharge_w`, `pv_margin_min_w`,
   `pv_margin_percent`, `pv_only_points`, `summer_full_points`,
   `winter_full_points`

@@ -25,6 +25,7 @@ from ems.config import (
 )
 from ems.config import OFFGRID_SOCKET_MODES as FIRMWARE_OFFGRID_SOCKET_MODES
 from ems.logging_utils import log_event
+from ems.winter_policies import MAX_RAISE_ABOVE_SOC
 
 
 OFFGRID_SOCKET_MODES = tuple(reversed(FIRMWARE_OFFGRID_SOCKET_MODES))
@@ -64,6 +65,11 @@ WRITABLE_DEVICE_FIELDS = {**DEVICE_FIELDS, **DEVICE_AC_FIELDS, **DEVICE_SETTING_
 SECTION_FIELDS = {
     "winter": {
         "enabled": ("bool", None),
+        "months": ("month_list", (1, 12)),
+        "summer_min_soc": ("int", (0, 100)),
+        "winter_min_soc": ("int", (0, 100)),
+        "ramp_step_percent": ("int", (1, MAX_RAISE_ABOVE_SOC)),
+        "adjust_hour": ("int", (0, 23)),
     },
     "ac_charge_control": {
         "enabled": ("bool", None),
@@ -86,6 +92,9 @@ OPERATION_SETTING_PATHS = frozenset(
     | {f"{section}.{key}" for section, fields in SECTION_FIELDS.items() for key in fields}
 )
 OPERATION_DEVICE_KEYS = frozenset(key for key in DEVICE_FIELDS if key not in INSTALLATION_DEVICE_KEYS)
+ROLLBACK_CONFIG_COPIES = frozenset(
+    {"winter.months", "winter.summer_min_soc", "winter.winter_min_soc", "winter.ramp_step_percent", "winter.adjust_hour"}
+)
 
 
 class RuntimeWriteError(ValueError):
@@ -268,9 +277,19 @@ def apply_system_update(runtime_state, payload, validation_context=None, *, sour
 def apply_section_update(
     runtime_state, section_name, payload, validation_context=None, *, source
 ):
+    """Write validated values into a runtime section such as ``winter``.
+
+    A value ``config.json`` keeps a copy of (``ROLLBACK_CONFIG_COPIES``) is
+    taken from the Admin console only, which writes the copy too; from any
+    other source it would leave the copy behind for a rollback to run.
+    """
+
     if section_name not in SECTION_FIELDS:
         raise RuntimeWriteError(f"unsupported runtime section {section_name}")
     values = _validate_payload(payload, SECTION_FIELDS[section_name])
+    copied = sorted(f"{section_name}.{key}" for key in values if f"{section_name}.{key}" in ROLLBACK_CONFIG_COPIES)
+    if copied and source != "admin":
+        raise RuntimeWriteError(f"{', '.join(copied)} can be changed in the Admin console only")
     section = _update_section(runtime_state, section_name, values)
     _log_update(source, section_name, values)
     return {section_name: section}
@@ -813,6 +832,9 @@ def _validate_value(key, value, value_type, rule):
             raise RuntimeWriteError(f"{key} must be one of: {allowed}")
         return normalized
 
+    if value_type == "month_list":
+        return _validated_months(key, value, rule)
+
     if value_type == "setting":
         if _unmanaged(value):
             return None
@@ -823,6 +845,26 @@ def _validate_value(key, value, value_type, rule):
         return normalized
 
     raise RuntimeWriteError(f"unsupported validator for {key}")
+
+
+def _validated_months(key, value, rule):
+    """At least one month, each a whole number of the year once, in the order given.
+
+    A list, or text with the months apart by commas or spaces, as the Admin's
+    text field sends them.
+    """
+
+    if isinstance(value, str):
+        value = value.replace(",", " ").split()
+    if not isinstance(value, list) or not value:
+        raise RuntimeWriteError(f"{key} must be a list of at least one month")
+    first, last = rule
+    months = []
+    for item in value:
+        month = _validated_int(key, item, rule, f"a list of months {first} to {last}")
+        if month not in months:
+            months.append(month)
+    return months
 
 
 def _validated_int(key, value, rule, kind):

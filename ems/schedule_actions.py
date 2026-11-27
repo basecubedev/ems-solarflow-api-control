@@ -28,6 +28,21 @@ GROUP_LABELS = {
 GROUPS = tuple(GROUP_LABELS)
 
 EXCLUDED_KEYS = {
+    "winter.months": (
+        "the winter plan itself, set for the season; a rule switches winter mode on or off"
+    ),
+    "winter.summer_min_soc": (
+        "the reserve the winter plan returns to, set for the season, not a target to move by the hour"
+    ),
+    "winter.winter_min_soc": (
+        "the reserve the winter plan climbs to day by day, not a target to move by the hour"
+    ),
+    "winter.ramp_step_percent": (
+        "the pace of the winter plan's daily step, not a target to move by the hour"
+    ),
+    "winter.adjust_hour": (
+        "the hour the winter plan takes its daily step, not a target to move by the hour"
+    ),
     "system.loop_interval": (
         "a tuning value every ramp and filter is defined against, not a control target"
     ),
