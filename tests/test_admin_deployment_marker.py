@@ -15,7 +15,9 @@ pytestmark = [
 
 
 def test_deployment_marker_images_are_not_duplicated(tmp_path):
-    service = DeploymentService(None, None, workspace_dir=tmp_path)
+    service = DeploymentService(
+        None, None, admin_data_dir=tmp_path / "admin", workspace_dir=tmp_path
+    )
     images = [
         {"service": "ems", "image": "ems:v1"},
         {"service": "influxdb", "image": "influxdb:2.7"},

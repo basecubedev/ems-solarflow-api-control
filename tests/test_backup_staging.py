@@ -298,10 +298,9 @@ def test_a_swapped_folder_cannot_redirect_an_archive(tmp_path, monkeypatch, pass
     backup_dir.mkdir()
     victim = tmp_path / "victim"
     victim.mkdir()
-    _swap_after_new_file(monkeypatch, backup_dir, victim)
-
-    path = create(tmp_path, config, base, config_path, password=password)
-    monkeypatch.undo()
+    with monkeypatch.context() as swapped:
+        _swap_after_new_file(swapped, backup_dir, victim)
+        path = create(tmp_path, config, base, config_path, password=password)
 
     assert os.listdir(victim) == []
     assert backup.inspect_backup(path, password=password)["manifest"]["backup_type"] == "config"
@@ -311,10 +310,9 @@ def test_a_swapped_folder_cannot_redirect_a_database_snapshot(tmp_path, monkeypa
     base, config = write_db_project(tmp_path)
     victim = tmp_path / "victim"
     victim.mkdir()
-    _swap_after_new_file(monkeypatch, Path(base, "data"), victim)
-
-    path = create_db(base, config)
-    monkeypatch.undo()
+    with monkeypatch.context() as swapped:
+        _swap_after_new_file(swapped, Path(base, "data"), victim)
+        path = create_db(base, config)
 
     assert os.listdir(victim) == []
     roles = {db["role"]: db for db in backup.inspect_backup(path)["manifest"]["databases"]}

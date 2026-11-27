@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from ems import paths
+from tests import checkout_data_guard
 from tests.scratch_guard import scratch_shortfall
 from tests.shards import load_weights, parse_shard, select
 
@@ -215,6 +216,48 @@ def _backup_plaintext_stays_out_of_the_checkout(request, tmp_path_factory, monke
         return found
 
     monkeypatch.setattr(backup, "plaintext_dir", outside_the_checkout)
+
+
+def pytest_configure(config):
+    checkout_data_guard.install()
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _checkout_data_untouched_to_the_end():
+    """Fail the last test of a process when a write into the checkout's ``data/`` came after it.
+
+    A module or session fixture's teardown and a thread still running write
+    after every test's own check; without this check such a write would go
+    unreported.
+    """
+
+    yield
+    _refuse_checkout_data_writes("after the last test of this process (a fixture's teardown or a thread)")
+
+
+@pytest.fixture(autouse=True)
+def _checkout_data_stays_untouched():
+    """Fail a test that wrote into the checkout's own ``data/`` (``tests/checkout_data_guard.py``).
+
+    The write itself was refused already; this fails the test even where the
+    code under test caught that refusal. A write found before the test began
+    came from a fixture's setup or teardown, or from a thread an earlier test
+    left running.
+    """
+
+    _refuse_checkout_data_writes("before this test began")
+    yield
+    _refuse_checkout_data_writes("during this test")
+
+
+def _refuse_checkout_data_writes(when):
+    writes = checkout_data_guard.take()
+    if writes:
+        listed = "\n".join(f"  {event} {path}" for event, path in writes)
+        raise checkout_data_guard.CheckoutDataWrite(
+            f"writes into the checkout's data/ {when}:\n{listed}\n"
+            "use tmp_path, EMS_ADMIN_DATA_DIR, EMS_INSTALL_DIR or isolated_install_root"
+        )
 
 
 @pytest.fixture
