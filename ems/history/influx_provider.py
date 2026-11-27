@@ -28,6 +28,7 @@ from ems.influx_setup import (
 from ems.logging_utils import log_event
 from ems.history.provider import (
     PACK_CELL_REDUCERS,
+    STATE_SERIES,
     HistoryProvider,
     HistoryResult,
     consumer_of_series,
@@ -114,6 +115,31 @@ PACK_CELL_INFLUX_SERIES = {
         "collapse": reducer,
     }
     for field_name, reducer in PACK_CELL_REDUCERS.items()
+}
+
+# The battery's condition per device, as the battery task keeps it: a state
+# such as the heating with its window's maximum, so a window in which it was on
+# at all shows it on; temperatures and SoC values with their mean; what the
+# battery accepts summed over the devices like any power.
+BATTERY_INFLUX_SERIES = {
+    "device_temp": {"measurement": "zendure_device", "field": "temp", "device_scoped": True, "collapse": "mean"},
+    "min_soc": {"measurement": "zendure_device", "field": "min_soc", "device_scoped": True, "collapse": "mean"},
+    "winter_target": {
+        "measurement": "zendure_device", "field": "winter_target", "device_scoped": True, "collapse": "mean",
+    },
+    **{
+        name: {"measurement": "zendure_device", "field": name, "device_scoped": True, "window": "max", "collapse": "max"}
+        for name in STATE_SERIES
+    },
+    **{
+        name: {"measurement": "zendure_device", "field": f"{name}_w", "device_scoped": True, "collapse": "sum"}
+        for name in ("charge_avail", "discharge_avail", "input_limit")
+    },
+}
+
+PACK_INFLUX_SERIES = {
+    **PACK_CELL_INFLUX_SERIES,
+    "temp_c": {"measurement": "battery_pack", "field": "temp_c", "device_scoped": True, "collapse": "mean"},
 }
 
 # One consumer's power, selected by its name in the ``device`` tag.
@@ -455,9 +481,9 @@ class InfluxHistoryProvider(HistoryProvider):
             if consumer:
                 spec = CONSUMER_SERIES
             elif pack_cells:
-                spec = PACK_CELL_INFLUX_SERIES[pack_cells[0]]
+                spec = PACK_INFLUX_SERIES[pack_cells[0]]
             else:
-                spec = INFLUX_SERIES.get(name)
+                spec = INFLUX_SERIES.get(name) or BATTERY_INFLUX_SERIES.get(name)
             if spec is None:
                 # Series with no InfluxDB mapping; leave empty rather than fail.
                 per_series_points[name] = {}

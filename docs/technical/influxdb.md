@@ -880,11 +880,12 @@ pack does not report, or one outside -60 to 120 °C, is left out. The sign of `p
 value Zendure sends as 32768–65535 is stored as the negative number it
 encodes); `state` names the direction, as the dashboard reads it.
 
-`power_w`, `state` and `temp_c` stay in the raw bucket (`retention.raw_days`, 14 days by
+`power_w` and `state` stay in the raw bucket (`retention.raw_days`, 14 days by
 default). A window's mean of a power without a direction means nothing once the
 direction changes inside it, and a field added to the cell task would leave the
 task every installation already has as `kept` until an operator syncs it by
-hand.
+hand. `temp_c` goes on into the downsampled buckets through the battery task
+(see [A battery in the cold](#a-battery-in-the-cold)).
 
 Each downsampling step has a second task for them, `<prefix>-downsample-<target>:cells`
 beside `<prefix>-downsample-<target>`, which carries each window's lowest
@@ -896,6 +897,32 @@ safe sync ([The EMS keeps the schema in
 place](#the-ems-keeps-the-schema-in-place)) creates a task that is missing, and
 until it has, `influx status` and the EMS log name them under `missing_tasks`.
 The cell history in the downsampled buckets starts when they do.
+
+### A battery in the cold
+
+Each `zendure_device` point also carries the battery's condition as the
+device reports it, a value it does not report left out: `heat_state`
+(`heatState`, 1 while the battery heating is on), `low_temp`
+(`lowTemperature`, 1 while a pack is too cold), `error_flag` (`is_error`),
+`charge_avail_w` and `discharge_avail_w` (`chargeAvailPower` and
+`dischargeAvailPower`, what the battery accepts now, in watts), `derate`
+(`derateFlag`) and `input_limit_w` (`inputLimit`, the AC charge limit). Beside
+them the EMS writes what it decided for the device in that cycle:
+`winter_target`, the minimum SoC winter mode plans, only while winter mode is
+on, `winter_hold`, 1 while the export hold keeps the device's PV from export,
+and `ac_input`, 1 while its AC role is charging, as the EMS commands it or
+follows a charge the firmware started. A yes/no is written as 1 or 0, as the history serves no
+booleans.
+
+A third task per step, `<prefix>-downsample-<target>:battery`, carries them and
+the pack temperature `temp_c` into the `1m`, `5m` and `1h` buckets: a state
+with each window's maximum, so a window in which the heating ran at all shows
+it on, and a chart that thins a long range keeps it the same way; the
+temperatures and what the battery accepts with their mean; the winter target
+with its last value, one pipeline per reducer, so the task reads the source
+bucket three times rather than once per field. Like the cell task it reaches an installed
+system by itself, and their history in the downsampled buckets starts when it
+does.
 
 ### PV inputs
 

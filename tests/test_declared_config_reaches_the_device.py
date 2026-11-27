@@ -241,8 +241,6 @@ OBSERVED_ON_HARDWARE = {
 
 # Reported and deliberately not carried into DeviceState, grouped by why.
 DELIBERATELY_UNREAD = {
-    # Device-internal thermal management; the EMS reads hyperTmp for display.
-    "heatState",
     # Cloud/lifecycle bookkeeping, none of it a control input.
     "IOTState", "OTAState", "bindstate", "dataReady", "factoryModeState",
     "ts", "tsZone", "writeRsp",
@@ -258,8 +256,6 @@ DELIBERATELY_UNREAD = {
     # operator may deliberately set lower than the hardware allows -- taking the
     # device's word would override that.
     "inverseMaxPower",
-    # faultLevel is the graded signal and is read; this is its boolean shadow.
-    "is_error",
 }
 
 

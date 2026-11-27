@@ -56,6 +56,7 @@ DEVICE_STATE_PROPERTIES = frozenset(
         "gridOffMode", "acMode", "acStatus", "dcStatus", "gridState", "inputLimit",
         "packNum", "socStatus", "batCalTime", "gridInputPower", "gridReverse",
         "pass", "reverseState",
+        "heatState", "lowTemperature", "is_error", "chargeAvailPower", "dischargeAvailPower", "derateFlag",
         "chargeLimit", "chargeMaxLimit",
         "lampSwitch", "Fanmode", "Fanspeed", "buzzerSwitch", "autoHeat",
     }
@@ -94,6 +95,11 @@ class DeviceState:
     holds the ``ems.device_settings`` properties the report carries.
     ``pass_state`` and ``reverse_state`` are the report's ``pass`` and
     ``reverseState``, None when it carries none: recorded, never acted on.
+    So are ``heat_state`` (``heatState``, the battery heating), ``low_temp``
+    (``lowTemperature``, a pack too cold), ``error_flag`` (``is_error``),
+    ``charge_avail_w`` and ``discharge_avail_w`` (``chargeAvailPower``,
+    ``dischargeAvailPower``, what the battery accepts now) and ``derate``
+    (``derateFlag``), for the history of a battery in the cold.
     """
 
     soc: float
@@ -145,6 +151,12 @@ class DeviceState:
     grid_reverse_reported: bool = False
     pass_state: int | None = None
     reverse_state: int | None = None
+    heat_state: int | None = None
+    low_temp: int | None = None
+    error_flag: int | None = None
+    charge_avail_w: int | None = None
+    discharge_avail_w: int | None = None
+    derate: int | None = None
     # None when the device never reported the field; 0 is an observed "no pack".
     pack_num: int | None = None
     soc_status: int = 0

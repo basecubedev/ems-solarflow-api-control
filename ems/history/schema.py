@@ -81,6 +81,20 @@ MEASUREMENT_FILTER = (
 TASK_NAME_INFIX = "-downsample-"
 CELL_TASK_SUFFIX = ":cells"
 CELL_MEASUREMENT = "battery_pack"
+BATTERY_TASK_SUFFIX = ":battery"
+BATTERY_DOWNSAMPLED = (
+    ("battery_pack", "temp_c", "mean"),
+    ("zendure_device", "heat_state", "max"),
+    ("zendure_device", "low_temp", "max"),
+    ("zendure_device", "error_flag", "max"),
+    ("zendure_device", "derate", "max"),
+    ("zendure_device", "winter_hold", "max"),
+    ("zendure_device", "ac_input", "max"),
+    ("zendure_device", "charge_avail_w", "mean"),
+    ("zendure_device", "discharge_avail_w", "mean"),
+    ("zendure_device", "input_limit_w", "mean"),
+    ("zendure_device", "winter_target", "last"),
+)
 
 
 def bucket_name(prefix, key):
@@ -102,12 +116,18 @@ def cell_task_name(prefix, target):
     return f"{task_name(prefix, target)}{CELL_TASK_SUFFIX}"
 
 
+def battery_task_name(prefix, target):
+    """The task that carries the battery's condition of one downsampling step (``BATTERY_DOWNSAMPLED``)."""
+    return f"{task_name(prefix, target)}{BATTERY_TASK_SUFFIX}"
+
+
 def _planned_tasks(influx_config):
     """``(name, flux builder, entry)`` for every task the downsampling asks for.
 
-    The cell voltages have a task of their own beside each step's main one: the
-    safe sync creates a task that is missing but never changes one that exists,
-    so a task of their own reaches an upgraded installation by itself.
+    The cell voltages and the battery's condition have a task each beside each
+    step's main one: the safe sync creates a task that is missing but never
+    changes one that exists, so a task of their own reaches an upgraded
+    installation by itself.
     """
 
     prefix = influx_config["bucket_prefix"]
@@ -117,6 +137,7 @@ def _planned_tasks(influx_config):
             continue
         yield task_name(prefix, target), build_downsample_flux, entry
         yield cell_task_name(prefix, target), build_cell_downsample_flux, entry
+        yield battery_task_name(prefix, target), build_battery_downsample_flux, entry
 
 
 def retention_seconds_for_bucket(influx_config, key):
@@ -265,6 +286,53 @@ from(bucket: "{source_bucket}")
     )
     return f'''option task = {{name: "{name}", every: {window}}}
 {pipelines}'''
+
+
+def build_battery_downsample_flux(influx_config, entry):
+    """Render the Flux body of the task that carries one step's battery condition.
+
+    The pack temperatures and what the battery accepts keep the window's mean;
+    a state such as the heating keeps its maximum, so a window in which it was
+    on at all shows it on; the winter target keeps its last value. One
+    pipeline per reducer.
+    """
+    prefix = influx_config["bucket_prefix"]
+    org = influx_config["org"]
+    window = entry["window"]
+    source_bucket = bucket_name(prefix, entry["source"])
+    target_bucket = bucket_name(prefix, entry["target"])
+    name = battery_task_name(prefix, entry["target"])
+
+    pipelines = "".join(
+        f'''
+from(bucket: "{source_bucket}")
+  |> range(start: -task.every)
+  |> filter(fn: (r) => {_battery_predicate(reducer)})
+  |> aggregateWindow(every: {window}, fn: {reducer}, createEmpty: false)
+  |> to(bucket: "{target_bucket}", org: "{org}")
+'''
+        for reducer in dict.fromkeys(reducer for _measurement, _field, reducer in BATTERY_DOWNSAMPLED)
+    )
+    return f'''option task = {{name: "{name}", every: {window}}}
+{pipelines}'''
+
+
+def _battery_predicate(reducer):
+    """The filter of one battery pipeline: every field the reducer keeps, by measurement.
+
+    One pipeline per reducer reads the source bucket once for all of its fields
+    rather than once per field, which a small host running InfluxDB notices.
+    """
+
+    fields = {}
+    for measurement, field, kept_by in BATTERY_DOWNSAMPLED:
+        if kept_by == reducer:
+            fields.setdefault(measurement, []).append(field)
+    clauses = []
+    for measurement, names in fields.items():
+        any_field = " or ".join(f'r._field == "{field}"' for field in names)
+        clauses.append(f'(r._measurement == "{measurement}" and ({any_field}))')
+    return " or ".join(clauses)
 
 
 def _normalize_flux(text):

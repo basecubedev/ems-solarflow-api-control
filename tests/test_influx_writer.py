@@ -59,9 +59,9 @@ class FakeClient:
         self,
         present=("ems_raw", "ems_1m", "ems_5m", "ems_1h"),
         tasks=(
-            "ems-downsample-1m", "ems-downsample-1m:cells",
-            "ems-downsample-5m", "ems-downsample-5m:cells",
-            "ems-downsample-1h", "ems-downsample-1h:cells",
+            "ems-downsample-1m", "ems-downsample-1m:cells", "ems-downsample-1m:battery",
+            "ems-downsample-5m", "ems-downsample-5m:cells", "ems-downsample-5m:battery",
+            "ems-downsample-1h", "ems-downsample-1h:cells", "ems-downsample-1h:battery",
         ),
     ):
         self.writes = []
@@ -327,7 +327,7 @@ def test_buckets_without_their_tasks_are_named_too(caplog):
     the tasks give it away.
     """
 
-    client = FakeClient(tasks=("ems-downsample-1m", "ems-downsample-1m:cells"))
+    client = FakeClient(tasks=("ems-downsample-1m", "ems-downsample-1m:cells", "ems-downsample-1m:battery"))
     writer = InfluxTelemetryWriter(DOWNSAMPLED_CONFIG, client_factory=lambda: client)
 
     with caplog.at_level(logging.WARNING):
@@ -335,7 +335,8 @@ def test_buckets_without_their_tasks_are_named_too(caplog):
 
     assert "event=influx_schema_incomplete" in caplog.text
     assert (
-        "missing_tasks=ems-downsample-5m,ems-downsample-5m:cells,ems-downsample-1h,ems-downsample-1h:cells"
+        "missing_tasks=ems-downsample-5m,ems-downsample-5m:cells,ems-downsample-5m:battery,"
+        "ems-downsample-1h,ems-downsample-1h:cells,ems-downsample-1h:battery"
     ) in caplog.text
     assert "missing_buckets" not in caplog.text
 
@@ -444,10 +445,13 @@ def test_a_task_that_exists_but_is_switched_off_fills_nothing(caplog):
             return [
                 {"name": "ems-downsample-1m", "status": "active"},
                 {"name": "ems-downsample-1m:cells", "status": "active"},
+                {"name": "ems-downsample-1m:battery", "status": "active"},
                 {"name": "ems-downsample-5m", "status": "inactive"},
                 {"name": "ems-downsample-5m:cells", "status": "active"},
+                {"name": "ems-downsample-5m:battery", "status": "active"},
                 {"name": "ems-downsample-1h", "status": "active"},
                 {"name": "ems-downsample-1h:cells", "status": "active"},
+                {"name": "ems-downsample-1h:battery", "status": "active"},
             ]
 
     client = Inactive()
@@ -1448,18 +1452,20 @@ FIELDS_OF_THE_STANDALONE_COLLECTOR = {
 def test_every_field_the_writer_sends_is_downsampled_and_every_downsampled_field_is_sent():
     """Two lists that must agree: what the EMS writes and what downsampling carries.
 
-    A field written but in neither list is lost after the raw retention; a
-    bool among the numeric fields would be averaged. The exceptions are named.
+    A field written but in none of the lists, the battery task's included, is
+    lost after the raw retention; a bool among the numeric fields would be
+    averaged. The exceptions are named.
     """
 
     from ems.history.influx_writer import _DEVICE_FIELDS
-    from ems.history.schema import NUMERIC_FIELDS, STATE_FIELDS
+    from ems.history.schema import BATTERY_DOWNSAMPLED, NUMERIC_FIELDS, STATE_FIELDS
 
     values = {name: 1.0 for name in _DEVICE_FIELDS}
-    values.update(grid_reverse=1, grid_reverse_reported=True, battery_packs=(), pack_num=1)
+    values.update(grid_reverse=1, grid_reverse_reported=True, input_limit_w=300, input_limit_reported=True, battery_packs=(), pack_num=1)
     lines = build_telemetry_lines(
         [_Dev("WR1")], [SimpleNamespace(**values)], {"WR1": True}, -10.0, target=5.0,
         timestamp_ns=1, surplus_exporting=frozenset({"WR1"}), ac_charging=True, consumers={"c": 1.0},
+        decisions={"WR1": {"winter_target": 40, "winter_hold": True, "ac_input": False}},
     )
     written = {}
     for line in lines:
@@ -1467,7 +1473,9 @@ def test_every_field_the_writer_sends_is_downsampled_and_every_downsampled_field
         for pair in body.split(","):
             name, value = pair.split("=", 1)
             written[name] = value
-    schema = set(NUMERIC_FIELDS) | set(STATE_FIELDS)
+    schema = set(NUMERIC_FIELDS) | set(STATE_FIELDS) | {
+        field for measurement, field, _reducer in BATTERY_DOWNSAMPLED if measurement == "zendure_device"
+    }
 
     assert set(written) - schema == set(RAW_ONLY_FIELDS)
     assert schema - set(written) == set(FIELDS_OF_THE_STANDALONE_COLLECTOR)

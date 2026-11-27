@@ -329,6 +329,18 @@ def test_the_developer_cell_tasks_are_what_the_schema_generates():
         assert written.strip() == generated.strip()
 
 
+def test_the_developer_battery_tasks_are_what_the_schema_generates():
+    from pathlib import Path
+
+    for window in ("1m", "15m"):
+        path = Path(f"develop/influxdb/tasks/downsample_{window}_battery.flux")
+        written = "\n".join(line for line in path.read_text(encoding="utf-8").splitlines() if not line.startswith("//"))
+        generated = schema.build_battery_downsample_flux(
+            {"bucket_prefix": "zendure", "org": "zendure-dev"}, {"source": "raw", "target": window, "window": window}
+        )
+        assert written.strip() == generated.strip()
+
+
 def test_a_device_held_past_its_last_read_records_no_pack_point():
     state = parse_device(_report(_pack("PACK-A", 320, 322)))
 
@@ -375,10 +387,13 @@ def test_the_safe_sync_adds_the_cell_tasks_beside_main_tasks_it_keeps():
 
     report = schema.sync(client, _INFLUX, safe=True)
 
-    assert schema.planned_task_names(_INFLUX) == ["ems-downsample-1m", "ems-downsample-1m:cells"]
+    assert schema.planned_task_names(_INFLUX) == [
+        "ems-downsample-1m", "ems-downsample-1m:cells", "ems-downsample-1m:battery",
+    ]
     assert {task["name"]: task["action"] for task in report["tasks"]} == {
         "ems-downsample-1m": "unchanged",
         "ems-downsample-1m:cells": "created",
+        "ems-downsample-1m:battery": "created",
     }
 
 

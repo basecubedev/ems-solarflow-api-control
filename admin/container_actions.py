@@ -37,9 +37,10 @@ INFLUX_SERVICE = "influxdb"
 
 # The schema sync waits for InfluxDB inside this call, so the call has to
 # outlive the wait and still leave room for its own requests. The count comes
-# from the operator's `influxdb.downsampling`: twenty-two on a fresh install of
-# the shipped chain, six more per level (each level has a main task and one for
-# the battery cell voltages). The allowance covers one level beyond
+# from the operator's `influxdb.downsampling`: twenty-five on a fresh install of
+# the shipped chain, seven more per level (each level has a main task, one for
+# the battery cell voltages and one for the battery's condition). The
+# allowance covers one level beyond
 # what we ship, plus the one data probe the repair's safe sync makes before it
 # shortens a retention; a longer chain needs this raised, and a test says so by
 # counting.
@@ -64,7 +65,7 @@ INFLUX_SERVICE = "influxdb"
 # the step is an error the page shows as a warning, and the EMS, restarted all
 # the same, completes the schema itself (ems/history/schema_keeper.py). The sync
 # is idempotent, so running it again is safe as well.
-INFLUX_SYNC_REQUEST_ALLOWANCE = 29
+INFLUX_SYNC_REQUEST_ALLOWANCE = 33
 INFLUX_SYNC_SLOW_REQUEST_SECONDS = 10
 INFLUX_SYNC_TIMEOUT_SECONDS = (
     INFLUX_READY_TIMEOUT_SECONDS
