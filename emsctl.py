@@ -54,7 +54,6 @@ from ems import config as config_mod
 from ems import config_init as config_init_mod
 from ems.cli_privilege import PrivilegeDropError, maybe_drop_privileges
 
-DEFAULT_RUNTIME_STATE_PATH = os.path.join(BASE_DIR, "runtime-state.json")
 TOP_LEVEL_COMMANDS = (
     "status",
     "system",
@@ -1648,7 +1647,8 @@ def runtime_defaults(config, existing=None):
             "enabled": config_mod.safe_bool(
                 config_section(config, "winter").get("enabled"),
                 config_mod.WINTER_DEFAULTS["enabled"],
-            )
+            ),
+            **config_mod.winter_operating_values(config_section(config, "winter")),
         },
         "ac_charge_control": {
             "enabled": config_mod.normalize_ac_charge_control_config(

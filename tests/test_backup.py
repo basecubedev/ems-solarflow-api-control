@@ -282,6 +282,22 @@ def test_collect_includes_config_and_runtime(tmp_path):
     assert "runtime_state" in kinds
 
 
+def test_a_config_without_a_runtime_state_path_backs_up_the_file_the_ems_uses(tmp_path):
+    from ems.runtime_state import runtime_state_path_under
+
+    base, config, config_path = write_project(tmp_path)
+    config["system"].pop("runtime_state_path", None)
+    used = Path(runtime_state_path_under(base, config))
+    used.parent.mkdir(parents=True, exist_ok=True)
+    used.write_text('{"system": {}, "devices": {}}\n')
+
+    included, _ = backup.collect_config_backup_files(config, base_dir=base, config_path=config_path)
+
+    runtime = next(entry for entry in included if entry["kind"] == "runtime_state")
+    assert runtime["abs_path"] == str(used)
+    assert used == Path(base) / "runtime-state.json"
+
+
 def test_collect_includes_the_schedules_beside_the_runtime_state(tmp_path):
     """Restore puts back what the backup holds, the rules included."""
 

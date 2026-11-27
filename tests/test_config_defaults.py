@@ -11,12 +11,17 @@ from types import SimpleNamespace
 
 import pytest
 
+from dashboard import sqlite_store
+from ems import backup
 from ems import config as cfg
 from ems.config import (
     CONFIG_UPGRADE_DEFAULTS,
     DASHBOARD_DEFAULTS,
     ENERGY_SAVINGS_DEFAULTS,
+    MISSING_KEY_SYSTEM_DEFAULTS,
     OUTPUT_CONTROL_DEFAULTS,
+    SIMULATION_SYSTEM_OVERRIDES,
+    SYSTEM_DEFAULTS,
     WINTER_DEFAULTS,
 )
 from ems.retired_defaults import DEFAULTS_REVISION
@@ -63,6 +68,119 @@ def test_config_template_winter_matches_code_defaults():
     template = json.loads(Path("config/config.template.json").read_text())
 
     assert without_comment_keys(template["winter"]) == WINTER_DEFAULTS
+
+
+def template_system():
+    template = json.loads(Path("config/config.template.json").read_text())
+    system = without_comment_keys(template["system"])
+    system["output_control"] = without_comment_keys(system["output_control"])
+    return system
+
+
+def test_config_template_system_matches_code_defaults():
+    assert template_system() == SYSTEM_DEFAULTS
+
+
+def test_a_live_config_without_a_key_runs_the_template_value():
+    """Only the fail-closed switches and the legacy runtime-state file keep a value of their own."""
+
+    system = cfg.apply_runtime_config_defaults({})["system"]
+    template = template_system()
+
+    differing = {key: system[key] for key in template if system[key] != template[key]}
+
+    assert differing == MISSING_KEY_SYSTEM_DEFAULTS
+    assert differing == {
+        "dry_run": True,
+        "allow_state_reconciliation_writes": False,
+        "runtime_state_path": "runtime-state.json",
+    }
+
+
+def test_a_simulation_switches_every_write_off_and_keeps_the_other_defaults():
+    live = cfg.default_runtime_config()["system"]
+    simulation = cfg.default_safe_config()["system"]
+
+    assert {key for key in live if simulation[key] != live[key]} <= set(SIMULATION_SYSTEM_OVERRIDES)
+    assert simulation["simulation_mode"] is True
+    assert simulation["dry_run"] is True
+    assert not any(
+        simulation[gate]
+        for gate in (
+            "allow_hardware_writes",
+            "allow_mqtt_local_control_writes",
+            "allow_mqtt_zendure_control_writes",
+            "allow_state_reconciliation_writes",
+        )
+    )
+
+
+def test_a_loaded_config_without_the_tuning_keys_runs_the_template_values(tmp_path):
+    snapshot = snapshot_config_module()
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps({"config_upgrade": {"on_startup": "disabled"}, "system": {}, "devices": []}))
+    try:
+        cfg.initialize(
+            SimpleNamespace(config=str(path), dry_run=False, simulate=False, replay=None, self_test=False),
+            str(ROOT),
+        )
+
+        assert cfg.SOC_RECONCILE_INTERVAL == 10
+        assert cfg.PV_CHARGE_BALANCE_DEADBAND_PERCENT == 1.0
+        assert cfg.PV_CHARGE_BALANCE_STRENGTH == 0.7
+        assert cfg.MIN_OUTPUT_LIMIT == 35
+        assert cfg.LOG_LEVEL == "info"
+        assert cfg.DRY_RUN is True
+        assert cfg.ALLOW_STATE_RECONCILIATION_WRITES is False
+    finally:
+        restore_config_module(snapshot)
+
+
+def test_an_unreadable_tuning_value_runs_the_template_value(tmp_path):
+    snapshot = snapshot_config_module()
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps({
+        "config_upgrade": {"on_startup": "disabled"},
+        "system": {
+            "pv_charge_balance_deadband_percent": "wide",
+            "pv_charge_balance_full_bias_percent": "high",
+            "pv_charge_balance_strength": "strong",
+            "min_output_limit": "low",
+        },
+        "devices": [],
+    }))
+    try:
+        cfg.initialize(
+            SimpleNamespace(config=str(path), dry_run=False, simulate=False, replay=None, self_test=False),
+            str(ROOT),
+        )
+
+        assert cfg.PV_CHARGE_BALANCE_DEADBAND_PERCENT == 1.0
+        assert cfg.PV_CHARGE_BALANCE_FULL_BIAS_PERCENT == 15.0
+        assert cfg.PV_CHARGE_BALANCE_STRENGTH == 0.7
+        assert cfg.MIN_OUTPUT_LIMIT == 35
+    finally:
+        restore_config_module(snapshot)
+
+
+def test_every_surface_names_the_same_shared_password_file():
+    from admin import auth as admin_auth
+    from dashboard import auth as dashboard_auth
+
+    assert DASHBOARD_DEFAULTS["auth_file"] == dashboard_auth.DEFAULT_AUTH_FILE
+    assert admin_auth.SHARED_AUTH_HINT == dashboard_auth.DEFAULT_AUTH_FILE
+
+
+def test_backup_and_statistics_defaults_are_the_template_values():
+    template = json.loads(Path("config/config.template.json").read_text())
+
+    assert backup.DEFAULT_DASHBOARD_AUTH_PATH == template["dashboard"]["auth_file"]
+    assert backup.DEFAULT_DASHBOARD_CERT_PATH == template["dashboard"]["ssl_cert_file"]
+    assert backup.DEFAULT_DASHBOARD_KEY_PATH == template["dashboard"]["ssl_key_file"]
+    assert backup.DEFAULT_DASHBOARD_DB_PATH == template["dashboard"]["database_path"]
+    assert backup.DEFAULT_INFLUX_SECRET_PATH == template["influxdb"]["secret_file"]
+    assert backup.DEFAULT_STATE_DB_PATH == template["battery_full_charge_assist"]["state_database_path"]
+    assert sqlite_store.DEFAULT_ENERGY_SAVINGS == without_comment_keys(template["energy_savings"])
 
 
 def test_config_template_dashboard_matches_code_defaults():

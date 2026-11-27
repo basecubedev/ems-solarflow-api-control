@@ -239,13 +239,21 @@ jobs:
           scripts/docker_compose_smoke.sh
 
   docker-first-e2e:
-    name: Repo docker-first setup e2e
+    name: Repo docker-first setup e2e (${{ matrix.shard }}/4)
     runs-on: ubuntu-latest
     # Booting a systemd container per tier is minutes of work each, and the
-    # appliance tiers added around two hundred of them.
-    timeout-minutes: 75
+    # appliance tiers added around two hundred of them. Four runners, each with
+    # a Docker daemon of its own, take a quarter of the test files each, whole
+    # files balanced by the seconds in tests/shard_weights.json (tests/shards.py),
+    # so the fixed container names never meet and a module's image or booted
+    # guest is set up once.
+    timeout-minutes: 45
     permissions:
       contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
 
     steps:
       - name: Checkout repository
@@ -271,7 +279,7 @@ jobs:
       # on failure, and clean up their own project in a finally block. Non-Docker
       # contract/unit tests run in the python-tests groups instead.
       - name: Report the selected marker expression
-        run: printf 'pytest -q -rs -m "docker and not browser" tests/\n'
+        run: printf 'pytest -q -rs -m "docker and not browser" tests/ --shard ${{ matrix.shard }}/4\n'
 
       - name: Name the InfluxDB image the base commit pins
         env:
@@ -293,7 +301,7 @@ jobs:
           # reports as a skip and the job passes having proven nothing.
           EMS_REQUIRE_APPLIANCE_CONTAINER_TESTS: "1"
         run: |
-          pytest -q -rs -m "docker and not browser" tests/
+          pytest -q -rs -m "docker and not browser" tests/ --shard ${{ matrix.shard }}/4 --durations=0
 
       - name: Show leftover containers on failure
         if: failure()

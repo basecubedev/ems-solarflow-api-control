@@ -638,6 +638,8 @@ def test_the_runtime_refresh_covers_the_runtime_state_the_ems_builds(monkeypatch
         "battery_care.summer_full_points",
         "battery_care.winter_full_points",
         "battery_care.pv_only_points",
+        "winter.months",
+        "winter.ramp_step_percent",
     }
 
 

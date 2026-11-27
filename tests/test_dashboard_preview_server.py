@@ -312,3 +312,14 @@ def test_list_flags_exit_without_serving(capsys):
     assert "Scenarios:" in out
     for name in SCENARIOS:
         assert name in out
+
+
+def test_the_preview_runtime_limits_carry_every_part_the_ems_sends():
+    """A part the preview leaves out leaves a page that reads it empty, as the control page's choices were."""
+
+    from ems.runtime_commands import effective_limits
+
+    preview = build_scenario("normal")["runtime"]["_limits"]
+
+    assert set(effective_limits()) <= set(preview)
+    assert preview["fields"] == effective_limits()["fields"]

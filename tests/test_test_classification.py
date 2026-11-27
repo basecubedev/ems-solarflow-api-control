@@ -11,10 +11,12 @@ See ``docs/developer/testing.md``.
 """
 import configparser
 import functools
+import os
 import re
 import shutil
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -22,7 +24,7 @@ import pytest
 pytestmark = [
     pytest.mark.contract,
     pytest.mark.simulation,
-    # Each check spawns its own collection, so the module costs about a minute:
+    # Each check spawns its own collection, so the module costs minutes:
     # too slow for the fast developer loop, still enforced by the PR groups.
     pytest.mark.slow,
 ]
@@ -76,6 +78,26 @@ def collect(expression=None):
         for line in result.stdout.splitlines()
         if "::" in line and not line.startswith(" ")
     )
+
+
+MEMBERSHIP_SELECTORS = ["admin and authority", "admin and setup", "mqtt", "power_control", "system_build", "authority"]
+
+
+@pytest.fixture(scope="module", autouse=True)
+def collections_in_parallel(request):
+    """Start every collection the module asks for at once, when it runs more than one test.
+
+    Each collection is a pytest process of its own over the whole suite; some
+    thirty of them one after another were the longest file of the core group.
+    ``collect`` keeps each answer, so the checks below read them back. One that
+    is not listed here is still collected, only on its own.
+    """
+    selected = [item for item in request.session.items if item.module is request.module]
+    if len(selected) > 1:
+        expressions = {"not docker", "mqtt_release", *PR_GROUPS.values(), *DOCUMENTED_SELECTORS, *MEMBERSHIP_SELECTORS}
+        with ThreadPoolExecutor(max_workers=min(4, os.cpu_count() or 1)) as pool:
+            list(pool.map(lambda selection: collect(*selection), [(), *((expression,) for expression in expressions)]))
+    yield
 
 
 def registered_markers():

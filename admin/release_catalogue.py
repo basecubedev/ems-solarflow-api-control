@@ -60,7 +60,8 @@ def load_release_catalogue(source=None, *, cache_path=None, urlopen=None, now=No
     channel's setup resources are present on ``main``), so the listing has an
     answer for every row without a single API call.
 
-    A transport failure may use a recent valid cache. A malformed, oversized or
+    A transport failure may use a recent valid cache; that answer also carries
+    ``cached_at``, when the cached copy was fetched. A malformed, oversized or
     schema-invalid document is ``None`` and never falls back to older content,
     and never becomes an empty catalogue: the caller must not mistake "could
     not be read" for "there are no releases".
@@ -192,13 +193,16 @@ def _now_timestamp(now=None) -> float:
 
 def _load_fresh_cache(path: Path, *, now=None):
     try:
-        age = _now_timestamp(now) - path.stat().st_mtime
+        fetched = path.stat().st_mtime
+        age = _now_timestamp(now) - fetched
         if age < 0 or age > CATALOGUE_CACHE_MAX_AGE_SECONDS:
             return None
         payload = json.loads(path.read_text(encoding="utf-8"))
-        return _validated_catalogue(payload)
+        catalogue = _validated_catalogue(payload)
     except (OSError, ValueError, _InvalidCatalogue):
         return None
+    cached_at = datetime.fromtimestamp(fetched, timezone.utc).isoformat().replace("+00:00", "Z")
+    return {**catalogue, "cached_at": cached_at}
 
 
 def _write_cache(path: Path, payload) -> None:

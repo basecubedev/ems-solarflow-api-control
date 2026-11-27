@@ -26,6 +26,13 @@ pytestmark = [
 ]
 
 
+@pytest.fixture(autouse=True)
+def _admin_state_in_a_temporary_folder(tmp_path, monkeypatch):
+    """The console's own state (sessions, workflow, identity key) goes to ``tmp_path``, not to the checkout's ``data/admin``."""
+
+    monkeypatch.setenv("EMS_ADMIN_DATA_DIR", str(tmp_path / "admin-data"))
+
+
 # --- path resolution --------------------------------------------------------
 
 

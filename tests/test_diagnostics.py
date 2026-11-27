@@ -2082,6 +2082,32 @@ def test_diagnose_hardware_checks_mqtt_broker_tcp(monkeypatch):
     assert health["grid_meter"]["provider"] == "MQTT"
 
 
+def test_diagnose_probes_a_tls_broker_without_a_port_at_the_tls_port(monkeypatch):
+    """The EMS connects to a TLS broker without a port at 8883, so diagnose probes that one."""
+
+    captured = {}
+
+    class FakeSocket:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+    def fake_create_connection(address, timeout=0):
+        captured["address"] = address
+        return FakeSocket()
+
+    monkeypatch.setattr(diagnostics.socket, "create_connection", fake_create_connection)
+
+    diagnostics.diagnose_hardware(
+        [],
+        {"grid_meter": {"type": "mqtt", "host": "mqtt.local", "tls": True}, "devices": []},
+    )
+
+    assert captured["address"] == ("mqtt.local", 8883)
+
+
 def test_diagnose_hardware_checks_zendure_smartmeter_d0_broker_tcp(monkeypatch):
     captured = {}
 

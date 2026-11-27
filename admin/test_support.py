@@ -21,8 +21,10 @@ explicit mismatch/failure fixtures:
   installable by the modern Admin without a downgrade.
 """
 
+import functools
 import hashlib
 import io
+import ipaddress
 import json
 import os
 import shutil
@@ -49,10 +51,12 @@ from admin.embedded_resources import (
     ReleaseArchiveResources,
     write_release_resources,
 )
+from admin.gateway_probe import probe_gateway_candidates
 from admin.image_identity import identify_image
 from admin.install_context import detect_install_context
 from admin.known_good import KnownGoodStore
 from admin.mdns import MdnsProvider, build_candidate
+from admin.mqtt_discovery import tcp_port_open
 from admin.operation_coordinator import OperationCoordinator
 from admin.releases import ReleaseManager
 from admin.system_alignment import SystemAlignmentService
@@ -740,6 +744,30 @@ def offline_network_scan(cidr, timeout_ms=None, max_workers=None, progress_callb
     return [], []
 
 
+def offline_gateway_connect(ip, port, timeout_s):
+    """The deterministic Admin's router probe: no gateway answers, none is contacted.
+
+    A real probe reaches the routers around the test machine, and the networks
+    it finds behind them would be scanned and probed for MQTT brokers next.
+    """
+
+    return "filtered"
+
+
+def loopback_port_open(host, port, timeout_s):
+    """The deterministic Admin's broker check: a broker a test brought up on this machine, never one on the LAN.
+
+    A broker the LAN happens to have would join the search, be listened to
+    for its topics, and hold up whatever setup run comes next.
+    """
+
+    try:
+        loopback = ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        loopback = host == "localhost"
+    return loopback and tcp_port_open(host, port, timeout_s)
+
+
 class ProcessMappingCompose:
     """Test mode only: the MQTT containers without Docker.
 
@@ -964,6 +992,7 @@ def build_test_runtime(*, data_dir):
     influx_seeded = []
     runtime = create_admin_runtime(
         registry=ScanRegistry(scan_runner=offline_network_scan),
+        gateway_prober=functools.partial(probe_gateway_candidates, connect=offline_gateway_connect),
         release_manager=release_manager,
         system_alignment=system_alignment,
         operation_coordinator=operation_coordinator,
@@ -981,6 +1010,7 @@ def build_test_runtime(*, data_dir):
             swaps=lambda: [],
         ),
     )
+    runtime.mqtt_discovery._connector = loopback_port_open
     original_instance_id = runtime.admin_instance_id
     instance_id_state["value"] = original_instance_id
 

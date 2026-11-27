@@ -238,7 +238,7 @@ def test_a_runtime_state_with_ha_fields_loads_and_keeps_them(tmp_path):
     assert "ha" not in defaults
     saved = json.loads(path.read_text())
     assert saved["ha"] == {"enabled": True, "control_enabled": True}
-    assert saved["winter"] == {"enabled": False}
+    assert saved["winter"]["enabled"] is False
 
 
 def test_emsctl_creates_a_runtime_state_without_ha_fields(tmp_path):

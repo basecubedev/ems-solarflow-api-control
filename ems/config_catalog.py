@@ -682,15 +682,6 @@ LEGACY_CONFIG_PATHS = {
     },
 }
 
-RUNTIME_DEVICE_FIELDS = {
-    "devices[].enabled": {"type": "boolean"},
-    "devices[].offgrid_socket_mode": {"type": "integer"},
-    "devices[].ac_charge_power_w": {"type": "integer", "unit": "W", "nullable": True},
-    "devices[].ac_charge_enabled": {"type": "boolean"},
-    "devices[].grid_off_mode": {"type": "integer"},
-}
-
-
 _SECTIONS = [
     _section(
         "system",
@@ -789,7 +780,8 @@ _SECTIONS = [
                 "Time between two EMS control cycles.",
                 "number",
                 unit="s",
-                minimum=0,
+                minimum=1,
+                maximum=3600,
                 risk="control_stability",
             ),
             _field(
@@ -880,6 +872,7 @@ _SECTIONS = [
                 level="advanced",
                 unit="W",
                 minimum=0,
+                maximum=5000,
                 risk="control_stability",
                             group="limits",
             ),
@@ -1466,7 +1459,7 @@ _SECTIONS = [
                 "Gives this device more or less priority during PV-based balancing.",
                 "number",
                 level="advanced",
-                minimum=0,
+                minimum=0.01,
                 maximum=100,
                 risk="control_stability",
             ),
@@ -2772,7 +2765,6 @@ def get_config_catalog():
         "grid_meter_variants": copy.deepcopy(GRID_METER_VARIANTS),
         "inverter_connection_variants": copy.deepcopy(INVERTER_CONNECTION_VARIANTS),
         "legacy_paths": copy.deepcopy(LEGACY_CONFIG_PATHS),
-        "runtime_device_fields": copy.deepcopy(RUNTIME_DEVICE_FIELDS),
         "template": copy.deepcopy(_DEFAULT_TEMPLATE),
     }
 

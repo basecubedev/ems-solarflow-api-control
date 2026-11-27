@@ -56,7 +56,7 @@
   });
 
   function safetyPart(part) {
-    if (part.sources) return t("setup.config.safetySummary.writesSome", { sources: part.sources.map((source) => t(`setup.source.${source}`)).join(", ") });
+    if (part.sources) return t("setup.config.safetySummary.writesSome", { sources: fmt().list(part.sources.map((source) => t(`setup.source.${source}`))) });
     if (part.watts !== undefined) return t(`setup.config.safetySummary.${part.key}`, { power: fmt().power(part.watts) });
     return t(`setup.config.safetySummary.${part.key}`);
   }

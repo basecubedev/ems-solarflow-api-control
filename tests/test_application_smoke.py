@@ -23,6 +23,9 @@ def write_simulation_config(tmp_path):
     config["system"]["runtime_state_path"] = str(tmp_path / "runtime-state.json")
     config["dashboard"]["database_path"] = str(tmp_path / "dashboard.sqlite")
     config["dashboard"]["enabled"] = False
+    config.setdefault("battery_full_charge_assist", {})["state_database_path"] = str(
+        tmp_path / "ems_state.sqlite"
+    )
     config_path = tmp_path / "config.json"
     config_path.write_text(json.dumps(config))
     return config_path
@@ -47,12 +50,15 @@ def test_application_help_smoke():
 
 
 def test_application_self_test_smoke(tmp_path):
+    """The self-test keeps its state in a scratch folder, never in the state database the configuration names."""
+
     config_path = write_simulation_config(tmp_path)
 
     result = run_app("--config", str(config_path), "--self-test")
 
     assert result.returncode == 0, result.stderr
     assert "event=self_test_ok" in result.stderr
+    assert not (tmp_path / "ems_state.sqlite").exists()
 
 
 def test_application_builtin_simulation_leaves_the_live_runtime_state_alone(

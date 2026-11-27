@@ -717,9 +717,10 @@ test.describe("Modern Admin: settings", { tag: ["@smoke"] }, () => {
 
   test("battery care is a feature right after winter mode, with its own name, mark, switch and every setting in view", async ({ page, seedAdminScenario }) => {
     await seededAt(page, seedAdminScenario, "#/settings");
+    const care = page.locator('[data-section="battery_care"]');
+    await expect(care).toBeVisible();
     const sections = await page.locator("[data-section]").evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-section")));
     expect(sections.indexOf("battery_care")).toBe(sections.indexOf("winter") + 1);
-    const care = page.locator('[data-section="battery_care"]');
     await expect(care.getByRole("checkbox", { name: "Battery care on or off" })).toBeVisible();
     await expect(care.locator(".summary .name")).toHaveText("Battery care");
     await expect(care.locator(".summary .icon-tile use")).toHaveAttribute("href", "#i-battery-low");
@@ -1683,6 +1684,27 @@ test.describe("Modern Admin: the running build where the menu ends", { tag: ["@s
     await page.getByTestId("nav-about").click();
     await expect(page.locator(".fact").filter({ hasText: "Version" })).toContainText("v0.10.9");
     await expect(page.locator(".fact").filter({ hasText: "Commit" })).toContainText(COMMIT.slice(0, 12));
+  });
+
+  test("a build file that failed to load is read again by the next page that asks", async ({ page }) => {
+    let calls = 0;
+    let serving = false;
+    await page.route("**/build.json", (route: Route) => {
+      calls += 1;
+      return serving
+        ? route.fulfill({ json: { version: "v0.10.9", revision: COMMIT, build_id: `v0.10.9-${COMMIT.slice(0, 12)}-1-1`, build_serial: "812", channel: "stable" } })
+        : route.fulfill({ status: 503, body: "" });
+    });
+    await openModern(page);
+    await expect(page.locator(".app")).toBeVisible();
+    await expect.poll(() => calls).toBeGreaterThan(0);
+    await expect(page.getByTestId("nav-version")).toHaveCount(0);
+
+    const failed = calls;
+    serving = true;
+    await page.getByTestId("nav-about").click();
+    await expect(page.getByTestId("nav-version")).toHaveText("v0.10.9");
+    expect(calls).toBeGreaterThan(failed);
   });
 
   test("a local build, which names no version, leaves the line out", async ({ page }) => {

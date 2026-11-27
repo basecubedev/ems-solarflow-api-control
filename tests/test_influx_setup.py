@@ -1394,7 +1394,7 @@ def test_prune_is_refused_while_influxdb_is_disabled(capsys):
     assert code == 2
 
 
-def test_prune_reaches_the_schema_layer_with_its_dry_run(monkeypatch):
+def test_prune_reaches_the_schema_layer_with_its_dry_run(monkeypatch, isolated_install_root):
     seen = {}
 
     def fake_prune(client, influx_config, dry_run=False):

@@ -90,8 +90,9 @@ gate**. It runs on every pull request and on pushes to `main`:
   (currently 3.11 and 3.14), each through `scripts/test-pr.sh`
 - `Repo power-control regression`
 - `Repo System Build compatibility`
-- `Repo docker smoke test`, `Repo docker-first setup e2e`,
-  `Repo InfluxDB analytics e2e`. The docker-first job proves the bundled
+- `Repo docker smoke test`, `Repo docker-first setup e2e (1/4)` to `(4/4)`,
+  `Repo InfluxDB analytics e2e`. The docker-first job runs as four shards of
+  whole test files ([Testing](testing.md#pull-request-groups)). It proves the bundled
   InfluxDB pin on the real images (`tests/test_influx_upgrade_real_images.py`):
   the upgrade and the way back from the oldest image an installation may run,
   `influxdb:2.7.12`, and from the pin of the commit the run compares with (a
@@ -525,8 +526,8 @@ a checked-in workflow file. Updates still require passing tests and review.
 A Dependabot pull request changes manifests and nothing else, while three
 committed things follow from them: the Modern builds under
 `dashboard/static/modern/`, `admin/static/modern/` and
-`appliance/static/modern/`, which **Repo browser dashboard** rebuilds and
-compares, the inventory's Version cells, which
+`appliance/static/modern/`, which **Repo browser dashboard (chromium)**
+rebuilds and compares, the inventory's Version cells, which
 `tools/check_third_party_licenses.py` compares, and the copies of the bundled
 InfluxDB pin, which `tools/bundled_influxdb.py` compares. Workflow
 `.github/workflows/dependency-refresh.yml`, named **Repo dependency refresh**,

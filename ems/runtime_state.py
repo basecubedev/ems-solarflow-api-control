@@ -12,6 +12,7 @@ import threading
 import time
 
 from ems import config as cfg
+from ems.paths import RUNTIME_STATE_PATH_WITHOUT_SETTING
 from ems.file_io import (
     LOCK_TIMEOUT_SECONDS,
     STARTUP_LOCK_TIMEOUT_SECONDS,
@@ -307,7 +308,7 @@ def runtime_state_path_under(install_root, config):
 
     system = config.get("system") if isinstance(config, dict) else None
     system = system if isinstance(system, dict) else {}
-    relative = system.get("runtime_state_path") or "runtime-state.json"
+    relative = system.get("runtime_state_path") or RUNTIME_STATE_PATH_WITHOUT_SETTING
     if os.path.isabs(relative):
         return relative
     return os.path.join(str(install_root), relative)
@@ -1246,7 +1247,8 @@ def build_runtime_defaults(devices, config_devices=None):
             "grid_target_charge_w": cfg.GRID_TARGET_CHARGE_W,
         },
         "winter": {
-            "enabled": cfg.winter_config_bool("enabled", False)
+            "enabled": cfg.winter_config_bool("enabled", False),
+            **cfg.winter_operating_values(cfg.winter_settings()),
         },
         "ac_charge_control": {
             "enabled": cfg.ac_charge_control_enabled()

@@ -53,6 +53,12 @@ _STEP_STATE = {"ok": "done", "skipped": "skipped", "warning": "done", "error": "
 BROKER_STEP_LABEL = "Apply the built-in MQTT broker's restored settings"
 
 
+def upload_failure(exc):
+    """Why an upload could not be stored, without the staging folder's descriptor path in it."""
+
+    return f"the uploaded backup could not be stored: {exc.strerror or 'unknown error'}"
+
+
 class BackupRestoreError(Exception):
     """Raised for expected backup/restore failures that are safe to show a user."""
 
@@ -918,6 +924,8 @@ class BackupRestoreService:
             final = backup_mod.adopt_backup_archive(source_path, env.backup_dir, name)
         except backup_mod.BackupError as exc:
             raise BackupRestoreError(str(exc)) from exc
+        except OSError as exc:
+            raise BackupRestoreError(upload_failure(exc)) from exc
         stored = os.path.basename(final)
         return {"ok": True, "name": stored, "id": _safe_id(stored)}
 

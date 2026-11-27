@@ -147,6 +147,7 @@
     return lastAdmin;
   });
   const version = $derived(host.status?.appliance_version || session.version);
+  const versionLine = $derived(version ? t("app.version", { version }) : "");
   const marks = $derived(attentionBySection(host.status, sessionFindings(session.audit, session.confirmed)));
   const assistantMarked = $derived(assistantMark(markedSteps(assistantSteps({ status: host.status, backup: null })), URGENT_STEPS));
 
@@ -198,7 +199,7 @@
       document.getElementById("content")?.focus();
     }}>{t("app.skip")}</a>
   <div class="app" class:rail={prefs.navIconsOnly} data-landed={landed || undefined}>
-    <Sidebar version={version ? t("app.version", { version }) : ""} />
+    <Sidebar version={versionLine} />
     <div class="main">
       <Topbar>
         {#snippet status()}<TopbarStatus />{/snippet}
@@ -209,7 +210,7 @@
         {#key router.page}<Page />{/key}
       </main>
     </div>
-    <BottomNav />
+    <BottomNav version={versionLine} />
   </div>
   <Appearance />
   <PlanDialog />

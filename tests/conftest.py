@@ -10,7 +10,9 @@ from pathlib import Path
 import pytest
 
 from ems import paths
+from tests import checkout_data_guard
 from tests.scratch_guard import scratch_shortfall
+from tests.shards import load_weights, parse_shard, select
 
 # Focused Zendure MQTT development-release gate: the fast, hardware-free subset
 # that must pass on every feature/development build without running the full
@@ -78,14 +80,33 @@ def pytest_collection_modifyitems(config, items):
             item.add_marker(marker)
 
 
+def pytest_addoption(parser):
+    parser.addoption(
+        "--shard",
+        default=None,
+        help="K/N: run only the test files of shard K of N, balanced by tests/shard_weights.json",
+    )
+
+
+@pytest.hookimpl(tryfirst=True)
 def pytest_collection_finish(session):
-    """Refuse a broad run that cannot fit its own scratch data.
+    """Keep this runner's shard, then refuse a run that cannot fit its own scratch data.
 
     This is the last hook before anything is written and the first one that
     sees the *final* selection: marker deselection happens inside
-    ``pytest_collection_modifyitems``, so counting there would refuse a targeted
-    tier for the size of the suite it was filtered out of.
+    ``pytest_collection_modifyitems``, so sharding or counting there would
+    split or refuse a targeted tier by the suite it was filtered out of.
     """
+
+    try:
+        shard = parse_shard(session.config.getoption("--shard"))
+    except ValueError as exc:
+        raise pytest.UsageError(str(exc)) from None
+    if shard is not None:
+        kept, left = select(session.items, shard, load_weights())
+        if left:
+            session.config.hook.pytest_deselected(items=left)
+        session.items[:] = kept
 
     temp_dir = tempfile.gettempdir()
     shortfall = scratch_shortfall(
@@ -195,6 +216,48 @@ def _backup_plaintext_stays_out_of_the_checkout(request, tmp_path_factory, monke
         return found
 
     monkeypatch.setattr(backup, "plaintext_dir", outside_the_checkout)
+
+
+def pytest_configure(config):
+    checkout_data_guard.install()
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _checkout_data_untouched_to_the_end():
+    """Fail the last test of a process when a write into the checkout's ``data/`` came after it.
+
+    A module or session fixture's teardown and a thread still running write
+    after every test's own check; without this check such a write would go
+    unreported.
+    """
+
+    yield
+    _refuse_checkout_data_writes("after the last test of this process (a fixture's teardown or a thread)")
+
+
+@pytest.fixture(autouse=True)
+def _checkout_data_stays_untouched():
+    """Fail a test that wrote into the checkout's own ``data/`` (``tests/checkout_data_guard.py``).
+
+    The write itself was refused already; this fails the test even where the
+    code under test caught that refusal. A write found before the test began
+    came from a fixture's setup or teardown, or from a thread an earlier test
+    left running.
+    """
+
+    _refuse_checkout_data_writes("before this test began")
+    yield
+    _refuse_checkout_data_writes("during this test")
+
+
+def _refuse_checkout_data_writes(when):
+    writes = checkout_data_guard.take()
+    if writes:
+        listed = "\n".join(f"  {event} {path}" for event, path in writes)
+        raise checkout_data_guard.CheckoutDataWrite(
+            f"writes into the checkout's data/ {when}:\n{listed}\n"
+            "use tmp_path, EMS_ADMIN_DATA_DIR, EMS_INSTALL_DIR or isolated_install_root"
+        )
 
 
 @pytest.fixture

@@ -81,10 +81,15 @@ python3 -B ems-solarflow-api-control.py --dry-run --once
 
 ## Updating config.json After Upgrades
 
-New releases may add config keys. EMS keeps older configs running by applying
-conservative runtime fallback defaults in memory. Normal startup does not add
-them to `config.json`; it writes the file only to refresh
-[old defaults](#old-defaults).
+New releases may add config keys. EMS keeps older configs running by filling a
+missing key in memory with the template's value, the default the Admin console
+and this documentation show. Three keys keep a value of their own when
+missing: without `system.dry_run` the EMS runs as a dry run, without
+`system.allow_state_reconciliation_writes` it writes no device state, and
+without `system.runtime_state_path` it keeps the runtime state in
+`runtime-state.json` in the installation folder, where such a config always
+had it. Normal startup does not add the keys to `config.json`; it writes the
+file only to refresh [old defaults](#old-defaults).
 
 To review missing keys:
 
@@ -287,6 +292,9 @@ scheduler, and taken at once:
 - `system.enabled`, `loop_interval`, `min_output_limit`,
   `grid_target_charge_w`, `grid_target_discharge_w`
 - `winter.enabled`, `ac_charge_control.enabled`
+- `winter.months`, `summer_min_soc`, `winter_min_soc`, `ramp_step_percent`,
+  `adjust_hour`, which `config.json` also keeps as a copy so a rollback to an
+  earlier v0.10 release runs the same values; the Admin writes both
 - `battery_care.enabled`, `min_discharge_w`, `pv_margin_min_w`,
   `pv_margin_percent`, `pv_only_points`, `summer_full_points`,
   `winter_full_points`
@@ -878,8 +886,14 @@ put on a probe here, `vendor_catalogue` for the rest.
 
 Winter mode is optional but enabled by default. `winter.enabled` is an
 operating value: switch it on the dashboard, in the Admin settings or with
-`emsctl.py winter enable|disable`; a value in `config.json` seeds the runtime state only
-where it holds none yet (see [Config vs Runtime-State](#config-vs-runtime-state)).
+`emsctl.py winter enable|disable`; a value in `config.json` seeds the runtime
+state only where it holds none yet (see [Config vs
+Runtime-State](#config-vs-runtime-state)). The months, both reserves, the step
+and the step hour below are operating values too, changed in the Admin
+settings and taken at once; `config.json` keeps a copy of them that the Admin
+writes as well, so a rollback to an earlier v0.10 release runs the same
+values. The EMS runs the runtime state's, so a value edited into `config.json`
+by hand does not take effect once the runtime state holds one.
 
 `winter.months` defines active winter months as numbers from `1` to `12`.
 

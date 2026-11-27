@@ -972,7 +972,9 @@ def diagnose_config_plausibility(checks, args, config_data, runtime_data=None):
         if loop_interval > 60:
             diagnose_add(checks, "config", "warning", "system_loop_interval_high", "system.loop_interval is above 60 seconds", value=loop_interval)
 
-    runtime_path_value = system.get("runtime_state_path", "runtime-state.json")
+    runtime_path_value = system.get(
+        "runtime_state_path", config_mod.MISSING_KEY_SYSTEM_DEFAULTS["runtime_state_path"]
+    )
     if diagnose_path_is_clean(runtime_path_value):
         diagnose_add(checks, "config", "ok", "runtime_state_path_valid", "system.runtime_state_path resolves cleanly")
     else:
@@ -985,9 +987,13 @@ def diagnose_config_plausibility(checks, args, config_data, runtime_data=None):
     elif not isinstance(dashboard_config, dict):
         diagnose_add(checks, "config", "error", "dashboard_not_object", "dashboard must be an object")
     elif config_mod.safe_bool(energy_savings.get("enabled", True), True):
-        write_interval = diagnose_float(dashboard_config.get("write_interval_seconds", 5))
+        write_interval = diagnose_float(dashboard_config.get(
+            "write_interval_seconds", config_mod.DASHBOARD_DEFAULTS["write_interval_seconds"]
+        ))
         max_sample_delta = diagnose_float(
-            energy_savings.get("max_sample_delta_seconds", 20)
+            energy_savings.get(
+                "max_sample_delta_seconds", config_mod.ENERGY_SAVINGS_DEFAULTS["max_sample_delta_seconds"]
+            )
         )
         # The controller can only write on a loop tick, so a 16 s write
         # interval on a 5 s loop stores a sample every 20 s, not every 16.
@@ -1965,7 +1971,9 @@ def diagnose_battery_full_charge_status(device_state, assist_config, now, held_b
     if next_due_at <= now:
         return "overdue"
     if next_due_at <= now + timedelta(
-        days=assist_config.get("assist_window_days", 7)
+        days=assist_config.get(
+            "assist_window_days", config_mod.BATTERY_FULL_CHARGE_ASSIST_DEFAULTS["assist_window_days"]
+        )
     ):
         return "due soon"
     return "ok"
@@ -2613,7 +2621,9 @@ def diagnose_hardware(checks, config_data, runtime_data=None):
         else:
             start = time.monotonic()
             try:
-                port = int(float(mqtt_settings.get("port", 1883)))
+                port = int(float(mqtt_settings.get(
+                    "port", config_mod.default_mqtt_port(config_mod.safe_bool(mqtt_settings.get("tls"), False))
+                )))
                 with socket.create_connection((host, port), timeout=2):
                     pass
                 _diagnose_record_probe(grid_tracker, start)
@@ -2959,7 +2969,9 @@ def diagnose_telemetry_window(system):
 
     output_control = system.get("output_control") if isinstance(system, dict) else None
     output_control = output_control if isinstance(output_control, dict) else {}
-    window = diagnose_float(output_control.get("telemetry_max_age_seconds", 10))
+    window = diagnose_float(output_control.get(
+        "telemetry_max_age_seconds", config_mod.OUTPUT_CONTROL_DEFAULTS["telemetry_max_age_seconds"]
+    ))
     return max(0.0, 10.0 if window is None else window)
 
 

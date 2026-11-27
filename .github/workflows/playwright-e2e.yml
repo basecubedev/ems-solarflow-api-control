@@ -186,9 +186,16 @@ jobs:
 
   # The Raspberry Pi Appliance Manager UI. Its own config and its own
   # deterministic test server, so it shares nothing with the Admin suite above.
+  # Each browser runs on a runner of its own, against a server of its own.
   playwright-appliance:
-    name: Repo browser appliance
+    name: Repo browser appliance (${{ matrix.browser }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        browser:
+          - chromium
+          - firefox
     steps:
       - uses: actions/checkout@v7
 
@@ -210,21 +217,21 @@ jobs:
       - name: Install Node dependencies
         run: npm ci
 
-      - name: Install Playwright browsers
+      - name: Install Playwright browser
         uses: ./.github/actions/playwright-browsers
         with:
-          browsers: chromium firefox
+          browsers: ${{ matrix.browser }}
 
       - name: Run the appliance manager suite
         env:
           CI: "1"
-        run: npx playwright test --config=playwright.appliance.config.ts
+        run: npx playwright test --config=playwright.appliance.config.ts --project=${{ matrix.browser }}
 
       - name: Upload Playwright report
         if: failure()
         uses: actions/upload-artifact@v7
         with:
-          name: playwright-report-appliance
+          name: playwright-report-appliance-${{ matrix.browser }}
           path: |
             playwright-report/
             test-results/
@@ -235,10 +242,17 @@ jobs:
   # shares nothing with the Admin suite -- three surfaces, three origins, three
   # servers. The suite is small and fast because the cockpit's browser-only
   # question is a narrow one: that the three appearance axes reach a painted
-  # pixel and leave each other alone.
+  # pixel and leave each other alone. Each browser runs on a runner of its own;
+  # the Modern builds are one check, so the Chromium runner makes it.
   playwright-dashboard:
-    name: Repo browser dashboard
+    name: Repo browser dashboard (${{ matrix.browser }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        browser:
+          - chromium
+          - firefox
     steps:
       - uses: actions/checkout@v7
 
@@ -264,6 +278,7 @@ jobs:
       # as build output so that no install path needs Node; this is what keeps
       # that output the build of its source, the shared design system included.
       - name: Check the Modern builds
+        if: matrix.browser == 'chromium'
         run: |
           npm run test:frontend-shared
           npm run test:dashboard-modern
@@ -272,21 +287,21 @@ jobs:
           npm run build:modern
           git diff --exit-code -- dashboard/static/modern admin/static/modern appliance/static/modern
 
-      - name: Install Playwright browsers
+      - name: Install Playwright browser
         uses: ./.github/actions/playwright-browsers
         with:
-          browsers: chromium firefox
+          browsers: ${{ matrix.browser }}
 
       - name: Run the dashboard cockpit suite
         env:
           CI: "1"
-        run: npx playwright test --config=playwright.dashboard.config.ts
+        run: npx playwright test --config=playwright.dashboard.config.ts --project=${{ matrix.browser }}
 
       - name: Upload Playwright report
         if: failure()
         uses: actions/upload-artifact@v7
         with:
-          name: playwright-report-dashboard
+          name: playwright-report-dashboard-${{ matrix.browser }}
           path: |
             playwright-report/
             test-results/

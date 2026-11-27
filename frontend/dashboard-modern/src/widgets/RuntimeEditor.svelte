@@ -35,6 +35,18 @@
     };
   }
 
+  /** The range the EMS's writer accepts for a field, so this form offers no other. */
+  function accepted(scope, name) {
+    const fields = limits.fields || {};
+    const spec = (scope === "system" || scope === "devices" ? fields[scope] : fields.sections?.[scope])?.[name] || {};
+    return { min: spec.min, max: spec.max };
+  }
+
+  /** The values the EMS's writer accepts for a device field, in its order. */
+  function choices(name) {
+    return limits.fields?.devices?.[name]?.options || [];
+  }
+
   $effect(() => {
     if (auth.authenticated) loadRuntime();
   });
@@ -53,12 +65,12 @@
 
   const batteryCareFields = $derived([
     { name: "enabled", type: "toggle", fallback: true, label: t("runtime.batteryCare") },
-    { name: "summer_full_points", type: "number", label: t("runtime.batteryCareSummer"), min: 0, max: 50, unit: "%" },
-    { name: "winter_full_points", type: "number", label: t("runtime.batteryCareWinter"), min: 0, max: 50, unit: "%" },
-    { name: "pv_only_points", type: "number", label: t("runtime.batteryCarePvOnly"), min: 0, max: 50, unit: "%" },
-    { name: "min_discharge_w", type: "number", label: t("runtime.batteryCareMinDischarge"), min: 0, max: 5000, unit: "W" },
-    { name: "pv_margin_percent", type: "number", label: t("runtime.batteryCarePvMargin"), min: 0, max: 100, unit: "%" },
-    { name: "pv_margin_min_w", type: "number", label: t("runtime.batteryCarePvMarginMin"), min: 0, max: 5000, unit: "W" },
+    { name: "summer_full_points", type: "number", label: t("runtime.batteryCareSummer"), ...accepted("battery_care", "summer_full_points"), unit: "%" },
+    { name: "winter_full_points", type: "number", label: t("runtime.batteryCareWinter"), ...accepted("battery_care", "winter_full_points"), unit: "%" },
+    { name: "pv_only_points", type: "number", label: t("runtime.batteryCarePvOnly"), ...accepted("battery_care", "pv_only_points"), unit: "%" },
+    { name: "min_discharge_w", type: "number", label: t("runtime.batteryCareMinDischarge"), ...accepted("battery_care", "min_discharge_w"), unit: "W" },
+    { name: "pv_margin_percent", type: "number", label: t("runtime.batteryCarePvMargin"), ...accepted("battery_care", "pv_margin_percent"), unit: "%" },
+    { name: "pv_margin_min_w", type: "number", label: t("runtime.batteryCarePvMarginMin"), ...accepted("battery_care", "pv_margin_min_w"), unit: "W" },
   ].map((field) => withDefault(field, defaults.battery_care?.[field.name])));
 
   const systemFields = $derived([
@@ -67,7 +79,7 @@
     { name: "min_output_limit", type: "number", label: t("runtime.minOutput"), min: 0, max: Number(limits.system?.min_output_limit || 5000), unit: "W" },
     { name: "grid_target_discharge_w", type: "gridTarget", phase: "discharge", direction: "import", label: t("gridTarget.whileDischarging"), min: -gridTargetMax("discharge"), max: gridTargetMax("discharge"), unit: "W" },
     { name: "grid_target_charge_w", type: "gridTarget", phase: "charge", direction: "export", label: t("gridTarget.whileCharging"), help: t("gridTarget.help"), min: -gridTargetMax("charge"), max: gridTargetMax("charge"), unit: "W" },
-    { name: "loop_interval", type: "number", label: t("runtime.loop"), min: 1, max: 3600, unit: "s" },
+    { name: "loop_interval", type: "number", label: t("runtime.loop"), ...accepted("system", "loop_interval"), unit: "s" },
   ].map((field) => withDefault(field, defaults.system?.[field.name])));
 
   function deviceFields(name, device) {
@@ -77,12 +89,12 @@
       { name: "ac_charge_enabled", type: "toggle", fallback: switchDefault(limits, name, "ac_charge_enabled"), label: t("runtime.acCharging") },
       { name: "ac_discharge_enabled", type: "toggle", strict: true, label: t("runtime.acDischarging"), help: t("runtime.acDischargingHelp") },
       bounded({ name: "max_power", type: "number", label: t("runtime.maxPower"), min: 0, unit: "W" }, "device", maxPower),
-      { name: "pv_priority_factor", type: "number", label: t("runtime.pvPriority"), min: 0.01, max: 100, step: 0.01, unit: "×" },
+      { name: "pv_priority_factor", type: "number", label: t("runtime.pvPriority"), ...accepted("devices", "pv_priority_factor"), step: 0.01, unit: "×" },
       {
         name: "offgrid_socket_mode",
         type: "select",
         label: t("runtime.offgrid"),
-        options: ["off", "eco", "standard"].map((value) => ({ value, label: t(`runtime.offgrid.${value}`) })),
+        options: choices("offgrid_socket_mode").map((value) => ({ value, label: t(`runtime.offgrid.${value}`) })),
       },
     ];
     if (unsupported.has(name)) {
@@ -92,10 +104,7 @@
         name: "runtime_role",
         type: "select",
         label: t("runtime.acRole"),
-        options: [
-          { value: "ac_output", label: t("runtime.role.output") },
-          { value: "ac_input", label: t("runtime.role.input") },
-        ],
+        options: choices("runtime_role").map((value) => ({ value, label: t(`runtime.role.${value.replace("ac_", "")}`) })),
       });
       fields.push({ name: "ac_charge_power_w", type: "number", label: t("runtime.acPower"), min: 0, max: Number(limits.ac_charge_power_max || 5000), unit: "W", clearable: true, placeholder: t("control.deviceMax"), help: t("runtime.acPowerHelp") });
       const reason = String(device.runtime_role_reason || "").trim();

@@ -13,6 +13,7 @@ in that same directory so list/inspect/preview/restore pick it up with no
 second authority and no second format.
 """
 
+import errno
 import json
 import os
 import stat
@@ -22,7 +23,7 @@ import urllib.request
 
 import pytest
 
-from admin.backup_restore import BackupRestoreService
+from admin.backup_restore import BackupRestoreError, BackupRestoreService
 from admin.install_context import detect_install_context
 from admin.server import create_server
 from tests.admin_auth_helpers import auth_headers, authenticate
@@ -296,3 +297,32 @@ def test_a_refused_import_does_not_corrupt_the_next_request(server, install):
     status, data = _json_request(server + "/api/admin/maintenance/backups")
     assert status == 200
     assert data["ok"] is True
+
+
+def _no_space(*_args, **_kwargs):
+    raise OSError(errno.ENOSPC, "No space left on device", "/proc/self/fd/9/upload.part")
+
+
+def test_an_archive_that_cannot_be_adopted_says_why_without_a_descriptor_path(install, monkeypatch):
+    from admin import backup_restore
+
+    monkeypatch.setattr(backup_restore.backup_mod, "adopt_backup_archive", _no_space)
+    service = BackupRestoreService(context_provider=lambda: detect_install_context(base_dir=str(install)))
+    path = _make_config_archive(install)
+
+    with pytest.raises(BackupRestoreError) as refused:
+        service.import_backup(os.path.basename(path), path)
+
+    assert str(refused.value) == "the uploaded backup could not be stored: No space left on device"
+
+
+def test_an_upload_that_cannot_be_written_says_why_without_a_descriptor_path(server, install, monkeypatch):
+    from admin import server as server_module
+
+    monkeypatch.setattr(server_module.AdminHandler, "_copy_body", _no_space)
+
+    status, data = _import(server, "ems-config-manual-2026-01-01-000000.tar.gz", b"payload")
+
+    assert status == 400, data
+    assert data["error"] == "the uploaded backup could not be stored: No space left on device"
+    assert "/proc/self/fd" not in json.dumps(data)

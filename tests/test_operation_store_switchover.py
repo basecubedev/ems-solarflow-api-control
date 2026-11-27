@@ -15,7 +15,7 @@ from types import SimpleNamespace
 import pytest
 
 from ems import config as cfg
-from ems.runtime_commands import OPERATION_DEVICE_KEYS, OPERATION_SETTING_PATHS
+from ems.runtime_commands import OPERATION_DEVICE_KEYS, OPERATION_SETTING_PATHS, ROLLBACK_CONFIG_COPIES
 
 pytestmark = [
     pytest.mark.unit,
@@ -172,24 +172,37 @@ def test_only_a_live_start_that_may_write_the_config_moves(tmp_path, caplog):
 
 
 def test_the_config_upgrade_never_adds_a_moved_operating_value_back():
+    """A value the config keeps a copy of for a rollback to v0.10 is added like any template key."""
+
     plan = cfg.build_config_upgrade_plan({"devices": [{"name": "WR1", "ip": "10.20.30.5"}]}, None)
     upgraded = plan["upgraded_config"]
+    moved = OPERATION_SETTING_PATHS - ROLLBACK_CONFIG_COPIES
+    held = {f"{section}.{key}" for section, block in upgraded.items() if isinstance(block, dict) for key in block}
 
-    assert not [item["path"] for item in plan["add"] if item["path"] in OPERATION_SETTING_PATHS]
-    assert not OPERATION_SETTING_PATHS & {
-        f"{section}.{key}" for section, block in upgraded.items() if isinstance(block, dict) for key in block
-    }
+    assert not [item["path"] for item in plan["add"] if item["path"] in moved]
+    assert not moved & held
+    assert ROLLBACK_CONFIG_COPIES <= held
     assert not OPERATION_DEVICE_KEYS & set(upgraded["devices"][0])
     assert upgraded["system"]["max_total_power"] and upgraded["devices"][0]["max_power"]
+
+
+def test_a_value_kept_as_a_copy_for_a_rollback_is_no_operating_value_to_strip():
+    template = {"winter": {"enabled": True, "months": [10, 11], "winter_min_soc": 40}}
+
+    assert cfg.without_operating_values(template) == {"winter": {"months": [10, 11], "winter_min_soc": 40}}
+    assert cfg.only_operating_values_removed(template, {"winter": {"winter_min_soc": 40}}) is False
 
 
 def test_diagnose_does_not_miss_an_operating_value_the_config_no_longer_holds():
     from ems.diagnostics import diagnose_missing_template_keys
 
-    template = {"system": {"loop_interval": 5, "deadband": 2}, "winter": {"enabled": True, "months": [11]}}
+    template = {
+        "system": {"loop_interval": 5, "deadband": 2},
+        "winter": {"enabled": True, "months": [11], "policies": {"battery_only": "noon_step"}},
+    }
 
     assert diagnose_missing_template_keys({"system": {}, "winter": {}}, template) == [
-        "system.deadband", "winter.months",
+        "system.deadband", "winter.months", "winter.policies",
     ]
 
 
@@ -533,3 +546,21 @@ def test_a_writer_that_saves_the_merge_gives_a_re_enabled_device_its_parked_valu
     assert (merged["devices"]["WR2"]["pv_priority_factor"], merged["devices"]["WR2"]["ac_discharge_enabled"]) == (3.0, False)
     assert "parked_devices" not in merged
     assert data["parked_devices"]["identity:B"]["pv_priority_factor"] == 3.0
+
+
+def test_the_winter_values_stay_in_the_config_for_a_rollback(tmp_path, monkeypatch):
+    """An earlier v0.10 release reads them only from config.json; the runtime state's copy runs here."""
+
+    config = _config()
+    config["winter"].update({"winter_min_soc": 45, "adjust_hour": 9, "policies": {"battery_only": "none"}})
+    runtime = _runtime()
+    runtime["winter"].update({"months": [10, 11], "winter_min_soc": 45, "adjust_hour": 9})
+
+    moved, saved, _persisted, _messages = _move(tmp_path, config, runtime, monkeypatch)
+
+    assert not {"winter.months", "winter.winter_min_soc", "winter.adjust_hour"} & set(moved)
+    assert "winter.enabled" in moved
+    assert saved["winter"] == {
+        "months": [10, 11], "winter_min_soc": 45, "adjust_hour": 9, "policies": {"battery_only": "none"},
+    }
+    assert cfg.only_operating_values_removed(config, saved) is True

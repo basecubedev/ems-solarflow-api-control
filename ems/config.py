@@ -18,7 +18,11 @@ from urllib.parse import urlparse
 from ems.device_fingerprints import device_fingerprints
 from ems.logging_utils import log_event
 from ems.modbus_meters import PROFILES_BY_TYPE as MODBUS_METER_PROFILES
-from ems.paths import resolve_config_path, resolve_template_path
+from ems.paths import (
+    RUNTIME_STATE_PATH_WITHOUT_SETTING,
+    resolve_config_path,
+    resolve_template_path,
+)
 from ems.read_only_devices import E3DC_MODBUS_DEVICE_TYPE, is_read_only_device_config
 from ems.retired_defaults import (
     CONFIG_REVISION_KEY,
@@ -69,6 +73,51 @@ OUTPUT_CONTROL_DEFAULTS = {
     "telemetry_max_age_seconds": 10,
     "stale_telemetry_ramp_factor": 0.5,
     "write_dead_time_seconds": 0.0
+}
+
+SYSTEM_DEFAULTS = {
+    "enabled": True,
+    "dry_run": False,
+    "simulation_mode": False,
+    "allow_hardware_writes": True,
+    "allow_mqtt_local_control_writes": True,
+    "allow_mqtt_zendure_control_writes": True,
+    "allow_state_reconciliation_writes": True,
+    "reconcile_smart_mode": True,
+    "log_level": "info",
+    "max_total_power": 800,
+    "max_device_power": 800,
+    "deadband": 2,
+    "runtime_state_path": "data/runtime-state.json",
+    "min_output_limit": 35,
+    "grid_target_discharge_w": 0,
+    "grid_target_charge_w": 0,
+    "loop_interval": 5,
+    "output_control": OUTPUT_CONTROL_DEFAULTS,
+    "redistribute_clamped_power": True,
+    "pv_kwp_weighting": True,
+    "pv_charge_balance_enabled": True,
+    "pv_charge_balance_deadband_percent": 1,
+    "pv_charge_balance_full_bias_percent": 15,
+    "pv_charge_balance_strength": 0.7,
+    "battery_kwh_weighting": True,
+    "soc_reconcile_interval": 10,
+}
+
+MISSING_KEY_SYSTEM_DEFAULTS = {
+    "dry_run": True,
+    "allow_state_reconciliation_writes": False,
+    "runtime_state_path": RUNTIME_STATE_PATH_WITHOUT_SETTING,
+}
+
+SIMULATION_SYSTEM_OVERRIDES = {
+    "simulation_mode": True,
+    "dry_run": True,
+    "allow_hardware_writes": False,
+    "allow_mqtt_local_control_writes": False,
+    "allow_mqtt_zendure_control_writes": False,
+    "allow_state_reconciliation_writes": False,
+    "log_level": "debug",
 }
 
 WINTER_DEFAULTS = {
@@ -988,37 +1037,39 @@ def render_config_json(data, layout=None):
 
 
 def default_safe_config():
-    """Return a minimal safe config for simulation and replay."""
+    """Return a minimal safe config for simulation and replay.
 
+    The defaults a live config resolves missing keys with, with simulation on
+    and every write switched off.
+    """
+
+    return _default_config(SIMULATION_SYSTEM_OVERRIDES)
+
+
+def default_runtime_config():
+    """Missing-key defaults for a normal (non-simulation) config load.
+
+    The template's values (``SYSTEM_DEFAULTS`` and the section defaults), so a
+    config that omits a key runs what the Admin and the documentation show as
+    its default. Three keys keep a value of their own when missing
+    (``MISSING_KEY_SYSTEM_DEFAULTS``): a config without ``dry_run`` or
+    ``allow_state_reconciliation_writes`` stays without those writes, and one
+    without ``runtime_state_path`` keeps its runtime state in the file it
+    always used. The write gates resolve to the release defaults, the same with
+    or without a config-upgrade file rewrite. Safe-mode paths keep
+    ``default_safe_config``.
+    """
+
+    return _default_config({"simulation_mode": False, **RELEASE_WRITE_GATE_DEFAULTS})
+
+
+def _default_config(system_overrides):
     return {
         "config_schema_version": CURRENT_CONFIG_SCHEMA_VERSION,
         "system": {
-            "enabled": True,
-            "dry_run": True,
-            "simulation_mode": True,
-            "allow_hardware_writes": False,
-            "allow_mqtt_local_control_writes": False,
-            "allow_mqtt_zendure_control_writes": False,
-            "allow_state_reconciliation_writes": False,
-            "reconcile_smart_mode": True,
-            "max_total_power": 800,
-            "max_device_power": 800,
-            "deadband": 2,
-            "runtime_state_path": "runtime-state.json",
-            "min_output_limit": 35,
-            "grid_target_discharge_w": 0,
-            "grid_target_charge_w": 0,
-            "loop_interval": 5,
-            "output_control": copy.deepcopy(OUTPUT_CONTROL_DEFAULTS),
-            "soc_reconcile_interval": 0,
-            "log_level": "debug",
-            "redistribute_clamped_power": True,
-            "pv_kwp_weighting": True,
-            "pv_charge_balance_enabled": True,
-            "pv_charge_balance_deadband_percent": 5,
-            "pv_charge_balance_full_bias_percent": 15,
-            "pv_charge_balance_strength": 1.0,
-            "battery_kwh_weighting": True
+            **copy.deepcopy(SYSTEM_DEFAULTS),
+            **MISSING_KEY_SYSTEM_DEFAULTS,
+            **system_overrides,
         },
         "winter": copy.deepcopy(WINTER_DEFAULTS),
         "dashboard": copy.deepcopy(DASHBOARD_DEFAULTS),
@@ -1040,21 +1091,6 @@ def default_safe_config():
             "ip": ""
         }
     }
-
-
-def default_runtime_config():
-    """Missing-key defaults for a normal (non-simulation) config load.
-
-    Starts from the explicit safe defaults, then switches simulation off and
-    applies the canonical release write-gate defaults so a normal config that
-    omits the gate keys resolves the same effective values with or without a
-    config-upgrade file rewrite. Safe-mode paths keep ``default_safe_config``.
-    """
-
-    config = default_safe_config()
-    config["system"]["simulation_mode"] = False
-    config["system"].update(RELEASE_WRITE_GATE_DEFAULTS)
-    return config
 
 
 def _deep_merge_defaults(defaults, values):
@@ -2277,15 +2313,16 @@ def without_operating_values(data):
 
     The template still names them, as the starting values of a config written
     by hand that the first live start moves; the config upgrade never adds one
-    back, and diagnose does not miss one.
+    back, and diagnose does not miss one. A value ``config.json`` keeps a copy
+    of for a rollback (``ROLLBACK_CONFIG_COPIES``) stays.
     """
 
-    from ems.runtime_commands import OPERATION_DEVICE_KEYS, OPERATION_SETTING_PATHS
+    from ems.runtime_commands import OPERATION_DEVICE_KEYS, OPERATION_SETTING_PATHS, ROLLBACK_CONFIG_COPIES
 
     stripped = copy.deepcopy(data)
     if not isinstance(stripped, dict):
         return stripped
-    for setting in OPERATION_SETTING_PATHS:
+    for setting in OPERATION_SETTING_PATHS - ROLLBACK_CONFIG_COPIES:
         section, _, key = setting.partition(".")
         block = stripped.get(section)
         if isinstance(block, dict):
@@ -2341,15 +2378,24 @@ def _without_operating_values(raw_config, runtime_data):
     ``dropped`` names each moved value the config held differently from the
     runtime state, ``(path, config value, running value)``: the running one
     is kept, so a value edited into the file by hand does not take effect.
+    A value the config keeps a copy of for a rollback to an earlier v0.10
+    release (``ROLLBACK_CONFIG_COPIES``) does not move.
     """
 
-    from ems.runtime_commands import DEVICE_FIELDS, OPERATION_DEVICE_KEYS, OPERATION_SETTING_PATHS, SECTION_FIELDS, SYSTEM_FIELDS
+    from ems.runtime_commands import (
+        DEVICE_FIELDS,
+        OPERATION_DEVICE_KEYS,
+        OPERATION_SETTING_PATHS,
+        ROLLBACK_CONFIG_COPIES,
+        SECTION_FIELDS,
+        SYSTEM_FIELDS,
+    )
 
     remaining = copy.deepcopy(raw_config)
     runtime_data = runtime_data if isinstance(runtime_data, dict) else {}
     moved = []
     dropped = []
-    for setting in sorted(OPERATION_SETTING_PATHS):
+    for setting in sorted(OPERATION_SETTING_PATHS - ROLLBACK_CONFIG_COPIES):
         section, _, key = setting.partition(".")
         block = remaining.get(section)
         held = runtime_data.get(section)
@@ -2788,16 +2834,16 @@ def initialize(args, base_dir):
     }
     RUNTIME_STATE_PATH = CONFIG["system"].get(
         "runtime_state_path",
-        "runtime-state.json"
+        MISSING_KEY_SYSTEM_DEFAULTS["runtime_state_path"]
     )
 
     try:
         MIN_OUTPUT_LIMIT = max(
             0,
-            int(CONFIG["system"].get("min_output_limit", 0))
+            int(CONFIG["system"].get("min_output_limit", SYSTEM_DEFAULTS["min_output_limit"]))
         )
     except (TypeError, ValueError):
-        MIN_OUTPUT_LIMIT = 0
+        MIN_OUTPUT_LIMIT = SYSTEM_DEFAULTS["min_output_limit"]
     GRID_TARGET_DISCHARGE_W = grid_target_w(CONFIG["system"].get("grid_target_discharge_w"))
     GRID_TARGET_CHARGE_W = grid_target_w(CONFIG["system"].get("grid_target_charge_w"))
 
@@ -2817,39 +2863,50 @@ def initialize(args, base_dir):
         system_config, "allow_state_reconciliation_writes"
     )
     RECONCILE_SMART_MODE = runtime_control_flag(system_config, "reconcile_smart_mode")
-    LOG_LEVEL = CONFIG["system"].get("log_level", "info").lower()
+    LOG_LEVEL = CONFIG["system"].get("log_level", SYSTEM_DEFAULTS["log_level"]).lower()
 
     if args.simulate or args.replay:
         LOG_LEVEL = "debug"
 
-    REDISTRIBUTE_CLAMPED_POWER = _allocation_switch(CONFIG["system"].get("redistribute_clamped_power", True))
-    PV_KWP_WEIGHTING = _allocation_switch(CONFIG["system"].get("pv_kwp_weighting", True))
+    defaults = SYSTEM_DEFAULTS
+    REDISTRIBUTE_CLAMPED_POWER = _allocation_switch(
+        CONFIG["system"].get("redistribute_clamped_power", defaults["redistribute_clamped_power"])
+    )
+    PV_KWP_WEIGHTING = _allocation_switch(
+        CONFIG["system"].get("pv_kwp_weighting", defaults["pv_kwp_weighting"])
+    )
     PV_CHARGE_BALANCE_ENABLED = safe_bool(
-        CONFIG["system"].get("pv_charge_balance_enabled", True),
-        True
+        CONFIG["system"].get("pv_charge_balance_enabled", defaults["pv_charge_balance_enabled"]),
+        defaults["pv_charge_balance_enabled"]
     )
     PV_CHARGE_BALANCE_DEADBAND_PERCENT = safe_float(
-        CONFIG["system"].get("pv_charge_balance_deadband_percent", 5),
-        5.0,
+        CONFIG["system"].get(
+            "pv_charge_balance_deadband_percent", defaults["pv_charge_balance_deadband_percent"]
+        ),
+        float(defaults["pv_charge_balance_deadband_percent"]),
         minimum=0.0
     )
     PV_CHARGE_BALANCE_FULL_BIAS_PERCENT = safe_float(
-        CONFIG["system"].get("pv_charge_balance_full_bias_percent", 15),
-        15.0,
+        CONFIG["system"].get(
+            "pv_charge_balance_full_bias_percent", defaults["pv_charge_balance_full_bias_percent"]
+        ),
+        float(defaults["pv_charge_balance_full_bias_percent"]),
         minimum=0.0
     )
     PV_CHARGE_BALANCE_STRENGTH = min(
         1.0,
         safe_float(
-            CONFIG["system"].get("pv_charge_balance_strength", 1.0),
-            1.0,
+            CONFIG["system"].get("pv_charge_balance_strength", defaults["pv_charge_balance_strength"]),
+            float(defaults["pv_charge_balance_strength"]),
             minimum=0.0
         )
     )
-    BATTERY_KWH_WEIGHTING = _allocation_switch(CONFIG["system"].get("battery_kwh_weighting", True))
+    BATTERY_KWH_WEIGHTING = _allocation_switch(
+        CONFIG["system"].get("battery_kwh_weighting", defaults["battery_kwh_weighting"])
+    )
     SOC_RECONCILE_INTERVAL = CONFIG["system"].get(
         "soc_reconcile_interval",
-        10
+        defaults["soc_reconcile_interval"]
     )
     WINTER_CONFIG = {
         **WINTER_DEFAULTS,
@@ -4395,34 +4452,63 @@ def ac_charge_stop_w():
     return max(0, start - hysteresis)
 
 
-def winter_config_bool(key, default=False):
-    return safe_bool(WINTER_CONFIG.get(key, default), default)
+def winter_settings(runtime_state=None):
+    """Winter as it holds now: the runtime section over the config.
+
+    The operating values (``SECTION_FIELDS["winter"]`` in
+    ``ems.runtime_commands``) are read every cycle against whatever runtime
+    state the caller holds; the per-class policies stay in the config.
+    """
+
+    settings = dict(WINTER_CONFIG)
+    data = getattr(runtime_state, "data", None)
+    if isinstance(data, dict) and isinstance(data.get("winter"), dict):
+        settings.update(data["winter"])
+    return settings
 
 
-def winter_config_int(key, default=0, minimum=None):
-    return safe_int(WINTER_CONFIG.get(key, default), default, minimum=minimum)
+def winter_config_bool(key, default=False, runtime_state=None):
+    return safe_bool(winter_settings(runtime_state).get(key, default), default)
 
 
-def winter_months():
-    months = WINTER_CONFIG.get("months", WINTER_DEFAULTS["months"])
+def winter_operating_values(settings):
+    """The winter operating values ``settings`` holds, each read as the EMS reads it.
 
-    if not isinstance(months, list):
-        months = WINTER_DEFAULTS["months"]
+    ``settings`` is a winter section (``winter_settings`` merges the runtime
+    one over the config's); a value missing or unreadable there takes the
+    default. The step is never more than ``MAX_RAISE_ABOVE_SOC``: configs from
+    before the step was 3 carry 5, and a noon step of 5 could lead the SoC by
+    ten points.
+    """
 
+    settings = settings if isinstance(settings, dict) else {}
+    months = settings.get("months", WINTER_DEFAULTS["months"])
     parsed = []
-
-    for month in months:
+    for month in months if isinstance(months, list) else []:
         value = safe_int(month, 0)
         if 1 <= value <= 12:
             parsed.append(value)
 
-    return parsed or WINTER_DEFAULTS["months"]
+    def number(key, minimum):
+        return safe_int(settings.get(key, WINTER_DEFAULTS[key]), WINTER_DEFAULTS[key], minimum=minimum)
+
+    return {
+        "months": parsed or list(WINTER_DEFAULTS["months"]),
+        "summer_min_soc": number("summer_min_soc", 0),
+        "winter_min_soc": number("winter_min_soc", 0),
+        "ramp_step_percent": min(number("ramp_step_percent", 1), MAX_RAISE_ABOVE_SOC),
+        "adjust_hour": number("adjust_hour", 0) % 24,
+    }
 
 
-def winter_month_active(now):
-    """Return True when the configured winter month set contains now.month."""
+def winter_months(runtime_state=None):
+    return winter_operating_values(winter_settings(runtime_state))["months"]
 
-    return now.month in winter_months()
+
+def winter_month_active(now, runtime_state=None):
+    """Return True when the winter month set contains now.month."""
+
+    return now.month in winter_months(runtime_state)
 
 
 def winter_feature_enabled(runtime_state=None):
@@ -4438,7 +4524,7 @@ def winter_feature_enabled(runtime_state=None):
 
 
 def winter_mode_active(now, runtime_state=None):
-    return winter_feature_enabled(runtime_state) and winter_month_active(now)
+    return winter_feature_enabled(runtime_state) and winter_month_active(now, runtime_state)
 
 
 def battery_care_points(value, default):
@@ -4506,43 +4592,28 @@ def winter_soc_reading(soc):
     return soc if usable else None
 
 
-def winter_step_percent():
-    """The daily winter step, never more than ``MAX_RAISE_ABOVE_SOC``.
+def winter_step_percent(runtime_state=None):
+    """The daily winter step, never more than ``MAX_RAISE_ABOVE_SOC``."""
 
-    Configs from before the step was 3 carry 5; a noon step of 5 could lead
-    the SoC by ten points.
-    """
-
-    step = winter_config_int(
-        "ramp_step_percent",
-        WINTER_DEFAULTS["ramp_step_percent"],
-        minimum=1
-    )
-    return min(step, MAX_RAISE_ABOVE_SOC)
+    return winter_operating_values(winter_settings(runtime_state))["ramp_step_percent"]
 
 
-def winter_min_soc_percent():
-    """The configured winter reserve ceiling."""
+def winter_min_soc_percent(runtime_state=None):
+    """The winter reserve ceiling."""
 
-    return winter_config_int(
-        "winter_min_soc", WINTER_DEFAULTS["winter_min_soc"], minimum=0
-    )
+    return winter_operating_values(winter_settings(runtime_state))["winter_min_soc"]
 
 
-def winter_summer_min_soc():
-    """The configured reserve outside the winter months."""
+def winter_summer_min_soc(runtime_state=None):
+    """The reserve outside the winter months."""
 
-    return winter_config_int(
-        "summer_min_soc", WINTER_DEFAULTS["summer_min_soc"], minimum=0
-    )
+    return winter_operating_values(winter_settings(runtime_state))["summer_min_soc"]
 
 
-def winter_adjust_hour():
+def winter_adjust_hour(runtime_state=None):
     """The local hour a timed winter step is due from."""
 
-    return winter_config_int(
-        "adjust_hour", WINTER_DEFAULTS["adjust_hour"], minimum=0
-    ) % 24
+    return winter_operating_values(winter_settings(runtime_state))["adjust_hour"]
 
 
 def winter_policy_class_defaults():
@@ -4668,11 +4739,11 @@ def winter_min_soc_raise_limit(target, current_min_soc, soc, max_raise_above_soc
     return current
 
 
-def estimate_winter_ramp_days(current_min_soc):
+def estimate_winter_ramp_days(current_min_soc, runtime_state=None):
     """Estimate the remaining daily steps until winter minSoc is reached."""
 
-    winter_min_soc = winter_min_soc_percent()
-    step = winter_step_percent()
+    winter_min_soc = winter_min_soc_percent(runtime_state)
+    step = winter_step_percent(runtime_state)
     remaining = max(0, winter_min_soc - current_min_soc)
 
     return int((remaining + step - 1) / step)

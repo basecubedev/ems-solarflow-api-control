@@ -86,12 +86,14 @@ export function buildFacts(value) {
 /**
  * The line that names the running build where the menu ends: a release by its
  * version; a build of ``latest``, which is always called latest, also by its
- * build number and short commit, so two of them can be told apart; nothing
- * for a local build, which names none.
+ * build number and short commit, so two of them can be told apart; a feature
+ * build (``dev-…``) as dev and its short commit; nothing for a local build,
+ * which names none.
  */
 export function versionText(facts, t) {
   const version = String(facts?.version || "");
   if (!version) return "";
+  if (version.startsWith("dev-")) return [t("about.dev"), facts.revision ? facts.revision.slice(0, 7) : ""].filter(Boolean).join(" · ");
   if (version !== "latest") return version;
   const parts = [t("about.latest")];
   if (facts.serial) parts.push(t("about.build", { serial: facts.serial }));

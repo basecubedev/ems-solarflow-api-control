@@ -79,8 +79,9 @@ def test_no_https_auto_generate_flag(monkeypatch):
     assert admin_main.parse_args([]).https_auto_generate is True
 
 
-def test_equal_http_and_https_ports_are_rejected(monkeypatch):
+def test_equal_http_and_https_ports_are_rejected(tmp_path, monkeypatch):
     monkeypatch.delenv("EMS_ADMIN_HTTPS_ENABLED", raising=False)
+    monkeypatch.setenv("EMS_ADMIN_DATA_DIR", str(tmp_path / "admin-data"))
     # Port 0 binds an ephemeral HTTP port; equal HTTP/HTTPS ports must be
     # rejected before any HTTPS listener starts. The HTTP server is closed first.
     with pytest.raises(SystemExit, match="must differ"):

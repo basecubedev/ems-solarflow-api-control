@@ -6297,8 +6297,8 @@ class EMSController:
                         "winter_mode_state",
                         active=winter_active,
                         month=now.month,
-                        summer_min_soc=cfg.winter_summer_min_soc(),
-                        winter_min_soc=cfg.winter_min_soc_percent()
+                        summer_min_soc=cfg.winter_summer_min_soc(self.runtime_state),
+                        winter_min_soc=cfg.winter_min_soc_percent(self.runtime_state)
                     )
 
                 for dev, state in zip(
