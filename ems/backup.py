@@ -28,7 +28,13 @@ from ems import backup_crypto
 from ems import backup_staging
 from ems import influx_setup
 from ems.build_info import collect_build_info
-from ems.config import resolve_influxdb_config, safe_bool
+from ems.config import (
+    BATTERY_FULL_CHARGE_ASSIST_DEFAULTS,
+    DASHBOARD_DEFAULTS,
+    INFLUXDB_DEFAULTS,
+    resolve_influxdb_config,
+    safe_bool,
+)
 from ems.diagnostics import DIAGNOSE_SCHEMA_VERSION, SUPPORT_BUNDLE_VERSION
 from ems.file_io import STARTUP_LOCK_TIMEOUT_SECONDS, FileLockTimeout, exclusive_file_lock
 from ems.mqtt_credentials import (
@@ -69,16 +75,13 @@ INFLUX_EXTERNAL_MESSAGE = (
 )
 INFLUX_ARCHIVE_SUBDIR = "influxdb"
 
-# Defaults mirror config.py / the project layout.
 DEFAULT_RUNTIME_STATE_PATH = "data/runtime-state.json"
-DEFAULT_DASHBOARD_AUTH_PATH = "config/dashboard-auth.json"
-DEFAULT_DASHBOARD_CERT_PATH = "config/dashboard.crt"
-DEFAULT_DASHBOARD_KEY_PATH = "config/dashboard.key"
-DEFAULT_INFLUX_SECRET_PATH = "deploy/docker/influxdb.env"
-
-# Database backup defaults mirror config.py.
-DEFAULT_DASHBOARD_DB_PATH = "data/ems_dashboard.sqlite"
-DEFAULT_STATE_DB_PATH = "data/ems_state.sqlite"
+DEFAULT_DASHBOARD_AUTH_PATH = DASHBOARD_DEFAULTS["auth_file"]
+DEFAULT_DASHBOARD_CERT_PATH = DASHBOARD_DEFAULTS["ssl_cert_file"]
+DEFAULT_DASHBOARD_KEY_PATH = DASHBOARD_DEFAULTS["ssl_key_file"]
+DEFAULT_INFLUX_SECRET_PATH = INFLUXDB_DEFAULTS["secret_file"]
+DEFAULT_DASHBOARD_DB_PATH = DASHBOARD_DEFAULTS["database_path"]
+DEFAULT_STATE_DB_PATH = BATTERY_FULL_CHARGE_ASSIST_DEFAULTS["state_database_path"]
 
 # Config backups do not include SQLite databases; use the dedicated type.
 SKIP_DATABASE_REASON = "use_databases_backup_type"
@@ -330,8 +333,8 @@ def collect_config_backup_files(
 
     # Record databases as skipped here; they have their own backup type.
     for db_default, cfg_key, section in (
-        ("data/ems_dashboard.sqlite", "database_path", dashboard),
-        ("data/ems_state.sqlite", "state_database_path",
+        (DEFAULT_DASHBOARD_DB_PATH, "database_path", dashboard),
+        (DEFAULT_STATE_DB_PATH, "state_database_path",
          config.get("battery_full_charge_assist", {})),
     ):
         section = section if isinstance(section, dict) else {}
