@@ -61,9 +61,31 @@ SERIES_CATALOG = {
         "color_var": "--accent2",
         "sqlite_field": "controller.commanded_total_w",
     },
+    **{
+        name: {"label": label, "color_var": "--m-muted", "sqlite_field": None}
+        for name, label in (
+            ("device_temp", "Inverter temperature"),
+            ("min_soc", "Minimum SoC"),
+            ("winter_target", "Winter target"),
+            ("heat_state", "Battery heating"),
+            ("low_temp", "Too cold"),
+            ("error_flag", "Error flag"),
+            ("derate", "Derating"),
+            ("winter_hold", "Export hold"),
+            ("ac_input", "AC charging role"),
+            ("charge_avail", "Charge accepted"),
+            ("discharge_avail", "Discharge accepted"),
+            ("input_limit", "AC charge limit"),
+        )
+    },
 }
 
 DEFAULT_SERIES = ["pv", "output", "battery"]
+
+# A yes/no a device reports or the EMS decided, written as 1 or 0. It keeps
+# whether it was on at all over a stretch, in InfluxDB over a window and here
+# when a long range is thinned, so a short heating still shows.
+STATE_SERIES = ("heat_state", "low_temp", "error_flag", "derate", "winter_hold", "ac_input")
 
 # ``consumer:<name>`` reads one consumer's power, so a chart gets every
 # consumer as its own line from one request. The name is percent-encoded, as
@@ -78,12 +100,15 @@ MAX_CONSUMER_NAME = 256
 # and a downsampling step: a short dip of the lowest cell is what it is read for.
 PACK_CELL_SERIES = {"cell_min": "cell_min_v", "cell_max": "cell_max_v"}
 PACK_CELL_REDUCERS = {"cell_min_v": "min", "cell_max_v": "max"}
-# A pack's own power, state and temperature go to the raw bucket only. power_w
+PACK_SERIES = {**PACK_CELL_SERIES, "pack_temp": "temp_c"}
+PACK_SERIES_REDUCERS = {**PACK_CELL_REDUCERS, "temp_c": "mean"}
+# A pack's own power, state and temperature stay out of the cell task. power_w
 # carries no direction -- state does -- so a window's mean across a change of
 # direction means nothing, and a field added to the cell task would leave every
-# installation's existing task "kept" until an operator synced by hand.
+# installation's existing task "kept" until an operator synced by hand. The
+# temperature has a task of its own (ems.history.schema BATTERY_DOWNSAMPLED).
 PACK_RAW_FIELDS = ("power_w", "state", "temp_c")
-_REDUCE = {"min": min, "max": max}
+_REDUCE = {"min": min, "max": max, "mean": lambda values: sum(values) / len(values)}
 
 # Per-device snapshot fields (under payload["devices"][name]) used when the
 # SQLite provider is asked to filter by device. Series absent from this map are
@@ -136,9 +161,10 @@ def decimate_history_result(result, max_points=DEFAULT_MAX_POINTS):
     """Stride-sample a :class:`HistoryResult` in place to ``max_points``.
 
     Keeps the time axis and every series aligned; always keeps the last point so
-    the most recent sample is never dropped. A cell series keeps the extreme of
-    the stretch each point stands for instead, so a short dip stays in the
-    chart. No-op when already small enough.
+    the most recent sample is never dropped. A pack series keeps its reducer
+    over the stretch each point stands for instead (a cell's extreme, so a
+    short dip stays in the chart, a temperature's mean), and a state whether
+    it was on at all. No-op when already small enough.
     Returns the (possibly mutated) result for convenience.
     """
     count = len(result.time)
@@ -155,18 +181,27 @@ def decimate_history_result(result, max_points=DEFAULT_MAX_POINTS):
     for name, values in result.series.items():
         if len(values) != count:
             continue
-        cells = pack_cells_of_series(name)
-        if cells is None:
+        reducer = _decimation_reducer(name)
+        if reducer is None:
             result.series[name] = [values[i] for i in keep]
         else:
-            result.series[name] = _stretch_extremes(values, keep, PACK_CELL_REDUCERS[cells[0]])
+            result.series[name] = _stretch_extremes(values, keep, reducer)
     result.meta["point_count"] = len(result.time)
     result.meta["decimated"] = True
     return result
 
 
+def _decimation_reducer(name):
+    """How a thinned series sums up a stretch: a pack series by its reducer, a state by its maximum, else None."""
+
+    pack = pack_cells_of_series(name)
+    if pack is not None:
+        return PACK_SERIES_REDUCERS[pack[0]]
+    return "max" if name in STATE_SERIES else None
+
+
 def _stretch_extremes(values, keep, reducer):
-    """Each kept point's extreme over the stretch since the one before it.
+    """Each kept point's reduction (``reducer``) over the stretch since the one before it.
 
     A stretch without a value stays without one, so a gap longer than a
     stretch stays a gap.
@@ -222,12 +257,12 @@ def consumer_of_series(series_name):
 
 
 def pack_cells_of_series(series_name):
-    """``(field, pack)`` a ``cell_min:<n>``/``cell_max:<n>`` series reads, or ``None``."""
+    """``(field, pack)`` a ``cell_min:<n>``, ``cell_max:<n>`` or ``pack_temp:<n>`` series reads, or ``None``."""
 
     if not isinstance(series_name, str):
         return None
     kind, separator, number = series_name.partition(":")
-    field_name = PACK_CELL_SERIES.get(kind)
+    field_name = PACK_SERIES.get(kind)
     if not separator or field_name is None or not (number.isascii() and number.isdigit()):
         return None
     pack = int(number)
@@ -263,7 +298,7 @@ class HistoryProvider(ABC):
 
 MAX_HISTORY_POINTS = 2000
 
-_SUMMARY_FIELDS = ("timestamp", *(spec["sqlite_field"] for spec in SERIES_CATALOG.values()))
+_SUMMARY_FIELDS = ("timestamp", *(spec["sqlite_field"] for spec in SERIES_CATALOG.values() if spec["sqlite_field"]))
 
 
 _SUMMARY_SELECT = (
@@ -448,10 +483,11 @@ def _consumer_series_value(payload, name):
 
 
 def _pack_series_value(payload, field_name, pack, device_names):
-    """One pack's cell voltage in a snapshot, over the selected devices or all.
+    """One pack's cell voltage or temperature in a snapshot, over the selected devices or all.
 
-    The extreme ``PACK_CELL_REDUCERS`` names for the field. Without a choice
-    the devices the EMS controls count, the ones InfluxDB records cells for.
+    The reducer ``PACK_SERIES_REDUCERS`` names for the field: a cell voltage's
+    extreme, a temperature's mean. Without a choice the devices the EMS
+    controls count, the ones InfluxDB records packs for.
     """
 
     devices = payload.get("devices")
@@ -469,7 +505,7 @@ def _pack_series_value(payload, field_name, pack, device_names):
                     values.append(number)
     if not values:
         return None
-    return _REDUCE[PACK_CELL_REDUCERS[field_name]](values)
+    return _REDUCE[PACK_SERIES_REDUCERS[field_name]](values)
 
 
 def _device_series_value(payload, series_name, device_names):

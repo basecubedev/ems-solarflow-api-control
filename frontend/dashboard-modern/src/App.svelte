@@ -12,13 +12,13 @@
   import Devices from "./pages/Devices.svelte";
   import Consumers from "./pages/Consumers.svelte";
   import Energy from "./pages/Energy.svelte";
-  import Analytics from "./pages/Analytics.svelte";
   import Control from "./pages/Control.svelte";
   import Diagnose from "./pages/Diagnose.svelte";
   import Logs from "./pages/Logs.svelte";
   import Maintenance from "./pages/Maintenance.svelte";
   import Schedule from "./pages/Schedule.svelte";
   import About from "../../shared/widgets/About.svelte";
+  import Empty from "../../shared/ui/Empty.svelte";
   import { pageSet } from "./app/pages.js";
   import { nav, router } from "./app/router.svelte.js";
   import { t } from "./i18n/i18n.svelte.js";
@@ -28,8 +28,32 @@
   import { consoleAddress } from "./state/console.svelte.js";
   import { INSTALL_CONSOLE, consoleTarget } from "./lib/console.js";
 
-  const COMPONENTS = { overview: Overview, devices: Devices, consumers: Consumers, energy: Energy, analytics: Analytics, control: Control, schedule: Schedule, diagnose: Diagnose, logs: Logs, maintenance: Maintenance, about: About };
-  const Page = $derived(COMPONENTS[router.page] || Overview);
+  const COMPONENTS = { overview: Overview, devices: Devices, consumers: Consumers, energy: Energy, control: Control, schedule: Schedule, diagnose: Diagnose, logs: Logs, maintenance: Maintenance, about: About };
+
+  /**
+   * Analytics, the largest page and one only InfluxDB fills, loads when it is
+   * first opened, as the console loads its pages, so the dashboard's own file
+   * stays within what the repository tracks unasked.
+   */
+  const LAZY = { analytics: () => import("./pages/Analytics.svelte") };
+  const loaded = $state({});
+  let unloadable = $state("");
+  const Page = $derived(COMPONENTS[router.page] || loaded[router.page] || (LAZY[router.page] ? null : Overview));
+
+  /** A page whose file does not arrive, as while the EMS restarts, says so and offers a reload. */
+  $effect(() => {
+    const id = router.page;
+    if (loaded[id] || !LAZY[id]) return;
+    unloadable = "";
+    LAZY[id]().then(
+      (module) => {
+        loaded[id] = module.default;
+      },
+      () => {
+        if (router.page === id) unloadable = id;
+      },
+    );
+  });
 
   provideShell({
     pageSet,
@@ -57,7 +81,7 @@
         ? [{ href: target.href, icon: "layout-dashboard", label: "nav.console", testid: "open-console" }]
         : [{ href: INSTALL_CONSOLE, icon: "arrow-up-right", label: "nav.installConsole", testid: "install-console", external: true }];
     },
-    about: { notices: [{ name: "uPlot", license: "MIT", file: "/uPlot.LICENSE" }] },
+    about: { notices: [{ name: "uPlot", license: "MIT", file: "/uPlot.LICENSE" }, { name: "Vite", license: "MIT", file: "/Vite.LICENSE" }] },
   });
 </script>
 
@@ -76,7 +100,11 @@
     </Topbar>
     <main class="content" id="content" tabindex="-1">
       {#key router.page}
-        <Page />
+        {#if Page}
+          <Page />
+        {:else if unloadable === router.page}
+          <div class="span-12"><Empty error text={t("app.pageFailed")}><button class="btn secondary small" type="button" onclick={() => globalThis.location.reload()}>{t("app.reload")}</button></Empty></div>
+        {/if}
       {/key}
     </main>
   </div>

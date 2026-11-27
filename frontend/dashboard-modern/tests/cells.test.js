@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { createFormat } from "../../shared/lib/format.js";
 import { packCells, packFlows, packFlowTotal, packReadings, packTemperatures, temperatureRange, temperatureText, cellRange, cellText, cellSeriesIds, cellKind, cellStyle, cellDevices, historyCellDevices, analyticsCellDevices, packsSeen, reportedCells, seriesExtreme, shownPack, voltRange } from "../src/lib/cells.js";
 import { normalizeDevice } from "../src/lib/devices.js";
-import { ANALYTICS_VIEWS, CELL_OVERLAYS, requestedSeries, seriesStyle, viewById } from "../src/lib/analytics.js";
+import { ANALYTICS_VIEWS, requestedSeries, seriesStyle, viewById } from "../src/lib/analytics.js";
 
 test("the live data's packs come in pack order, a missing voltage stays null and a nameless entry is dropped", () => {
   assert.deepEqual(
@@ -204,12 +204,12 @@ test("the lowest and highest value of a series in an answer", () => {
   assert.equal(seriesExtreme(null, "cell_min:1", "min"), null);
 });
 
-test("the cells view asks for one pack and the state of charge alone of the overlays", () => {
+test("the batteries view leaves its series to battery.js, and a battery overlay stays out of the power views", () => {
   const view = viewById("cells");
   assert.ok(view.cells && view.modernOnly);
-  assert.deepEqual(requestedSeries(view, ["target", "soc", "grid"], [], 2), ["cell_min:2", "cell_max:2", "soc"]);
+  assert.deepEqual(requestedSeries(view, ["target", "soc", "grid"], [], 2), ["cell_min:2", "cell_max:2"]);
   assert.deepEqual(requestedSeries(view, ["soc"], [], null), []);
-  assert.deepEqual([...CELL_OVERLAYS], ["soc"]);
+  assert.deepEqual(requestedSeries(viewById("battery"), ["min_soc", "soc", "winter_target", "device_temp"]), ["battery", "soc"]);
   assert.deepEqual(seriesStyle(view, "cell_max:2"), { token: "--m-muted", fill: false });
   assert.deepEqual(seriesStyle(view, "soc").dash, [6, 4]);
   assert.ok(ANALYTICS_VIEWS.filter((item) => item.modernOnly).every((item) => item.consumers || item.cells));

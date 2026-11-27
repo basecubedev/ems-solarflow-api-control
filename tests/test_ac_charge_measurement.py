@@ -14,7 +14,7 @@ import pytest
 
 from dashboard.telemetry import build_dashboard_snapshot
 from ems.clients import parse_device, zero_device_state
-from ems.history.influx_provider import INFLUX_SERIES
+from ems.history.influx_provider import BATTERY_INFLUX_SERIES, INFLUX_SERIES
 from ems.history.influx_writer import build_telemetry_lines
 from ems.history.provider import SERIES_CATALOG, SERIES_DEVICE_FIELD
 from ems.power_direction import derive_house_load_w
@@ -131,7 +131,8 @@ def test_both_history_catalogs_offer_the_same_series():
     """A series present in one provider and absent from the other silently
     disappears when the operator switches analytics source."""
 
-    assert sorted(SERIES_CATALOG) == sorted(INFLUX_SERIES)
+    assert not set(INFLUX_SERIES) & set(BATTERY_INFLUX_SERIES)
+    assert sorted(SERIES_CATALOG) == sorted({**INFLUX_SERIES, **BATTERY_INFLUX_SERIES})
     assert "ac_charge" in SERIES_CATALOG
     assert SERIES_DEVICE_FIELD["ac_charge"] == "ac_charge_w"
 

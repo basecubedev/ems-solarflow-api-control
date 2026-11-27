@@ -47,7 +47,7 @@ const exists = (key) => Boolean(STRINGS[key] || SHARED_STRINGS[key] || DASHBOARD
  * dashboard's pages and its words win there (``useStrings`` rank); each entry
  * is a sentence about the same thing, said once for the whole app.
  */
-const OWN_WORDS = ["error.auth_not_configured", "error.csrf_failed", "error.login_rate_limited", "error.not_authenticated"];
+const OWN_WORDS = ["app.pageFailed", "error.auth_not_configured", "error.csrf_failed", "error.login_rate_limited", "error.not_authenticated"];
 
 test("a key both apps name has the same words, or the console's are meant to win", () => {
   const differing = Object.keys(STRINGS).filter((key) => key in DASHBOARD_STRINGS && JSON.stringify(STRINGS[key]) !== JSON.stringify(DASHBOARD_STRINGS[key]));

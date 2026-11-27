@@ -7,9 +7,10 @@
   /**
    * The device and the pack a cell chart shows: a device choice when there is
    * more than one, a pack choice when the device has more than one pack.
-   * ``compact`` hides the device's label for a card's row of actions.
+   * ``compact`` hides the device's label for a card's row of actions;
+   * ``pickPack`` false leaves the pack choice out, for a chart of every pack.
    */
-  let { devices = [], device = "", pack = null, compact = false, ondevice, onpack } = $props();
+  let { devices = [], device = "", pack = null, compact = false, pickPack = true, ondevice, onpack } = $props();
 
   const packs = $derived(devices.find((entry) => entry.name === device)?.cells || []);
 </script>
@@ -22,7 +23,7 @@
     </select>
   </label>
 {/if}
-{#if packs.length > 1}
+{#if pickPack && packs.length > 1}
   <Segmented options={packs.map((entry) => ({ value: String(entry.pack), label: t("device.pack", { n: entry.pack }) }))} value={String(pack)} label={t("cells.pack")} onchange={(value) => onpack(Number(value))} />
 {/if}
 

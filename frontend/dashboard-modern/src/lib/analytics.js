@@ -26,9 +26,6 @@ export const ANALYTICS_VIEWS = Object.freeze([
 
 export const ANALYTICS_OVERLAYS = Object.freeze(["target", "grid", "ac_charge", "soc"]);
 
-/** The one overlay a volt axis can carry: the state of charge reads on its own scale. */
-export const CELL_OVERLAYS = Object.freeze(["soc"]);
-
 export const SERIES_STYLE = Object.freeze({
   pv: { token: "--pv" },
   output: { token: "--output" },
@@ -63,10 +60,10 @@ export function viewById(id) {
 /** The series one request asks for: the view's own plus the overlays the reader switched on. */
 export function requestedSeries(view, overlays, consumers = [], pack = null) {
   if (view.consumers) return [...consumers.map(consumerSeriesId), ...view.series];
-  if (view.cells) return pack === null ? [] : [...cellSeriesIds(pack), ...overlays.filter((id) => CELL_OVERLAYS.includes(id))];
+  if (view.cells) return pack === null ? [] : cellSeriesIds(pack);
   const ids = [...view.series];
   overlays.forEach((id) => {
-    if (!ids.includes(id)) ids.push(id);
+    if (ANALYTICS_OVERLAYS.includes(id) && !ids.includes(id)) ids.push(id);
   });
   return ids;
 }

@@ -108,7 +108,7 @@ test("no orphan keys: each key is used literally or belongs to a generated famil
   const text = sources().join("\n");
   const families = [
     "nav.", "page.", "rule.", "code.", "decision.", "fw.", "channel.", "energy.state.", "energy.detail.", "chart.range.",
-    "series.", "analytics.view.", "analytics.kpi.", "analytics.role.", "diagnose.profile.", "diagnose.status.", "diagnose.global.", "diagnose.metric.",
+    "series.", "analytics.view.", "analytics.kpi.", "analytics.role.", "analytics.sourceBattery.", "battery.measure.", "diagnose.profile.", "diagnose.status.", "diagnose.global.", "diagnose.metric.",
     "maint.type.", "maint.kind.", "maint.influx.", "schedule.preset.", "schedule.weekday.", "schedule.freq.", "schedule.pos.",
     "schedule.status.", "schedule.group.", "schedule.action.", "schedule.choice.", "runtime.offgrid.", "runtime.role.", "runtime.bound.",
     "runtime.warn.", "setting.", "settingValue.", "control.write.", "control.stage.", "control.deviceStage.", "status.", "transport.",

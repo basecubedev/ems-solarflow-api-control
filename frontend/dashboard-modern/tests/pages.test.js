@@ -8,10 +8,12 @@ import { MOBILE_PAGES, PAGES, pinnedPages, swapPinned } from "../src/app/pages.j
 const app = readFileSync(new URL("../src/App.svelte", import.meta.url), "utf8");
 
 test("every page in the navigation has the component that renders it, and no other", () => {
-  const block = app.match(/const COMPONENTS = \{([^}]*)\}/);
-  assert.ok(block, "COMPONENTS not found in App.svelte");
-  const ids = [...block[1].matchAll(/(\w+):/g)].map((match) => match[1]);
-  assert.deepEqual(ids, PAGES.map((page) => page.id));
+  const eager = app.match(/const COMPONENTS = \{([^}]*)\}/);
+  const lazy = app.match(/const LAZY = \{([^}]*)\}/);
+  assert.ok(eager && lazy, "COMPONENTS or LAZY not found in App.svelte");
+  const ids = [...eager[1].matchAll(/(\w+):/g), ...lazy[1].matchAll(/(\w+):/g)].map((match) => match[1]);
+  assert.deepEqual(ids.sort(), PAGES.map((page) => page.id).sort());
+  assert.deepEqual([...lazy[1].matchAll(/(\w+):/g)].map((match) => match[1]), ["analytics"]);
 });
 
 test("the bar's pages: four known pages, each once, the default filling the gaps", () => {

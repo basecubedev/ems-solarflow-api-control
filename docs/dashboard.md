@@ -870,7 +870,14 @@ and `pack`; fields `cell_min_v` and `cell_max_v`), keeping each window's lowest
 and highest value rather than its mean, so a short dip still shows in a long
 range. SQLite reads them from the snapshot's `battery_packs` and thins a long
 range to at most 2,000 snapshots like every other series, so it can miss a dip
-shorter than the gap between two of them. For a **custom range**, pass `start`
+shorter than the gap between two of them. `pack_temp:<pack>` reads one pack's
+temperature in °C the same way, the mean across devices. With `devices`,
+`device_temp`, `min_soc`, `winter_target`, `heat_state`, `low_temp`,
+`error_flag`, `derate`, `winter_hold`, `ac_input`, `charge_avail`,
+`discharge_avail` and `input_limit` read the battery's condition (see [A
+battery in the cold](technical/influxdb.md#a-battery-in-the-cold)); InfluxDB
+answers them, a state with each window's maximum, which a thinned long range
+keeps too; SQLite answers them empty. For a **custom range**, pass `start`
 and `end` (epoch seconds or ISO 8601) instead of `range`; the response then
 reports `"range": "custom"`. `start >= end` or unparseable bounds return
 `400 invalid_range`. The response is columnar
@@ -933,6 +940,16 @@ energy KPI cards (no extra chart pages):
   Home use, AC charging.
 - **Battery** — Battery; KPIs Battery charged, Battery discharged.
 - **Solar** — Solar and Output; KPIs Solar, Solar peak, Output.
+- **Batteries** — one device's batteries, one measure at a time: every pack's
+  `pack_temp:<n>` (KPIs Coldest pack, Warmest pack), one pack's
+  `cell_min:<n>`/`cell_max:<n>` (KPIs Lowest cell, Highest cell), or, in
+  Expert, `charge_avail`, `discharge_avail` and `input_limit`. Its overlays are
+  `soc`, and in Expert `min_soc`, `winter_target` and, on the temperature,
+  `device_temp`. The same request carries the state lanes of the folded
+  **States** card: `heat_state` and `low_temp`, in Expert also `ac_input`,
+  `winter_hold`, `derate` and `error_flag`. Basic or Expert is kept in
+  `localStorage` (`ems-modern.analyticsDetail`). See
+  [Batteries](user/dashboard/energy.md#batteries).
 
 Every view adds **Current state of charge** and **Runtime role**.
 

@@ -11,9 +11,12 @@
   import { getJson } from "../../../shared/lib/api.js";
   import { fetchSeries } from "../lib/historyApi.js";
   import { escapeLeavesZoom, zoomSpan } from "../lib/history.js";
-  import { ANALYTICS_RANGES, ANALYTICS_VIEWS, ANALYTICS_OVERLAYS, CELL_OVERLAYS, viewById, requestedSeries, seriesStyle, seriesKwh, computeKpi, runtimeRole, KPIS } from "../lib/analytics.js";
+  import { ANALYTICS_RANGES, ANALYTICS_VIEWS, ANALYTICS_OVERLAYS, viewById, requestedSeries, seriesStyle, seriesKwh, computeKpi, runtimeRole, KPIS } from "../lib/analytics.js";
   import { analyticsCellDevices, cellStyle, seriesExtreme, shownPack } from "../lib/cells.js";
   import CellPicker from "../ui/CellPicker.svelte";
+  import StateLanes from "../ui/StateLanes.svelte";
+  import { batteryChartIds, batteryMeasures, batteryOverlays, batteryRequest, batteryStyle, laneSummary, lanesCoarse, laneTotals, packExtreme, shownMeasure, stateLanes, temperaturePacks } from "../lib/battery.js";
+  import { analyticsDetail, setAnalyticsDetail } from "../state/prefs.svelte.js";
   import { chartConsumers, chartTokens, consumerPalette, consumerSeriesId, restOfHouse, OTHER_TOKEN } from "../lib/consumers.js";
   import { devices } from "../state/derived.svelte.js";
   import { live } from "../state/live.svelte.js";
@@ -28,6 +31,8 @@
   let device = $state("");
   let wantedCellDevice = $state("");
   let wantedPack = $state(1);
+  let wantedMeasure = $state("temperature");
+  let statesOpen = $state(false);
   let overlays = $state([]);
   let data = $state.raw(null);
   let loading = $state(false);
@@ -55,6 +60,10 @@
   });
   const pack = $derived(view.cells && cellDevice ? shownPack(cellDevice.cells, wantedPack) : null);
   const shownDevice = $derived(view.cells ? cellDevice?.name || "" : device);
+  const expert = $derived(analyticsDetail.detail === "expert");
+  const measure = $derived(shownMeasure(wantedMeasure, expert));
+  const tempPacks = $derived(view.cells && cellDevice ? temperaturePacks(devices().find((entry) => entry.name === cellDevice.name), cellDevice) : []);
+  const batteryIds = $derived(view.cells ? batteryChartIds(measure.id, tempPacks, pack, overlays, expert) : []);
   const chosen = $derived(view.consumers ? chartConsumers(live.snapshot, live.snapshot?.energy_stats?.lifetime) : { shown: [], rest: false });
   const palette = $derived(view.consumers ? consumerPalette(live.snapshot, live.snapshot?.energy_stats?.lifetime) : null);
   // A string, so a live frame naming the same consumers in the same colours
@@ -62,7 +71,8 @@
   const consumerKey = $derived(JSON.stringify(chartTokens(chosen.shown, palette)));
   const consumers = $derived(JSON.parse(consumerKey));
   const rest = $derived(chosen.rest);
-  const seriesIds = $derived(requestedSeries(view, overlays, consumers.map((item) => item.key), pack));
+  const seriesIds = $derived(view.cells ? batteryRequest(batteryIds, expert) : requestedSeries(view, overlays, consumers.map((item) => item.key), pack));
+  const chartIds = $derived(view.cells ? batteryIds : seriesIds);
   const seriesKey = $derived(seriesIds.join(","));
   const chartSeries = $derived(
     view.consumers
@@ -70,7 +80,12 @@
           ...consumers.map((item) => ({ id: consumerSeriesId(item.key), label: item.name, token: item.token })),
           { id: "rest", label: t(rest ? "flow.otherConsumers" : "consumers.unmeasured"), token: OTHER_TOKEN },
         ]
-      : seriesIds.map((id) => ({ id, label: t(cellStyle(id)?.label || `series.${id}`), ...seriesStyle(view, id) })),
+      : view.cells
+        ? chartIds.map((id) => {
+            const { label, args, ...style } = cellStyle(id) || batteryStyle(id) || { label: `series.${id}` };
+            return { id, label: t(label, args), ...style };
+          })
+        : seriesIds.map((id) => ({ id, label: t(cellStyle(id)?.label || `series.${id}`), ...seriesStyle(view, id) })),
   );
   const chartData = $derived(
     view.consumers && data
@@ -78,7 +93,15 @@
       : data,
   );
   const rangeLabel = $derived(periodLabel(data && dataPeriod ? dataPeriod : { zoom, applied, range }));
-  const chartHasData = $derived(seriesIds.some((id) => (data?.series?.[id] || []).some((value) => value !== null && value !== undefined)));
+  const chartHasData = $derived(chartIds.some((id) => (data?.series?.[id] || []).some((value) => value !== null && value !== undefined)));
+  const laneRows = $derived(
+    view.cells && data?.series
+      ? stateLanes(expert)
+          .filter((lane) => lane.id in data.series)
+          .map((lane) => ({ id: lane.id, token: lane.token, label: t(`series.${lane.id}`), values: data.series[lane.id] }))
+      : [],
+  );
+  const statesSummary = $derived(data ? laneSummary(laneTotals(data.time || [], laneRows), t, f, lanesCoarse(data.time || [])) : "");
 
   /** A window that is not one of the ranges is named by its length, as Classic names the KPIs' period. */
   function spanText(seconds) {
@@ -146,7 +169,7 @@
     const key = JSON.stringify([seriesIds, timeParams(), shownDevice]);
     if (key !== failedKey) error = false;
     const devicesParam = shownDevice ? [shownDevice] : undefined;
-    const selection = `${shownDevice}|${pack ?? ""}`;
+    const selection = `${shownDevice}|${pack ?? ""}|${measure.id}`;
     if (view.cells && dataSelection !== selection) data = null;
     try {
       const main = await fetchSeries({ source: "analytics", ...timeParams(), series: seriesIds, devices: devicesParam, signal: mine.signal });
@@ -261,9 +284,9 @@
     return d?.socReported ? d.soc : null;
   });
   const role = $derived(runtimeRole(live.snapshot, shownDevice));
-  const zoomScope = $derived(`${view.id}|${range}|${shownDevice}|${pack ?? ""}|${applied ? `${applied.start}-${applied.end}` : ""}|${zoomEpoch}`);
-  const cellLow = $derived(view.cells && seriesIds[0] ? seriesExtreme(data, seriesIds[0], "min") : null);
-  const cellHigh = $derived(view.cells && seriesIds[1] ? seriesExtreme(data, seriesIds[1], "max") : null);
+  const zoomScope = $derived(`${view.id}|${measure.id}|${range}|${shownDevice}|${pack ?? ""}|${applied ? `${applied.start}-${applied.end}` : ""}|${zoomEpoch}`);
+  const cellLow = $derived(view.cells && measure.id === "cells" && chartIds[0] ? seriesExtreme(data, chartIds[0], "min") : null);
+  const cellHigh = $derived(view.cells && measure.id === "cells" && chartIds[1] ? seriesExtreme(data, chartIds[1], "max") : null);
 </script>
 
 {#snippet retrying()}
@@ -288,7 +311,7 @@
     <div class="controls">
       <Segmented options={ANALYTICS_VIEWS.map((v) => ({ value: v.id, label: t(`analytics.view.${v.id}`) }))} value={viewId} label={t("analytics.view")} onchange={setView} />
       {#if view.cells}
-        <CellPicker devices={withCells} device={shownDevice} {pack} ondevice={(name) => (wantedCellDevice = name)} onpack={(value) => (wantedPack = value)} />
+        <CellPicker devices={withCells} device={shownDevice} {pack} pickPack={measure.id === "cells"} ondevice={(name) => (wantedCellDevice = name)} onpack={(value) => (wantedPack = value)} />
       {:else if !view.consumers}
         <label class="inline">
           <span>{t("chart.device")}</span>
@@ -299,10 +322,18 @@
         </label>
       {/if}
     </div>
+    {#if view.cells}
+      <div class="controls" data-testid="battery-controls">
+        <Segmented options={batteryMeasures(expert).map((entry) => ({ value: entry.id, label: t(`battery.measure.${entry.id}`) }))} value={measure.id} label={t("battery.measure")} onchange={(value) => (wantedMeasure = value)} />
+        <span class="detail">
+          <Segmented options={[{ value: "basic", label: t("energy.detail.basic") }, { value: "expert", label: t("energy.detail.expert") }]} value={analyticsDetail.detail} label={t("battery.detail")} onchange={setAnalyticsDetail} />
+        </span>
+      </div>
+    {/if}
     {#if !view.consumers}
       <div class="controls overlays" role="group" aria-label={t("analytics.overlays")}>
         <span class="row-label">{t("analytics.overlays")}</span>
-        {#each view.cells ? CELL_OVERLAYS : ANALYTICS_OVERLAYS as id (id)}
+        {#each view.cells ? batteryOverlays(expert, measure.id).map((entry) => entry.id) : ANALYTICS_OVERLAYS as id (id)}
           <button type="button" class="chip" aria-pressed={overlays.includes(id) ? "true" : "false"} onclick={() => toggleOverlay(id)}>{t(`series.${id}`)}</button>
         {/each}
       </div>
@@ -326,7 +357,7 @@
     </button>
   {/snippet}
 
-  <Card icon={view.cells ? "battery-medium" : "chart-spline"} tone={unavailable || (error && !data) ? "c-warn" : view.cells ? "c-bat" : "c-out"} title={t(`analytics.view.${view.id}`)} subtitle={t(view.cells ? "analytics.sourceCells" : "analytics.source")} span="span-12" {actions}>
+  <Card icon={view.cells ? "battery-medium" : "chart-spline"} tone={unavailable || (error && !data) ? "c-warn" : view.cells ? "c-bat" : "c-out"} title={t(`analytics.view.${view.id}`)} subtitle={t(view.cells ? `analytics.sourceBattery.${measure.id}` : "analytics.source")} span="span-12" {actions}>
     {#if unavailable}
       {@render unavailableInfo(unavailable)}
       {@render retrying()}
@@ -336,10 +367,20 @@
     {:else if view.cells && !withCells.length}
       <Empty text={t("cells.none")} icon="battery-medium" />
     {:else}
-      <TimeChart series={chartSeries} unit={view.cells ? "V" : "W"} stacked={Boolean(view.consumers)} time={data?.time || []} values={chartData?.series || {}} {showTable} label={t(`analytics.view.${view.id}`)} scope={zoomScope} bounds={liveExtent} {onzoom} busy={loading && data !== null} emptyText={data ? "" : t("chart.loading")} />
+      <TimeChart series={chartSeries} unit={view.cells ? measure.unit : "W"} stacked={Boolean(view.consumers)} time={data?.time || []} values={chartData?.series || {}} {showTable} label={t(`analytics.view.${view.id}`)} scope={zoomScope} bounds={liveExtent} {onzoom} busy={loading && data !== null} emptyText={data ? "" : t("chart.loading")} />
       {#if error && data}<p class="note" role="status"><Icon name="circle-alert" />{t("chart.stale")}</p>{/if}
     {/if}
   </Card>
+
+  {#if view.cells && withCells.length && !unavailable}
+    <Card icon="activity" tone="c-bat" title={t("battery.states")} subtitle={t(expert ? "battery.statesExpert" : "battery.statesBasic")} span="span-12" fold bind:open={statesOpen} summary={statesSummary} testid="battery-states">
+      {#if data}
+        <StateLanes time={data.time || []} lanes={laneRows} label={t("battery.states")} />
+      {:else}
+        <Empty text={t("chart.loading")} icon="loader" />
+      {/if}
+    </Card>
+  {/if}
 
   <div class="kpis span-12">
     {#each view.consumers ? chartSeries : [] as item (item.id)}
@@ -348,7 +389,16 @@
         <div class="kpi-value num">{f.energy(seriesKwh(chartData, item.id))}</div>
       </div>
     {/each}
-    {#if view.cells}
+    {#if view.cells && measure.id === "temperature"}
+      <div class="card kpi c-bat" data-testid="analytics-temp-kpi">
+        <div class="kpi-label">{t("battery.coldest")} · {rangeLabel}</div>
+        <div class="kpi-value num">{f.temperature(packExtreme(data, tempPacks, "min"))}</div>
+      </div>
+      <div class="card kpi c-bat" data-testid="analytics-temp-kpi">
+        <div class="kpi-label">{t("battery.warmest")} · {rangeLabel}</div>
+        <div class="kpi-value num">{f.temperature(packExtreme(data, tempPacks, "max"))}</div>
+      </div>
+    {:else if view.cells && measure.id === "cells"}
       <div class="card kpi c-bat" data-testid="analytics-cell-kpi">
         <div class="kpi-label">{t("series.cellMin")} · {rangeLabel}</div>
         <div class="kpi-value num">{f.voltage(cellLow)}</div>
@@ -384,6 +434,7 @@
   .inline .input { width: auto; height: 32px; }
   .custom { display: inline-flex; flex-wrap: wrap; gap: var(--s2); align-items: center; }
   .overlays { gap: 6px; }
+  .detail { margin-left: auto; }
   .chip { border: 1px solid var(--m-line-strong); background: transparent; color: var(--m-muted); border-radius: var(--m-radius-pill); padding: 4px 10px; font-size: 12px; cursor: pointer; }
   .chip[aria-pressed="true"] { background: var(--m-selected-bg); color: var(--m-selected-ink); border-color: transparent; }
   .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: var(--s4); }

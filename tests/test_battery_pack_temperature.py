@@ -63,7 +63,7 @@ def _pack_lines(report):
     return [line for line in lines if line.startswith("battery_pack")]
 
 
-def test_influxdb_records_the_pack_temperature_in_the_raw_bucket_only():
+def test_influxdb_records_the_pack_temperature_and_downsamples_it_in_the_battery_task():
     assert _pack_lines(TWO_PACKS) == [
         "battery_pack,device=Shed,pack=1,source=zendure cell_max_v=3.26,cell_min_v=3.25,temp_c=13.0 1",
         "battery_pack,device=Shed,pack=2,source=zendure cell_max_v=3.31,cell_min_v=3.3,temp_c=25.0 1",
@@ -73,6 +73,8 @@ def test_influxdb_records_the_pack_temperature_in_the_raw_bucket_only():
     flux = schema.build_cell_downsample_flux(influx, step) + schema.build_downsample_flux(influx, step)
     assert "temp_c" in PACK_RAW_FIELDS
     assert '"temp_c"' not in flux
+    battery = schema.build_battery_downsample_flux(influx, step)
+    assert '(r._measurement == "battery_pack" and (r._field == "temp_c"))' in battery.split("fn: mean")[0].rsplit("from(bucket:", 1)[1]
 
 
 def test_a_pack_that_reports_only_its_temperature_is_still_recorded():

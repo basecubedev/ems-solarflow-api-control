@@ -153,6 +153,30 @@ class FullChargeAssistCharge:
         self.record.release()
 
 
+def history_decisions(controller):
+    """What the EMS decided for each device this cycle, for the history.
+
+    The winter target and whether the winter hold keeps it from exporting
+    (ems.winter_reserve), and whether its AC role is charging; a device the
+    EMS has decided nothing about yet carries none, and with winter mode
+    switched off no target, as the one it planned last is no longer pursued.
+    """
+
+    winter_devices = getattr(getattr(controller, "winter", None), "devices", None) or {}
+    winter_on = cfg.winter_feature_enabled(getattr(controller, "runtime_state", None))
+    intents = getattr(controller, "runtime_intents", None) or {}
+    decided = {}
+    for dev in getattr(controller, "devices", None) or ():
+        item = winter_devices.get(dev.name)
+        intent = intents.get(dev.name)
+        decided[dev.name] = {
+            "winter_target": item.target if item is not None and winter_on else None,
+            "winter_hold": bool(item.holding) if item is not None else None,
+            "ac_input": intent.role == DeviceRuntimeRole.AC_INPUT if intent is not None else None,
+        }
+    return decided
+
+
 class EMSController:
     """Main EMS control loop."""
 
@@ -5874,6 +5898,7 @@ class EMSController:
                 ac_charging=getattr(
                     getattr(self, "charge_direction", None), "charging", None
                 ),
+                decisions=history_decisions(self),
             )
             writer.enqueue(lines)
         except Exception as e:

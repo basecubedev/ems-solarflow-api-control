@@ -190,6 +190,12 @@ _DEVICE_FIELDS = (
     "remain_minutes",
     "pass_state",
     "reverse_state",
+    "heat_state",
+    "low_temp",
+    "error_flag",
+    "charge_avail_w",
+    "discharge_avail_w",
+    "derate",
 )
 
 
@@ -197,6 +203,7 @@ def _device_field_values(state, unused_inputs=frozenset()):
     """Pull the telemetry field set from a device state, skipping missing ones.
 
     A device without packs has no ``soc``: Analytics averages it across devices.
+    ``input_limit_w`` is written only when the report carries ``inputLimit``.
     A PV input its report did not carry, or one in ``unused_inputs``, has no
     ``solarN``.
     """
@@ -211,6 +218,8 @@ def _device_field_values(state, unused_inputs=frozenset()):
         fields.pop("soc", None)
     if getattr(state, "grid_reverse_reported", False) and _is_number(state.grid_reverse):
         fields["grid_reverse"] = float(state.grid_reverse)
+    if getattr(state, "input_limit_reported", False) and _is_number(getattr(state, "input_limit_w", None)):
+        fields["input_limit_w"] = float(state.input_limit_w)
     for index, kept in enumerate(pv_inputs_kept(state, unused_inputs), start=1):
         if not kept:
             fields.pop(f"solar{index}", None)
@@ -244,6 +253,18 @@ def _is_number(value):
     return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
+def _decision_fields(decided):
+    """The EMS's own decisions for one device as fields: numbers as they are, a yes/no as 1 or 0."""
+
+    fields = {}
+    for name, value in (decided or {}).items():
+        if isinstance(value, bool):
+            fields[name] = float(value)
+        elif _is_number(value):
+            fields[name] = float(value)
+    return fields
+
+
 def build_telemetry_lines(
     devices,
     states,
@@ -257,6 +278,7 @@ def build_telemetry_lines(
     unused_inputs=None,
     surplus_exporting=frozenset(),
     ac_charging=None,
+    decisions=None,
 ):
     """Build InfluxDB line protocol from one control-loop telemetry snapshot.
 
@@ -288,7 +310,10 @@ def build_telemetry_lines(
     (``ems.surplus_export``): each device point says ``surplus_export``, and
     the ``ems_runtime`` point adds ``surplus_export_w``, what those devices
     deliver beyond the limit they were told, and ``ac_charging``, whether the
-    EMS holds the charge direction.
+    EMS holds the charge direction. ``decisions`` maps a device's name to what
+    the EMS decided for it this cycle (``winter_target``, ``winter_hold``,
+    ``ac_input``); a number is written as it is and a yes/no as 1 or 0, so
+    the history can serve it.
     """
     if timestamp_ns is None:
         timestamp_ns = time.time_ns()
@@ -311,6 +336,7 @@ def build_telemetry_lines(
         fields = {"available": True}
         fields.update(_device_field_values(state, unused_of(device.name)))
         fields["surplus_export"] = device.name in surplus_exporting
+        fields.update(_decision_fields((decisions or {}).get(device.name)))
         if _is_number(fields.get("output")):
             inverter_total += fields["output"]
         if _is_number(fields.get("grid_input")):

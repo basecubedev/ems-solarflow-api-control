@@ -61,6 +61,8 @@ from dashboard_preview_data import (  # noqa: E402
     SCENARIOS,
     build_scenario,
     diagnose_report,
+    preview_battery_series,
+    preview_battery_value,
 )
 
 STATIC_DIR = os.path.join(ROOT, "dashboard", "static")
@@ -416,7 +418,10 @@ class PreviewHandler(BaseHTTPRequestHandler):
         # differs so the dashboard can label the data origin.
         items = self._scenario()["history"]
         requested = [s for s in (query.get("series", [""])[0] or "").split(",") if s]
-        keys = [s for s in requested if s in self._SERIES_FIELDS or s.startswith("consumer:")] or [
+        keys = [
+            s for s in requested
+            if s in self._SERIES_FIELDS or s.startswith("consumer:") or preview_battery_series(s)
+        ] or [
             "pv",
             "output",
             "battery",
@@ -430,8 +435,11 @@ class PreviewHandler(BaseHTTPRequestHandler):
             except (ValueError, TypeError):
                 continue
             time_axis.append(epoch)
+            hour = (epoch % 86400) / 3600.0
             for key in keys:
-                if key.startswith("consumer:"):
+                if preview_battery_series(key):
+                    cols[key].append(preview_battery_value(key, hour))
+                elif key.startswith("consumer:"):
                     consumer = (item.get("consumers") or {}).get(unquote(key[len("consumer:"):])) or {}
                     cols[key].append(consumer.get("power_w"))
                 else:

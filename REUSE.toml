@@ -26,15 +26,23 @@ SPDX-FileCopyrightText = "2026 basecubedev"
 SPDX-License-Identifier = "AGPL-3.0-or-later"
 
 [[annotations]]
-path = [
-  "dashboard/static/modern/assets/modern.js",
-  "appliance/static/modern/assets/appliance.js",
-]
+path = "appliance/static/modern/assets/appliance.js"
 precedence = "override"
 SPDX-FileCopyrightText = [
   "2026 basecubedev",
   "2016-2025 Svelte Contributors",
   "Luke Edwards",
+]
+SPDX-License-Identifier = "AGPL-3.0-or-later AND MIT"
+
+[[annotations]]
+path = "dashboard/static/modern/assets/modern.js"
+precedence = "override"
+SPDX-FileCopyrightText = [
+  "2026 basecubedev",
+  "2016-2025 Svelte Contributors",
+  "Luke Edwards",
+  "2019-present VoidZero Inc. and Vite contributors",
 ]
 SPDX-License-Identifier = "AGPL-3.0-or-later AND MIT"
 

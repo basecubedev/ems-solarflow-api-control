@@ -128,9 +128,9 @@ class SyncTest(unittest.TestCase):
         self.assertEqual(
             sorted(t["name"] for t in report["tasks"]),
             [
-                "ems-downsample-1h", "ems-downsample-1h:cells",
-                "ems-downsample-1m", "ems-downsample-1m:cells",
-                "ems-downsample-5m", "ems-downsample-5m:cells",
+                "ems-downsample-1h", "ems-downsample-1h:battery", "ems-downsample-1h:cells",
+                "ems-downsample-1m", "ems-downsample-1m:battery", "ems-downsample-1m:cells",
+                "ems-downsample-5m", "ems-downsample-5m:battery", "ems-downsample-5m:cells",
             ],
         )
         self.assertTrue(all(t["action"] == "created" for t in report["tasks"]))
@@ -560,7 +560,7 @@ class SafeSyncTest(unittest.TestCase):
         report = schema.sync(client, self.config, safe=True)
 
         self.assertEqual(sorted(client.buckets), ["ems_1h", "ems_1m", "ems_5m", "ems_raw"])
-        self.assertEqual(len(client.tasks), 6)
+        self.assertEqual(len(client.tasks), 9)
         self.assertEqual(
             [b["action"] for b in report["buckets"]], ["updated", "created", "created", "created"]
         )
@@ -657,7 +657,7 @@ class SafeSyncTest(unittest.TestCase):
         self.assertEqual((raw["action"], raw["reason"]), ("kept", "refused"))
         self.assertIn("422", raw["error"])
         self.assertEqual(sorted(client.buckets), ["ems_1h", "ems_1m", "ems_5m", "ems_raw"])
-        self.assertEqual(len(client.tasks), 6)
+        self.assertEqual(len(client.tasks), 9)
 
     def test_a_confirmed_retention_that_fails_otherwise_fails_the_sync(self):
         client = self._fresh_install()
@@ -889,7 +889,7 @@ class PruneTest(unittest.TestCase):
 
         self.assertEqual(
             sorted(t["name"] for t in client.tasks.values()),
-            ["ems-downsample-1m", "ems-downsample-1m:cells", "ems-downsample-5m", "ems-downsample-5m:cells"],
+            ["ems-downsample-1m", "ems-downsample-1m:battery", "ems-downsample-1m:cells", "ems-downsample-5m", "ems-downsample-5m:battery", "ems-downsample-5m:cells"],
         )
 
     def test_a_task_the_config_still_wants_survives_being_disabled_by_hand(self):
