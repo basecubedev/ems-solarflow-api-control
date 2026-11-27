@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: 2026 basecubedev
 # SPDX-License-Identifier: AGPL-3.0-or-later
 import json
+import socket
 import threading
 import urllib.error
 import urllib.parse
@@ -2015,3 +2016,93 @@ def test_a_runtime_write_behind_another_processes_lock_is_answered_busy_not_inva
         server.server_close()
 
     assert (status, payload["error"]) == (503, "runtime_state_busy")
+
+
+class _KeptStream(BytesIO):
+    """A request stream that keeps, when the handler closes it, what it wrote and what was left unread."""
+
+    def close(self):
+        if not self.closed:
+            self.kept = self.getvalue()
+            self.left = self.read()
+        super().close()
+
+
+def _serve_one(server, raw):
+    rfile, wfile = _KeptStream(raw), _KeptStream()
+
+    class Handler(DashboardRequestHandler):
+        def setup(self):
+            self.connection = self.request
+            self.rfile = rfile
+            self.wfile = wfile
+
+    near, far = socket.socketpair()
+    try:
+        Handler(near, ("127.0.0.1", 50000), server)
+    finally:
+        near.close()
+        far.close()
+    return wfile.kept, rfile.left
+
+
+def test_a_request_refused_before_its_body_is_read_has_its_body_read_before_the_connection_closes(tmp_path):
+    """Closing with the body unread breaks the pipe of a client still sending
+    it: the console forwarding a refresh over the socket met that instead of
+    the refusal (test_ems_forwarding, on four workers)."""
+
+    server, _base = with_server(StoreStub(), auth_file=str(tmp_path / "dashboard-auth.json"))
+    try:
+        answer, left = _serve_one(
+            server,
+            b"POST /api/auth/refresh HTTP/1.1\r\nHost: ems\r\nContent-Type: application/json\r\n"
+            b"Content-Length: 2\r\n\r\n{}",
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    assert answer.startswith(b"HTTP/1.0 403 ") and b"auth_not_configured" in answer
+    assert left == b""
+
+
+def test_a_body_its_handler_read_is_not_read_a_second_time(tmp_path):
+    auth = tmp_path / "dashboard-auth.json"
+    write_password_file(auth, "pw")
+    server, _base = with_server(StoreStub(), auth_file=str(auth))
+    try:
+        answer, left = _serve_one(
+            server,
+            b"POST /api/auth/login HTTP/1.1\r\nHost: ems\r\nContent-Type: application/json\r\n"
+            b"Content-Length: 17\r\n\r\n{\"password\": \"x\"}NEXT",
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    assert answer.startswith(b"HTTP/1.0 403 ") and b"invalid_password" in answer
+    assert left == b"NEXT"
+
+
+@pytest.mark.parametrize(
+    "length,status",
+    [(str(MAX_JSON_BODY_BYTES + 1), b"413"), ("many", b"400")],
+)
+def test_a_body_over_the_limit_or_of_no_length_is_left_unread_and_the_request_still_answered(tmp_path, length, status):
+    """Nothing past the body limit is read for a request that was refused, and
+    a length that is no number ends the request with its answer, not a trace."""
+
+    body = b"x" * (MAX_JSON_BODY_BYTES + 1)
+    server, _base = with_server(StoreStub(), auth_file=str(tmp_path / "dashboard-auth.json"))
+    try:
+        answer, left = _serve_one(
+            server,
+            b"POST /api/auth/refresh HTTP/1.1\r\nHost: ems\r\nContent-Type: application/json\r\n"
+            + f"Content-Length: {length}\r\n\r\n".encode() + body,
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    assert answer.startswith(b"HTTP/1.0 " + status + b" ")
+    assert left == body
