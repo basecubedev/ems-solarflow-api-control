@@ -704,6 +704,7 @@ def test_restore_does_not_start_if_rollback_fails(tmp_path, monkeypatch):
 
 
 def test_restore_rejects_wrong_password_without_writing(tmp_path, monkeypatch):
+    monkeypatch.setenv("EMS_INSTALL_DIR", str(tmp_path))
     server, base_url = maint_server(tmp_path, monkeypatch)
     try:
         # Create an encrypted config backup directly in the backup dir.

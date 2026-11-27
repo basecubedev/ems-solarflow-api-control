@@ -45,6 +45,25 @@ the check runs after marker deselection, so it judges what will actually run.
 A run that keeps every directory (`-o tmp_path_retention_policy=all`) needs
 20 GB, as every run did before. `EMS_ALLOW_SMALL_SCRATCH=1` overrides it.
 
+## The checkout's own `data/`
+
+`data/` holds what a developer's local EMS and Admin keep: the deployment
+marker, the Guided Setup workflow, the state database. A test that resolved a
+default path there instead of a temporary one overwrote them; the Admin then
+took its own deployment for a foreign one. `tests/checkout_data_guard.py` adds
+a Python audit hook that refuses every write a test's own process makes into
+`data/`, from any of its threads: opening a file to write, creating, linking,
+renaming, removing, changing a file's mode, owner or times, a SQLite
+connection. Removing or renaming a link judges the link, writing through it
+judges its target; a change of owner or times is judged on the name given.
+`tests/conftest.py` then fails the test, even where the code under test caught
+the refusal, and a write after the last test of a process, from a module or
+session fixture's teardown, fails that last test. Not seen: a subprocess the
+test starts, a write at interpreter exit, and a relative name opened through a
+directory descriptor, which is judged against the working directory. Give the
+code a temporary folder instead: `tmp_path`, `EMS_ADMIN_DATA_DIR`,
+`EMS_INSTALL_DIR` or the `isolated_install_root` fixture.
+
 ## Quick local loop
 
 Compile check (run after any change to the entry script, `ems/`, `emsctl.py` or
