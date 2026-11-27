@@ -110,7 +110,7 @@ test("no orphan keys: each key is used literally or belongs to a generated famil
     "nav.", "page.", "rule.", "code.", "decision.", "fw.", "channel.", "energy.state.", "energy.detail.", "chart.range.",
     "series.", "analytics.view.", "analytics.kpi.", "analytics.role.", "diagnose.profile.", "diagnose.status.", "diagnose.global.", "diagnose.metric.",
     "maint.type.", "maint.kind.", "maint.influx.", "schedule.preset.", "schedule.weekday.", "schedule.freq.", "schedule.pos.",
-    "schedule.status.", "schedule.group.", "schedule.action.", "schedule.choice.", "runtime.offgrid.", "runtime.bound.",
+    "schedule.status.", "schedule.group.", "schedule.action.", "schedule.choice.", "runtime.offgrid.", "runtime.role.", "runtime.bound.",
     "runtime.warn.", "setting.", "settingValue.", "control.write.", "control.stage.", "control.deviceStage.", "status.", "transport.",
     "flow.", "assist.", "consumers.order.", "consumers.periodSub.", "error.", "schedule.monthly.", "schedule.ends.", "energy.periodSub.", "energy.context.", "limit.reason.", "note.", "gridTarget.meaning.",
   ];

@@ -14,9 +14,8 @@ access, no secrets, no SQLite history, and no runtime-state files are touched.
 import math
 import time
 
-from ems.device_settings import catalogue as device_settings_catalogue
 from ems.energy_channels import ENERGY_CHANNELS
-from ems.runtime_commands import catalogue_runtime_defaults
+from ems.runtime_commands import catalogue_runtime_defaults, effective_limits
 
 SCENARIOS = (
     "normal",
@@ -507,10 +506,9 @@ def _runtime(devices):
         "ac_charge_control": {"enabled": False},
         "devices": runtime_devices,
         "_limits": {
-            "system": {"max_total_power": 5000, "min_output_limit": 5000, "grid_target_discharge_w": 200, "grid_target_charge_w": 200},
+            **effective_limits(),
             "devices": {name: 800 for name in devices},
             "fallback_device_max_power": 800,
-            "device_settings": device_settings_catalogue(),
             "device_settings_offered": preview_device_settings(devices),
             "catalogue_defaults": catalogue_runtime_defaults(),
         },

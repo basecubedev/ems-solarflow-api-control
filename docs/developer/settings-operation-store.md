@@ -112,7 +112,10 @@ Phase 2, Admin reads and writes operating values where the dashboard does:
   paths) and `OPERATION_DEVICE_KEYS` (the device keys without `enabled` and
   `max_power`), derived from the whitelists, and one accessor that answers
   each operating value as the EMS takes it (runtime first, then the config,
-  then the default).
+  then the default). Its `field_specs()` gives each field's type, range and
+  choices as the writer checks them; they reach the dashboard in the
+  runtime limits (`fields`), whose control page offers no other, and a test
+  holds the Admin catalogue's ranges for the operating fields to them.
 - `admin/maintenance_config.py`: the draft carries the operating values for
   those paths and device keys, and the values it loaded (`operating_base`);
   `_merge_draft` writes them into the config only for a new device and a

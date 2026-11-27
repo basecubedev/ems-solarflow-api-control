@@ -338,12 +338,16 @@ def _fail_closed_external_identifiers(payload, *, trusted_device_names=()):
 
 
 def _without_catalogue_defaults(payload):
-    """``payload`` without ``_limits.catalogue_defaults``, the settings catalogue's defaults."""
+    """``payload`` without the settings metadata in ``_limits``: the catalogue's defaults and the writer's field specs.
+
+    Both key their device part by field name, not by device, so a field name
+    would otherwise be taken for a device name and masked.
+    """
 
     limits = payload.get("_limits") if isinstance(payload, dict) else None
-    if not isinstance(limits, dict) or "catalogue_defaults" not in limits:
+    if not isinstance(limits, dict) or not set(limits) & {"catalogue_defaults", "fields"}:
         return payload
-    kept = {key: value for key, value in limits.items() if key != "catalogue_defaults"}
+    kept = {key: value for key, value in limits.items() if key not in ("catalogue_defaults", "fields")}
     return {**payload, "_limits": kept}
 
 

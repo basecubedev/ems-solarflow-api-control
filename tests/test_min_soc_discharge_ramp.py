@@ -843,14 +843,23 @@ def test_a_runtime_writer_takes_the_minimum_discharge_in_watts_within_its_bounds
 
 
 def test_the_editors_offer_the_runtime_bounds():
+    """The dashboard takes each battery care range from the writer's field specs."""
+
     from pathlib import Path
+
+    from ems.runtime_commands import effective_limits
 
     root = Path(__file__).resolve().parents[1]
     modern = (root / "frontend/dashboard-modern/src/widgets/RuntimeEditor.svelte").read_text(encoding="utf-8")
-    assert modern.count(f"min: 0, max: {BATTERY_CARE_MAX_POINTS}, unit") == 3
-    assert f'"min_discharge_w", type: "number", label: t("runtime.batteryCareMinDischarge"), min: 0, max: {BATTERY_CARE_MAX_WATTS}, unit: "W"' in modern
-    assert f'"pv_margin_percent", type: "number", label: t("runtime.batteryCarePvMargin"), min: 0, max: {BATTERY_CARE_MAX_PERCENT}, unit: "%"' in modern
-    assert f'"pv_margin_min_w", type: "number", label: t("runtime.batteryCarePvMarginMin"), min: 0, max: {BATTERY_CARE_MAX_WATTS}, unit: "W"' in modern
+    specs = effective_limits()["fields"]["sections"]["battery_care"]
+
+    for name in ("summer_full_points", "winter_full_points", "pv_only_points", "min_discharge_w", "pv_margin_percent", "pv_margin_min_w"):
+        assert f'...accepted("battery_care", "{name}")' in modern
+    for name in ("summer_full_points", "winter_full_points", "pv_only_points"):
+        assert specs[name] == {"type": "int", "min": 0, "max": BATTERY_CARE_MAX_POINTS}
+    assert specs["min_discharge_w"] == {"type": "int", "min": 0, "max": BATTERY_CARE_MAX_WATTS}
+    assert specs["pv_margin_percent"] == {"type": "int", "min": 0, "max": BATTERY_CARE_MAX_PERCENT}
+    assert specs["pv_margin_min_w"] == {"type": "int", "min": 0, "max": BATTERY_CARE_MAX_WATTS}
 
 
 def test_a_device_the_allocation_keeps_counts_as_the_allocation_counts_it():

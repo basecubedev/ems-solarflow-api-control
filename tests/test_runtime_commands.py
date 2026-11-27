@@ -319,25 +319,44 @@ def test_a_config_without_a_device_ceiling_takes_the_ems_default(configured):
     assert context["device_max_power"]["WR1"] == default_runtime_config()["system"]["max_device_power"]
 
 
-def test_the_catalogue_says_which_runtime_device_fields_may_be_empty_as_the_writer_does():
-    """A field the writer stores as no entry is nullable in the catalogue, and only such a field."""
+def test_the_admin_form_offers_each_operating_value_the_range_the_writer_accepts():
+    """The Admin saves an operating value through the writer; a wider form range makes the save fail."""
 
-    from ems.config_catalog import RUNTIME_DEVICE_FIELDS
+    from ems.config_catalog import _SECTIONS
 
-    shared = {
-        path.removeprefix("devices[]."): spec
-        for path, spec in RUNTIME_DEVICE_FIELDS.items()
-        if path.removeprefix("devices[].") in runtime_commands.WRITABLE_DEVICE_FIELDS
-    }
-    assert "ac_charge_power_w" in shared
-    for key, spec in shared.items():
-        value_type, rule = runtime_commands.WRITABLE_DEVICE_FIELDS[key]
-        try:
-            runtime_commands._validate_value(key, None, value_type, rule)
-            accepts_none = True
-        except RuntimeWriteError:
-            accepts_none = False
-        assert spec.get("nullable", False) is accepts_none, key
+    fields = {field["path"]: field for section in _SECTIONS for field in section.get("fields", [])}
+    paths = sorted(runtime_commands.OPERATION_SETTING_PATHS) + [
+        f"devices[].{key}" for key in sorted(runtime_commands.OPERATION_DEVICE_KEYS)
+    ]
+    checked = 0
+    for path in paths:
+        scope, key = path.split(".", 1)
+        if scope == "system":
+            value_type, rule = runtime_commands.SYSTEM_FIELDS[key]
+        elif scope == "devices[]":
+            value_type, rule = runtime_commands.WRITABLE_DEVICE_FIELDS[key]
+        else:
+            value_type, rule = runtime_commands.SECTION_FIELDS[scope][key]
+        if value_type in ("int", "float") and path in fields:
+            assert (fields[path].get("min"), fields[path].get("max")) == rule, path
+            checked += 1
+    assert checked >= 10
+
+
+def test_the_writer_accepts_exactly_the_offgrid_modes_the_ems_can_write():
+    from ems.config import OFFGRID_SOCKET_MODES
+
+    assert set(runtime_commands.OFFGRID_SOCKET_MODES) == set(OFFGRID_SOCKET_MODES)
+    assert runtime_commands.field_specs()["devices"]["offgrid_socket_mode"]["options"] == ["off", "eco", "standard"]
+
+
+def test_the_limits_carry_each_runtime_field_as_the_writer_checks_it():
+    fields = runtime_commands.effective_limits()["fields"]
+
+    assert fields["system"]["loop_interval"] == {"type": "int", "min": 1, "max": 3600}
+    assert fields["devices"]["pv_priority_factor"] == {"type": "float", "min": 0.01, "max": 100.0}
+    assert fields["devices"]["runtime_role"]["options"] == ["ac_output", "ac_input"]
+    assert set(fields["sections"]) == set(runtime_commands.SECTION_FIELDS)
 
 
 def test_catalogue_runtime_defaults_leave_out_installation_values():
