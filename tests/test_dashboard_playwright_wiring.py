@@ -103,7 +103,8 @@ def test_the_cockpit_specs_carry_the_tags_the_runner_selects_on():
 def test_every_project_the_job_runs_is_a_browser_it_installed():
     """WebKit in the projects list and not in the install step is several
     hundred "Executable doesn't exist" failures, which is how this was learned
-    locally rather than in CI."""
+    locally rather than in CI. A job that runs once per browser of its matrix
+    is checked once per browser, and between them they run every project."""
 
     config = (ROOT / CONFIG).read_text(encoding="utf-8")
     projects = set(re.findall(r'name:\s*"([a-z]+)"', config))
@@ -116,16 +117,24 @@ def test_every_project_the_job_runs_is_a_browser_it_installed():
             runs = " ".join(str(step.get("run", "")) for step in steps)
             if CONFIG not in runs:
                 continue
-            installed = [
+            installs = [
                 str((step.get("with") or {}).get("browsers", ""))
                 for step in steps
                 if step.get("uses") == "./.github/actions/playwright-browsers"
             ]
-            assert installed, f"{path.name}:{name} installs no browser"
-            assert projects <= set(" ".join(installed).split()), (
-                f"{path.name}:{name} runs {sorted(projects)} "
-                f"but installs {' '.join(installed).split()}"
-            )
+            assert installs, f"{path.name}:{name} installs no browser"
+            ran = set()
+            for browser in (job.get("strategy") or {}).get("matrix", {}).get("browser") or [None]:
+                run = runs.replace("${{ matrix.browser }}", str(browser))
+                installed = set(" ".join(installs).replace("${{ matrix.browser }}", str(browser)).split())
+                assert "${{" not in run + " ".join(installed), f"{path.name}:{name} names a matrix value this test cannot resolve"
+                selected = set(re.findall(r"--project=([a-z]+)", run)) or projects
+                assert selected <= projects, f"{path.name}:{name} runs {sorted(selected - projects)}, which the config does not declare"
+                assert selected <= installed, (
+                    f"{path.name}:{name} runs {sorted(selected)} but installs {sorted(installed)}"
+                )
+                ran |= selected
+            assert ran == projects, f"{path.name}:{name} never runs {sorted(projects - ran)}"
             checked += 1
     assert checked, f"no job actually runs {CONFIG}"
 

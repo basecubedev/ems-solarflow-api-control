@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: 2026 basecubedev
 # SPDX-License-Identifier: AGPL-3.0-or-later
 pytest
+pytest-xdist==3.8.0
 ruff==0.17.6
 PyYAML>=6.0.4
 reuse==6.3.0

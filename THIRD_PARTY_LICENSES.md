@@ -139,6 +139,7 @@ documentation website only in [`requirements-docs.txt`](requirements-docs.txt).
 | Component | Version | License (SPDX) | Used for | Runtime | Distributed | Upstream |
 |---|---|---|---|:---:|:---:|---|
 | `pytest` | unpinned (verified 9.1.0) | MIT | Test framework for the whole Python suite | ❌ | ❌ | https://github.com/pytest-dev/pytest |
+| `pytest-xdist` | `==3.8.0` | MIT | Runs the pull-request test groups on every CPU of the runner (`-n`) | ❌ | ❌ | https://github.com/pytest-dev/pytest-xdist |
 | `ruff` | `==0.17.6` | MIT | Lint and static checks (`ruff check .`) | ❌ | ❌ | https://github.com/astral-sh/ruff |
 | `PyYAML` | `>=6.0.4` | MIT | Parsing CI workflow and compose YAML inside contract tests | ❌ | ❌ | https://github.com/yaml/pyyaml |
 | `reuse` | `==6.3.0` | GPL-3.0-or-later AND Apache-2.0 AND CC0-1.0 AND CC-BY-SA-4.0 | Checks that every file names its copyright holder and license (`reuse lint`, [REUSE](https://reuse.software/)) | ❌ | ❌ | https://github.com/fsfe/reuse-tool |

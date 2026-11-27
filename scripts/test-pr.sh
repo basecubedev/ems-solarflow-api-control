@@ -20,25 +20,30 @@ cd "$(dirname "$0")/.."
 group="${1:-}"
 [ $# -gt 0 ] && shift
 
+# The Python groups run on every CPU of a CI runner (four); each test file
+# stays in one worker, so a module's fixtures and its files are never shared
+# between processes. EMS_PYTEST_WORKERS=0 runs them in one process.
+workers=(-n "${EMS_PYTEST_WORKERS:-4}" --dist loadfile)
+
 case "$group" in
     core)
-        run_pytest_tier "pr/core" -q \
+        run_pytest_tier "pr/core" -q "${workers[@]}" \
             -m "not appliance and not admin and not mqtt and not power_control and not docker" "$@"
         ;;
     appliance)
-        run_pytest_tier "pr/appliance" -q \
+        run_pytest_tier "pr/appliance" -q "${workers[@]}" \
             -m "appliance and not admin and not mqtt and not power_control and not docker" "$@"
         ;;
     admin)
-        run_pytest_tier "pr/admin" -q \
+        run_pytest_tier "pr/admin" -q "${workers[@]}" \
             -m "admin and not mqtt and not power_control and not docker" "$@"
         ;;
     mqtt)
-        run_pytest_tier "pr/mqtt" -q \
+        run_pytest_tier "pr/mqtt" -q "${workers[@]}" \
             -m "mqtt and not power_control and not docker" "$@"
         ;;
     power-control)
-        run_pytest_tier "pr/power-control" -q -m "power_control and not docker" "$@"
+        run_pytest_tier "pr/power-control" -q "${workers[@]}" -m "power_control and not docker" "$@"
         ;;
     docker)
         require_docker

@@ -186,6 +186,30 @@ test has exactly one owner. To run a *functional area* rather than a CI group,
 use the plain marker (`pytest -m "admin and authority"`) — that selection is
 intentionally overlapping.
 
+The five Python groups run on four workers (`pytest-xdist`, `-n 4 --dist
+loadfile`), the four CPUs of a CI runner. Each test file stays in one worker,
+so a module's fixtures are set up once and never shared between processes; a
+file a test writes outside its `tmp_path` is shared, so two test files must not
+write the same one. `EMS_PYTEST_WORKERS=0` runs a group in one process,
+`EMS_PYTEST_WORKERS=2` on two. The full suite that runs after a merge stays one
+process on purpose: it is there to find the tests that only fail beside another
+one.
+
+In CI the Docker group runs as four shards, `--shard K/N` (`tests/shards.py`),
+each on a runner with a Docker daemon of its own. A shard takes whole test
+files, so a module's built image or booted guest is set up once, and the files
+are dealt out longest first by the seconds in `tests/shard_weights.json`. A
+file the weights do not list counts as their median. When the shards drift
+apart, take the times from a CI run, never from a workstation: there a file
+that boots an appliance guest took two to three times as long as on a runner,
+while a file that builds a Docker image took about the same, and weights
+measured that way left one shard nearly twice as long as another. Each shard
+job prints every test phase of 5 ms or more (`--durations=0`); a file's weight
+is the sum of its phases. What the job's pytest total adds beyond those sums,
+about 30 s of collection on a cold checkout, is the same for every shard and
+belongs to no file. `tests/test_test_sharding.py` checks that every file the
+weights name exists and that the job runs every shard it names.
+
 ### On the merge
 
 There is no nightly schedule. `.github/workflows/simulated-regression-tests.yml`
