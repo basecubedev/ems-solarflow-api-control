@@ -6,6 +6,7 @@
   import Icon from "../../../shared/ui/Icon.svelte";
   import { withGapBreaks, stackLists, gapRanges, sampleSpacing, shownValue, batteryReading, axisPower, tickLabels, tickPad, tickSpace, atLeastAMinute, ZOOM_STEP, PAN_STEP, escapeLeavesZoom, zoomCenter, zoomDiffers, zoomStep, panStep, pinchWindow, wheelGesture, wheelZoomFactor } from "../lib/history.js";
   import { voltRange } from "../lib/cells.js";
+  import { celsiusRange, celsiusTick } from "../lib/battery.js";
 
   /**
    * One uPlot instance per chart, kept across data refreshes (setData) and
@@ -28,7 +29,8 @@
    * ``stacked`` draws each series on top of the ones before it, as parts of
    * one whole; the legend and the table keep each series' own value.
    * ``unit`` "V" reads the left axis in volts, close around the data, for
-   * cell voltages; every other chart reads it in watts from zero. ``busy``
+   * cell voltages; "°C" in degrees, always showing 0 °C, for temperatures;
+   * every other chart reads it in watts from zero. ``busy``
    * lays a Loading pill over the plot, or over its empty frame, while a page
    * reads new data for it, taking no room, so nothing around the chart moves.
    */
@@ -120,6 +122,7 @@
     if (value === null || value === undefined) return "—";
     if (s?.unit === "%") return f.percent(value);
     if (unit === "V") return f.voltage(value);
+    if (unit === "°C" && s?.unit !== "%") return f.temperature(value);
     if (s?.id === "battery" && Number.isFinite(Number(value))) {
       const reading = batteryReading(value);
       return reading.key ? t(reading.key, { v: f.power(reading.watts) }) : f.power(0);
@@ -385,7 +388,7 @@
             time: true,
             range: (u, min, max) => (zoomWindow ? atLeastAMinute(zoomWindow.min, zoomWindow.max) : xRange ? [xRange[0], xRange[1]] : atLeastAMinute(min, max)),
           },
-          y: { range: (u, min, max) => (unit === "V" ? voltRange(min, max) : [Math.min(0, Math.floor((min || 0) / 500) * 500), Math.max(500, Math.ceil((max || 0) / 500) * 500)]) },
+          y: { range: (u, min, max) => (unit === "V" ? voltRange(min, max) : unit === "°C" ? celsiusRange(min, max) : [Math.min(0, Math.floor((min || 0) / 500) * 500), Math.max(500, Math.ceil((max || 0) / 500) * 500)]) },
           ...(percent ? { pct: { range: [0, 100] } } : {}),
         },
         axes: [
@@ -395,7 +398,7 @@
             space: (u, axis, min, max) => tickSpace(min, max),
             values: (u, splits, axis, space, step) => tickLabels(splits, step, f),
           },
-          { ...axis, size: 66, values: (u, splits) => splits.map((value) => (unit === "V" ? f.voltage(value) : axisPower(value, f))) },
+          { ...axis, size: 66, values: (u, splits) => splits.map((value) => (unit === "V" ? f.voltage(value) : unit === "°C" ? celsiusTick(value, f) : axisPower(value, f))) },
           ...(percent
             ? [{ ...axis, scale: "pct", side: 1, size: PERCENT_AXIS_PX, stroke: token(percent.ink || "--m-muted"), grid: { show: false }, values: (u, splits) => splits.map((value) => f.percent(value)) }]
             : []),

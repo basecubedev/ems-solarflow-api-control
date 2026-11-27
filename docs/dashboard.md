@@ -940,6 +940,16 @@ energy KPI cards (no extra chart pages):
   Home use, AC charging.
 - **Battery** — Battery; KPIs Battery charged, Battery discharged.
 - **Solar** — Solar and Output; KPIs Solar, Solar peak, Output.
+- **Batteries** — one device's batteries, one measure at a time: every pack's
+  `pack_temp:<n>` (KPIs Coldest pack, Warmest pack), one pack's
+  `cell_min:<n>`/`cell_max:<n>` (KPIs Lowest cell, Highest cell), or, in
+  Expert, `charge_avail`, `discharge_avail` and `input_limit`. Its overlays are
+  `soc`, and in Expert `min_soc`, `winter_target` and, on the temperature,
+  `device_temp`. The same request carries the state lanes of the folded
+  **States** card: `heat_state` and `low_temp`, in Expert also `ac_input`,
+  `winter_hold`, `derate` and `error_flag`. Basic or Expert is kept in
+  `localStorage` (`ems-modern.analyticsDetail`). See
+  [Batteries](user/dashboard/energy.md#batteries).
 
 Every view adds **Current state of charge** and **Runtime role**.
 

@@ -615,6 +615,57 @@ def _history(snapshot, points=96, now=None):
     return items
 
 
+_PREVIEW_BATTERY_STATES = ("heat_state", "low_temp", "ac_input", "winter_hold", "derate", "error_flag")
+_PREVIEW_BATTERY_VALUES = ("device_temp", "min_soc", "winter_target", "charge_avail", "discharge_avail", "input_limit")
+_PREVIEW_PACK_SERIES = ("pack_temp", "cell_min", "cell_max")
+
+
+def preview_battery_series(series):
+    """Whether the preview answers ``series`` as one of the Analytics batteries view's."""
+
+    kind, _, pack = str(series).partition(":")
+    if kind in _PREVIEW_PACK_SERIES:
+        return pack.isdigit() and 1 <= int(pack) <= 16
+    return not pack and series in _PREVIEW_BATTERY_STATES + _PREVIEW_BATTERY_VALUES
+
+
+def preview_battery_value(series, hour):
+    """A cold winter day for the Analytics batteries view, by the hour of the day in UTC.
+
+    The packs fall below 0 °C before midnight and warm up after dawn; while
+    they are too cold the battery accepts no charge and the device derates,
+    and it heats from 05:00 until they are warm again, when the morning's
+    charge request comes. Winter mode holds the midday solar power for the
+    battery. Each further pack runs 0.7 °C warmer and its cells 10 mV lower.
+    Deterministic, like the rest of the preview's history.
+    """
+
+    kind, _, pack = series.partition(":")
+    offset = int(pack) - 1 if pack else 0
+    temp = round(2.5 + 4.0 * math.sin(2 * math.pi * (hour - 9.0) / 24.0), 1)
+    cold = temp < 0.0
+    if kind == "pack_temp":
+        return round(temp + 0.7 * offset, 1)
+    if kind in ("cell_min", "cell_max"):
+        low = 3.22 + 0.06 * math.sin(2 * math.pi * (hour - 13.0) / 24.0) - 0.01 * offset
+        return round(low + (0.02 if kind == "cell_max" else 0.0), 3)
+    values = {
+        "heat_state": int(cold and 5.0 <= hour < 12.0),
+        "low_temp": int(cold),
+        "ac_input": 0,
+        "winter_hold": int(9.0 <= hour < 14.0),
+        "derate": int(cold),
+        "error_flag": 0,
+        "device_temp": round(temp + 9.0, 1),
+        "min_soc": 15,
+        "winter_target": 25,
+        "charge_avail": 0 if cold else 1200,
+        "discharge_avail": 1200,
+        "input_limit": 0,
+    }
+    return values[kind]
+
+
 # Four metered consumers, by history key: the flow names the two drawing most.
 _PREVIEW_CONSUMERS = {
     "washer": ("Washing machine", 420.0),

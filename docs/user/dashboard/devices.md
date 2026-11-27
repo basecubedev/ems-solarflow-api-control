@@ -130,7 +130,7 @@ When a device reports its cell voltages, **Cell voltage, last 24 h** follows:
 the lowest cell in green and the highest in grey, for one device and one pack
 at a time, on a volt scale that follows the values. Over **7 d** it shows
 every few minutes, so a short dip can fall between two points; the
-**Cell voltage** view on Analytics, which needs InfluxDB, keeps it. The device choice lists the
+**Cell voltage** of the [Batteries](energy.md#batteries) view on Analytics, which needs InfluxDB, keeps it. The device choice lists the
 devices that report cell voltages, **Pack 1**, **Pack 2**, … choose the pack on
 a device with several, and the range buttons and **Table** work as on the power
 chart. The cell voltage says where a battery stands more directly than its

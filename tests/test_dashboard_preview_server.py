@@ -162,6 +162,31 @@ def test_a_pinned_clock_gives_every_answer_the_same_instant(preview_server):
     assert _get_json(base, "/api/logs?after=0")["lines"][-1]["ts"] == pinned
 
 
+def test_the_preview_answers_the_batteries_view_with_a_cold_night(preview_server):
+    _, base = preview_server(fixed_now=datetime.fromisoformat("2026-10-21T18:30:00+02:00").timestamp())
+    body = _get_json(base, "/api/analytics/series?range=24h&series=pack_temp:1,pack_temp:2,heat_state,low_temp,cell_min:1,charge_avail&devices=WR2")
+
+    series = body["series"]
+    assert set(series) == {"pack_temp:1", "pack_temp:2", "heat_state", "low_temp", "cell_min:1", "charge_avail"}
+    assert min(series["pack_temp:1"]) < 0 < max(series["pack_temp:1"])
+    assert all(second > first for first, second in zip(series["pack_temp:1"], series["pack_temp:2"]))
+    cold = [temp < 0 for temp in series["pack_temp:1"]]
+    assert series["low_temp"] == [int(flag) for flag in cold]
+    assert 0 < sum(series["heat_state"]) < sum(series["low_temp"])
+    assert all(not heat or low for heat, low in zip(series["heat_state"], series["low_temp"]))
+    heated = [index for index, heat in enumerate(series["heat_state"]) if heat]
+    assert heated == list(range(heated[0], heated[-1] + 1))
+    assert all((watts == 0) == bool(low) for watts, low in zip(series["charge_avail"], series["low_temp"]))
+    assert all(3.0 < volts < 3.4 for volts in series["cell_min:1"])
+
+
+def test_the_preview_still_falls_back_for_a_series_it_does_not_know(preview_server):
+    _, base = preview_server()
+    body = _get_json(base, "/api/analytics/series?range=24h&series=pack_temp:0,pack_temp:17,heat_state:1")
+
+    assert set(body["series"]) == {"pv", "output", "battery"}
+
+
 @pytest.mark.parametrize("scenario", SCENARIOS)
 def test_a_preview_device_s_firmware_labels_agree_with_its_power(scenario):
     for name, device in build_scenario(scenario)["snapshot"]["devices"].items():

@@ -41,6 +41,21 @@ export function setEnergyDetail(value) {
   writeStored(ENERGY_DETAIL_KEY, value);
 }
 
+const ANALYTICS_DETAIL_KEY = "ems-modern.analyticsDetail";
+
+class AnalyticsDetailPref {
+  detail = $state(readStored(ANALYTICS_DETAIL_KEY, ENERGY_DETAILS, "basic"));
+}
+
+/** Basic or Expert in the Analytics batteries view, apart from the energy pages' choice. */
+export const analyticsDetail = new AnalyticsDetailPref();
+
+export function setAnalyticsDetail(value) {
+  if (!ENERGY_DETAILS.includes(value)) return;
+  analyticsDetail.detail = value;
+  writeStored(ANALYTICS_DETAIL_KEY, value);
+}
+
 export { CONSUMER_ORDERS };
 const CONSUMER_ORDER_KEY = "ems-modern.consumer-order";
 

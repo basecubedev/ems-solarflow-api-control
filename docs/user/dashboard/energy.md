@@ -185,21 +185,16 @@ gives you the accumulated one.
 **What you see:** two rows of controls, the chart, and the KPI cards.
 
 1. **View** — **Overview**, **Devices**, **Grid**, **Battery**, **Solar**,
-   **Consumers** or **Cell voltage**. Each keeps the one chart and changes its
+   **Consumers** or **Batteries**. Each keeps the one chart and changes its
    series and the KPI cards. **Device** chooses one inverter instead of **All
    devices**. **Consumers** stacks the five [consumers](consumers.md) that drew
    most on the rest of the house, with one KPI card for each and one for the
-   rest, and has no device choice and no overlays. **Cell voltage** draws the
-   lowest and the highest cell of one pack of one device on a volt scale, with
-   **Lowest cell** and **Highest cell** of the period as KPI cards; its device
-   choice lists every device with a battery the EMS controls, also one that is
-   offline now, without *All devices*, and **Pack 1**, **Pack 2**, … choose the pack on a
-   device with several. A dip of the lowest cell still shows in a long range,
-   because each point keeps the lowest and the highest value of its interval.
+   rest, and has no device choice and no overlays. **Batteries** shows the
+   batteries of one device, see [Batteries](#batteries) below.
 2. **Overlays** — **EMS target**, **Grid**, **AC charging** and **State of
    charge** add a series on top of the view, drawn as a dashed line; the state
-   of charge gets its own percent scale on the right. **Cell voltage** offers
-   **State of charge** only, so the device's estimate reads beside its cells.
+   of charge gets its own percent scale on the right. **Batteries** has
+   overlays of its own.
 3. **Range** — **1 h**, **6 h**, **24 h**, **7 d**, **30 d** or **365 d**, or a
    custom range with **From**, **To** and **Apply**.
 4. The chart names its source, *From InfluxDB*, and **Table** lists the values.
@@ -212,6 +207,57 @@ gives you the accumulated one.
 5. The KPI cards integrate the energy in the loaded window and name it, for
    example **Solar · 24 h**. **Current state of charge** and **Runtime role**
    come from the live values.
+
+### Batteries
+
+![Analytics, Batteries view: WR1's two packs' temperature over a cold night on a scale through 0 °C, the measure Temperature or Cell voltage, Basic or Expert, the state of charge overlay, the coldest and the warmest pack as KPI cards, and the States card opened with the lanes Heating and Too cold](../../assets/screenshots/dashboard/dashboard-analytics-batteries.png)
+
+**Batteries** shows the batteries of one device at a time: its device choice
+lists every device with a battery the EMS controls, also one that is offline
+now, without *All devices*. It answers what a battery did in the cold: how warm
+its packs were, whether it heated, whether it was too cold to charge, and what
+the EMS decided for it.
+
+- **Measure** — one quantity at a time, each on its own scale:
+  - **Temperature** draws every pack of the device, **Pack 1**, **Pack 2**, …,
+    in °C, each pack's warmest reading as the device reports it. The scale
+    always shows 0 °C, the line a battery has to be above before it charges.
+    **Coldest pack** and **Warmest pack** of the period are the KPI cards.
+  - **Cell voltage** draws the lowest and the highest cell of one pack on a
+    volt scale, with **Lowest cell** and **Highest cell** of the period as KPI
+    cards; **Pack 1**, **Pack 2**, … choose the pack on a device with several.
+    A dip of the lowest cell still shows in a long range, because each point
+    keeps the lowest and the highest value of its interval.
+  - **Limits**, in Expert, draws in watts what the battery accepts now,
+    **Charge accepted** and **Discharge accepted**, as its battery management
+    reports them, and the **AC charge limit** the device is set to.
+- **Basic** and **Expert** — Basic shows what a battery in the cold needs;
+  Expert adds **Limits**, the winter overlays and the states the EMS keeps.
+  This browser remembers the choice.
+- **Overlays** — **State of charge**; Expert adds **Minimum SoC** and **Winter
+  target**, the minimum state of charge [winter mode](../../winter-mode.md)
+  plans while it is on, both on the percent scale on the right, and on **Temperature** the
+  **Inverter**, the device's own temperature, as a dotted line.
+- **States** — folded under the chart, so it stays out of the way until it is
+  wanted. Folded, it names the states that were on and for how long, for
+  example *Heating 40 min · Too cold 6.5 h*. Opened, each state is a lane on
+  the chart's time axis with a bar where it was on and how long that was in
+  total:
+  - **Heating** — the device reports its battery heating on.
+  - **Too cold** — the device reports a pack too cold.
+  - In Expert also **AC charging role** — the device was in its AC charging
+    role, charging from the grid as the EMS commanded or as the firmware
+    started it; **Export hold** — winter mode kept the device's solar power
+    for the battery instead of exporting it; **Derating** — the device
+    reports reduced power; **Error flag** — the device reports an error.
+
+  A state the device never reported in the period reads *not reported*, so it
+  is not mistaken for off. Each point keeps whether the state was on at any
+  time of its interval, so a short heating still shows in a 30-day range;
+  where the points lie further apart than a minute, the time reads *up to*,
+  as a whole interval counts for it. The
+  states and the temperatures are recorded from this version on; see [A
+  battery in the cold](../../technical/influxdb.md#a-battery-in-the-cold).
 
 **What it changes:** nothing.
 

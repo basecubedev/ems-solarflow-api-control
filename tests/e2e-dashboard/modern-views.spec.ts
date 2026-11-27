@@ -498,7 +498,13 @@ function withCells(body) {
   ];
 }
 
-/** Each requested cell series reads a voltage of its own: pack n's lowest cell 3.n0 V, its highest 3.n5 V, WR2's a volt above. */
+/** The states over the two points: heating for the second, too cold for both, the EMS's states off, the error flag never reported. */
+const LANE_POINTS = { heat_state: [0, 1], low_temp: [1, 1], ac_input: [0, 0], winter_hold: [0, 0], derate: [0, 0], error_flag: [null, null] };
+
+/**
+ * Each requested cell series reads a voltage of its own: pack n's lowest cell 3.n0 V, its highest 3.n5 V, WR2's a volt above.
+ * Pack n's temperature reads 2 + n °C, WR2's ten degrees above.
+ */
 async function cellSeries(page, path) {
   await page.route(`**${path}**`, (route) => {
     const params = new URL(route.request().url()).searchParams;
@@ -507,15 +513,19 @@ async function cellSeries(page, path) {
     const now = Math.floor(Date.now() / 1000);
     const value = (id) => {
       const match = /^cell_(min|max):(\d+)$/.exec(id);
+      const temp = /^pack_temp:(\d+)$/.exec(id);
+      if (temp) return offset * 10 + 2 + Number(temp[1]);
       if (!match) return 50;
       return offset + 3 + Number(match[2]) / 10 + (match[1] === "max" ? 0.05 : 0);
     };
-    const series = Object.fromEntries(ids.map((id) => [id, [value(id), value(id)]]));
+    const points = (id) => (id in LANE_POINTS ? LANE_POINTS[id] : [value(id), value(id)]);
+    const series = Object.fromEntries(ids.map((id) => [id, points(id)]));
     return route.fulfill({ json: { available: true, source: "sqlite", time: [now - 120, now - 60], series, meta: {} } });
   });
 }
 
 const cellsRead = (path, check = () => true) => seriesRead(path, (params) => /cell_/.test(params.get("series") || "") && check(params));
+const batteryRead = (check = () => true) => seriesRead("/api/analytics/series", (params) => /pack_temp:|charge_avail/.test(params.get("series") || "") && check(params));
 
 test.describe("Modern dashboard views: cell voltage @smoke", () => {
   test("a device card names its cells' voltage, and each pack's when it has several", async ({ page }) => {
@@ -605,32 +615,53 @@ test.describe("Modern dashboard views: cell voltage @smoke", () => {
     await expect(chart.locator(".legend-item")).toHaveText(["Lowest cell4.20 V", "Highest cell4.25 V"]);
   });
 
-  test("the analytics cell view reads one device's pack on a volt axis, with the state of charge as its only overlay", async ({ page }) => {
+  test("the analytics batteries view draws every pack's temperature, then one pack's cells on a volt axis, with the state of charge as an overlay", async ({ page }) => {
     await shapeLive(page, withCells);
     await cellSeries(page, "/api/analytics/series");
     await openModern(page, "#/analytics");
     await expect(page.locator(".chart .u-over")).toBeVisible();
-    const views = page.getByTestId("analytics-view-block").locator(".seg");
+    const views = page.getByTestId("analytics-view-block").locator(".seg").first();
     const [asked] = await Promise.all([
-      page.waitForRequest(cellsRead("/api/analytics/series")),
-      views.getByRole("button", { name: "Cell voltage", exact: true }).click(),
+      page.waitForRequest(batteryRead()),
+      views.getByRole("button", { name: "Batteries", exact: true }).click(),
     ]);
-    expect(new URL(asked.url()).searchParams.get("series")).toBe("cell_min:1,cell_max:1");
+    expect(new URL(asked.url()).searchParams.get("series")).toBe("pack_temp:1,heat_state,low_temp");
     expect(new URL(asked.url()).searchParams.get("devices")).toBe("WR1");
-    const chart = page.getByRole("region", { name: "Cell voltage", exact: true });
+    const chart = page.getByRole("region", { name: "Batteries", exact: true });
+    await expect(chart.locator(".legend-item")).toHaveText(["Pack 13.0 °C"]);
+    const temps = page.getByTestId("analytics-temp-kpi");
+    await expect(temps.locator(".kpi-label")).toHaveText(["Coldest pack · 24 h", "Warmest pack · 24 h"]);
+    await expect(temps.locator(".kpi-value")).toHaveText(["3.0 °C", "3.0 °C"]);
+    const measures = page.getByRole("group", { name: "Measure" });
+    await expect(measures.getByRole("button")).toHaveText(["Temperature", "Cell voltage"]);
+    const [both] = await Promise.all([
+      page.waitForRequest(batteryRead((params) => params.get("devices") === "WR2")),
+      page.getByRole("combobox", { name: "Device" }).selectOption("WR2"),
+    ]);
+    expect(new URL(both.url()).searchParams.get("series")).toBe("pack_temp:1,pack_temp:2,heat_state,low_temp");
+    await expect(page.getByRole("group", { name: "Pack" })).toHaveCount(0);
+    await expect(temps.locator(".kpi-value")).toHaveText(["13.0 °C", "14.0 °C"]);
+    await page.getByRole("combobox", { name: "Device" }).selectOption("WR1");
+
+    const [cells] = await Promise.all([
+      page.waitForRequest(cellsRead("/api/analytics/series")),
+      measures.getByRole("button", { name: "Cell voltage", exact: true }).click(),
+    ]);
+    expect(new URL(cells.url()).searchParams.get("series")).toBe("cell_min:1,cell_max:1,heat_state,low_temp");
     await expect(chart.locator(".legend-item")).toHaveText(["Lowest cell3.10 V", "Highest cell3.15 V"]);
+    await expect(page.getByTestId("analytics-temp-kpi")).toHaveCount(0);
     await expect(page.getByTestId("analytics-cell-kpi").locator(".kpi-label")).toHaveText(["Lowest cell · 24 h", "Highest cell · 24 h"]);
     await expect(page.getByTestId("analytics-cell-kpi").locator(".kpi-value")).toHaveText(["3.10 V", "3.15 V"]);
     await expect(page.getByRole("combobox", { name: "Device" }).locator("option")).toHaveText(["WR1", "WR2"]);
     const overlays = page.getByRole("group", { name: "Overlays" });
     await expect(overlays.getByRole("button")).toHaveText(["State of charge"]);
     const [withSoc] = await Promise.all([
-      page.waitForRequest(cellsRead("/api/analytics/series", (params) => params.get("series") === "cell_min:1,cell_max:1,soc")),
+      page.waitForRequest(cellsRead("/api/analytics/series", (params) => params.get("series") === "cell_min:1,cell_max:1,soc,heat_state,low_temp")),
       overlays.getByRole("button", { name: "State of charge" }).click(),
     ]);
     expect(new URL(withSoc.url()).searchParams.get("devices")).toBe("WR1");
     const [packTwo] = await Promise.all([
-      page.waitForRequest(cellsRead("/api/analytics/series", (params) => params.get("series") === "cell_min:2,cell_max:2,soc")),
+      page.waitForRequest(cellsRead("/api/analytics/series", (params) => params.get("series") === "cell_min:2,cell_max:2,soc,heat_state,low_temp")),
       (async () => {
         await page.getByRole("combobox", { name: "Device" }).selectOption("WR2");
         await page.getByRole("group", { name: "Pack" }).getByRole("button", { name: "Pack 2", exact: true }).click();
@@ -638,6 +669,56 @@ test.describe("Modern dashboard views: cell voltage @smoke", () => {
     ]);
     expect(new URL(packTwo.url()).searchParams.get("devices")).toBe("WR2");
     await expect(page.getByTestId("analytics-cell-kpi").locator(".kpi-value")).toHaveText(["4.20 V", "4.25 V"]);
+  });
+
+  test("the batteries view's states stay folded with a summary; Expert adds the limits, the winter overlays and what the EMS decided", async ({ page }) => {
+    await shapeLive(page, withCells);
+    await cellSeries(page, "/api/analytics/series");
+    await openModern(page, "#/analytics");
+    await expect(page.locator(".chart .u-over")).toBeVisible();
+    await Promise.all([
+      page.waitForRequest(batteryRead()),
+      page.getByTestId("analytics-view-block").locator(".seg").first().getByRole("button", { name: "Batteries", exact: true }).click(),
+    ]);
+    const states = page.getByTestId("battery-states");
+    const fold = states.getByRole("button", { name: "States" });
+    await expect(fold).toHaveAttribute("aria-expanded", "false");
+    await expect(states.locator(".card-summary")).toHaveText("Heating 1 min · Too cold 2 min");
+    await expect(states.getByTestId("state-lanes")).toBeHidden();
+    await fold.click();
+    const lanes = states.getByTestId("state-lanes").locator("[data-lane]");
+    await expect(lanes).toHaveText([/^Heating.*1 min on$/, /^Too cold.*2 min on$/]);
+
+    const detail = page.getByRole("group", { name: "Detail" });
+    const [expert] = await Promise.all([
+      page.waitForRequest(batteryRead((params) => (params.get("series") || "").includes("error_flag"))),
+      detail.getByRole("button", { name: "Expert", exact: true }).click(),
+    ]);
+    expect(new URL(expert.url()).searchParams.get("series")).toBe("pack_temp:1,heat_state,low_temp,ac_input,winter_hold,derate,error_flag");
+    await expect(lanes).toHaveText([/1 min on$/, /2 min on$/, /^AC charging role.*never on$/, /^Export hold.*never on$/, /^Derating.*never on$/, /^Error flag.*not reported$/]);
+    await expect(page.getByRole("group", { name: "Overlays" }).getByRole("button")).toHaveText(["State of charge", "Minimum SoC", "Winter target", "Inverter"]);
+    const measures = page.getByRole("group", { name: "Measure" });
+    await expect(measures.getByRole("button")).toHaveText(["Temperature", "Cell voltage", "Limits"]);
+    const [limits] = await Promise.all([
+      page.waitForRequest(batteryRead((params) => (params.get("series") || "").startsWith("charge_avail"))),
+      measures.getByRole("button", { name: "Limits", exact: true }).click(),
+    ]);
+    expect(new URL(limits.url()).searchParams.get("series")).toBe("charge_avail,discharge_avail,input_limit,heat_state,low_temp,ac_input,winter_hold,derate,error_flag");
+    await expect(page.getByRole("region", { name: "Batteries", exact: true }).locator(".legend-item")).toHaveText(["Charge accepted50 W", "Discharge accepted50 W", "AC charge limit50 W"]);
+    await expect(page.getByRole("group", { name: "Overlays" }).getByRole("button")).toHaveText(["State of charge", "Minimum SoC", "Winter target"]);
+
+    await page.reload();
+    await page.getByTestId("analytics-view-block").locator(".seg").first().getByRole("button", { name: "Batteries", exact: true }).click();
+    await expect(page.getByRole("group", { name: "Detail" }).getByRole("button", { name: "Expert", exact: true })).toHaveAttribute("aria-pressed", "true");
+    const [basic] = await Promise.all([
+      page.waitForRequest(batteryRead((params) => params.get("series") === "pack_temp:1,heat_state,low_temp")),
+      (async () => {
+        await page.getByRole("group", { name: "Measure" }).getByRole("button", { name: "Limits", exact: true }).click();
+        await page.getByRole("group", { name: "Detail" }).getByRole("button", { name: "Basic", exact: true }).click();
+      })(),
+    ]);
+    expect(new URL(basic.url()).searchParams.get("devices")).toBe("WR1");
+    await expect(page.getByRole("group", { name: "Measure" }).getByRole("button")).toHaveText(["Temperature", "Cell voltage"]);
   });
 });
 
@@ -922,20 +1003,25 @@ test.describe("Modern dashboard views: labels fit @smoke", () => {
     }
   });
 
-  test("every Analytics KPI label stays on one line", async ({ page }) => {
-    for (const lang of LANGUAGES) {
+  for (const lang of LANGUAGES) {
+    test(`every Analytics KPI label stays on one line: ${lang}`, async ({ page }) => {
+      test.slow();
       await inLanguage(page, "#/analytics", lang);
       const views = page.locator('[role="group"]').first().getByRole("button");
       for (let index = 0; index < await views.count(); index += 1) {
         await views.nth(index).click();
         await expect(page.locator(".kpi-label").first()).toBeVisible();
-        for (const width of WIDTHS) {
-          await page.setViewportSize({ width, height: 900 });
-          expect(await broken(page.locator(".kpi-label")), `${lang}, view ${index}, at ${width} px`).toEqual([]);
+        const measures = page.getByTestId("battery-controls").locator(".seg").first().getByRole("button");
+        for (let measure = 0; measure < Math.max(1, await measures.count()); measure += 1) {
+          if (await measures.count()) await measures.nth(measure).click();
+          for (const width of WIDTHS) {
+            await page.setViewportSize({ width, height: 900 });
+            expect(await broken(page.locator(".kpi-label")), `${lang}, view ${index}, measure ${measure}, at ${width} px`).toEqual([]);
+          }
         }
       }
-    }
-  });
+    });
+  }
 
   const offline = (count) => (body) => {
     Object.values(body.devices || {}).slice(0, count).forEach((device) => { device.online = false; });

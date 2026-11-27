@@ -212,7 +212,9 @@ const PROJECT_BANNER = "/* SPDX-FileCopyrightText: 2026 basecubedev */\n/* SPDX-
  * chunk shared by every page larger than a file the repository takes; every
  * other chunk is the project's own code (the entry chunk also holds Vite's
  * preload helper) and says so in its banner, and
- * chunk names follow the pages, so a list of them would drift.
+ * chunk names follow the pages, so a list of them would drift. An app built
+ * as one file keeps the packages in its entry, which REUSE.toml names; a page
+ * it loads apart from it is the project's own code and says so in its banner.
  */
 export function modernBuild({ outDir, entry, split = false }) {
   const chunking = split
@@ -220,7 +222,7 @@ export function modernBuild({ outDir, entry, split = false }) {
         manualChunks: (id) => (id.includes("/node_modules/") ? "vendor" : id.endsWith("/dashboard-modern/src/i18n/strings.js") ? "dashboard-strings" : id.endsWith("/i18n/strings.js") ? "strings" : undefined),
         postBanner: (chunk) => (chunk.name === "vendor" ? "" : PROJECT_BANNER),
       }
-    : {};
+    : { postBanner: (chunk) => (chunk.isEntry ? undefined : PROJECT_BANNER) };
   return {
     outDir,
     emptyOutDir: true,

@@ -260,6 +260,19 @@ test.describe("EMS Dashboard documentation captures @docs", () => {
     await shoot(page, "dashboard-analytics");
   });
 
+  test("dashboard-analytics-batteries", async ({ page, baseURL }) => {
+    await open(page, baseURL, "#/analytics", { scenario: "ac-charging" });
+    await waitForChart(page);
+    await page.getByTestId("analytics-view-block").getByRole("button", { name: "Batteries", exact: true }).click();
+    await expect(page.getByRole("region", { name: "Batteries", exact: true }).locator(".legend-item")).toHaveCount(2);
+    await waitForChart(page);
+    const states = page.getByTestId("battery-states");
+    await states.getByRole("button", { name: "States" }).click();
+    await expect(states.getByTestId("state-lanes").locator("[data-lane]")).toHaveCount(2);
+    await scrollTo(page, page.getByTestId("analytics-view-block"), 12);
+    await shoot(page, "dashboard-analytics-batteries");
+  });
+
   test("dashboard-control", async ({ page, baseURL }) => {
     await open(page, baseURL, "#/control", { scenario: "write-mode" });
     await expect(page.getByTestId("runtime-editor")).toBeVisible();
