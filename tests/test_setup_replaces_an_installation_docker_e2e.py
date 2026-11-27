@@ -12,6 +12,10 @@ generated and nothing of the old one but where the password file lives, an EMS
 recreated onto it, and a runtime state that EMS rebuilt from the new config
 after keeping the old one as a backup.
 
+A second Setup starts its EMS live, as an installation does, so that its
+first start moves the generated config's operating values out of the file; the
+Setup has to stay able to confirm that start afterwards.
+
 One thing is not the product's: ``docker pull`` is skipped for the image built
 here, which no registry carries. The containers carry the standard install's
 fixed names, so the test skips on a host where containers of that name exist.
@@ -38,6 +42,7 @@ from admin.deployment import BootstrapInstaller, DeploymentService, DockerCli
 from admin.guided_setup_workflow import GuidedSetupWorkflowStore
 from admin.install_context import detect_install_context
 from admin.setup_workflow import SetupWorkflowArtifacts
+from ems.config import without_operating_values
 
 pytestmark = [
     pytest.mark.admin,
@@ -72,6 +77,16 @@ OLD_CONFIG = {
 OLD_RUNTIME = {
     "system": {"enabled": False, "max_total_power": 2400},
     "devices": {"WR1": {"identity": SERIAL, "enabled": False, "max_power": 600}},
+}
+
+DRY_RUN = {"system.dry_run": True}
+
+LIVE_WITHOUT_WRITES = {
+    "system.dry_run": False,
+    "system.allow_hardware_writes": False,
+    "system.allow_state_reconciliation_writes": False,
+    "system.allow_mqtt_local_control_writes": False,
+    "system.allow_mqtt_zendure_control_writes": False,
 }
 
 DRAFT = [
@@ -150,12 +165,14 @@ def _logs(name, since=None):
 
 
 def _wait_for(predicate, *, timeout, message):
+    """Wait for ``predicate``; ``message`` is called when it never holds, so it tells the state at the deadline."""
+
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if predicate():
             return
         threading.Event().wait(1.0)
-    raise AssertionError(message)
+    raise AssertionError(message())
 
 
 def _wait_for_job(lookup, job_id, timeout=600, container=None):
@@ -203,10 +220,10 @@ def _influx_env_file(root):
         env_file.write_text("", encoding="utf-8")
 
 
-def _deploy(store, data_dir, release, root, env):
+def _deploy(store, data_dir, release, root, env, features=DRY_RUN):
     """One Guided Setup run through the deployment service: generate, prepare, start."""
 
-    workflow_id, target, payload = _generated_setup_config(store, data_dir, release, root)
+    workflow_id, target, payload = _generated_setup_config(store, data_dir, release, root, features)
     service = DeploymentService(
         release,
         SimpleNamespace(target_path=target),
@@ -227,7 +244,7 @@ def _deploy(store, data_dir, release, root, env):
         service.start_job, started["job"]["job_id"], timeout=300, container=CONTAINERS[0]
     )
     assert job["status"] == "succeeded", json.dumps(job, default=str)
-    return payload
+    return payload, service
 
 
 def _running_installation(store, data_dir, release, root, env):
@@ -251,19 +268,22 @@ def _running_installation(store, data_dir, release, root, env):
     _wait_for(
         lambda: "event=runtime_state_loaded" in _logs(name, since=since),
         timeout=120,
-        message="the old EMS never loaded its runtime state:\n" + _logs(name)[-3000:],
+        message=lambda: "the old EMS never loaded its runtime state:\n" + _logs(name)[-3000:],
     )
     return name
 
 
-def _generated_setup_config(store, data_dir, release, root):
+def _generated_setup_config(store, data_dir, release, root, features):
     """What Guided Setup's Config step generates and binds to its workflow."""
 
     generator = ConfigPreviewGenerator(
         release, install_context_provider=lambda: detect_install_context(base_dir=root)
     )
-    preview = generator.generate(DRAFT, 1, {"system.dry_run": True})
+    preview = generator.generate(DRAFT, 1, dict(features))
     assert preview["ready"] is True, preview["validation"]
+    for path, value in features.items():
+        section, key = path.split(".")
+        assert preview["config"][section][key] is value, (path, preview["config"][section].get(key))
     payload = config_payload_bytes(preview["config"])
     live = root / "config" / "config.json"
     base = (
@@ -317,7 +337,7 @@ def test_a_fresh_setup_replaces_a_running_installation_end_to_end(
         before = _container_id(container)
         since = datetime.now(timezone.utc).isoformat()
 
-        payload = _deploy(store, data_dir, release, root, env)
+        payload, _service = _deploy(store, data_dir, release, root, env)
 
         installed = (root / "config" / "config.json").read_bytes()
         assert installed == payload
@@ -331,7 +351,7 @@ def test_a_fresh_setup_replaces_a_running_installation_end_to_end(
         _wait_for(
             lambda: "event=runtime_state_reset_by_setup" in _logs(container, since=since),
             timeout=120,
-            message="the new EMS never reset its runtime state:\n" + _logs(container)[-3000:],
+            message=lambda: "the new EMS never reset its runtime state:\n" + _logs(container)[-3000:],
         )
         runtime = json.loads((root / "data" / "runtime-state.json").read_text(encoding="utf-8"))
         assert runtime["system"]["enabled"] is True
@@ -345,6 +365,74 @@ def test_a_fresh_setup_replaces_a_running_installation_end_to_end(
         assert kept["devices"]["WR1"]["enabled"] is False
         assert set(kept["devices"]) == {"WR1", "OLD2"}
         assert not (root / "data" / "runtime-state.json.reset-requested").exists()
+    finally:
+        _compose(root, "down", "--remove-orphans")
+        for name in CONTAINERS:
+            subprocess.run(["docker", "rm", "-f", name], capture_output=True, text=True)
+
+
+def test_a_live_first_start_leaves_the_setup_able_to_confirm_it(built_image, tmp_path, monkeypatch):
+    """The Setup still knows its deployment after the EMS's first live start rewrote the config.
+
+    v0.10.8 could not finish a Setup on a Raspberry Pi: the EMS moved the
+    generated config's operating values to runtime-state.json, the deployment
+    marker no longer matched the file, and the health check behind every
+    resume failed while the EMS ran. The test above runs its EMS dry, and a dry
+    start never moves anything, so it could not show this. Here the EMS starts
+    live, so it moves the values, with every write gate off in its config, its
+    startup line confirming the local API and state gates and no MQTT broker
+    configured, and its devices on TEST-NET-1 addresses, reserved for
+    documentation, where no device answers. The installed config then has to be
+    the generated one without its operating values, and the deployment status
+    the resume reads has to report the deployment prepared, running and its
+    dashboard answering.
+    """
+
+    root = tmp_path / "install"
+    data_dir = tmp_path / "admin-data"
+    (data_dir / "state").mkdir(parents=True)
+    monkeypatch.setenv("EMS_INSTALL_DIR", str(root))
+    monkeypatch.delenv("COMPOSE_PROFILES", raising=False)
+    env = {
+        "PUID": str(os.getuid()),
+        "PGID": str(os.getgid()),
+    }
+    present = _existing_containers()
+    if present:
+        pytest.skip(f"containers of the standard install exist here: {', '.join(present)}")
+    release = _release(data_dir)
+    container = CONTAINERS[0]
+    try:
+        store = GuidedSetupWorkflowStore(data_dir)
+        since = datetime.now(timezone.utc).isoformat()
+
+        payload, service = _deploy(store, data_dir, release, root, env, LIVE_WITHOUT_WRITES)
+
+        _wait_for(
+            lambda: "Operating values moved from config.json" in _logs(container, since=since),
+            timeout=120,
+            message=lambda: "the EMS never moved its operating values:\n" + _logs(container)[-3000:],
+        )
+        generated = json.loads(payload)
+        installed = json.loads((root / "config" / "config.json").read_bytes())
+        assert installed != generated
+        assert installed == without_operating_values(generated)
+        for path, value in LIVE_WITHOUT_WRITES.items():
+            section, key = path.split(".")
+            assert installed[section][key] is value, path
+        assert service.status()["prepared"] is True, service.status()
+        _wait_for(
+            lambda: service.status()["dashboard_reachable"],
+            timeout=120,
+            message=lambda: "the deployment never reported a reachable dashboard: "
+            + json.dumps(service.status(), default=str)[-3000:],
+        )
+        status = service.status()
+        assert status["running"] is True, status
+        assert status["errors"] == [], status
+        logs = _logs(container, since=since)
+        assert "event=startup allow_hardware_writes=False allow_state_reconciliation_writes=False dry_run=False" in logs
+        assert "event=zendure_mqtt_runtime broker_configured=False" in logs
     finally:
         _compose(root, "down", "--remove-orphans")
         for name in CONTAINERS:

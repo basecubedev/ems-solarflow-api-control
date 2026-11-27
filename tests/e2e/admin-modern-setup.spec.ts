@@ -161,6 +161,7 @@ test.describe("Modern Admin: guided setup, devices to start", { tag: ["@setup"] 
     await expect(page.getByTestId("setup-inverters")).toContainText("INV_1");
     await expect(page.getByTestId("setup-verdict-state")).toHaveText("Ready");
     expect(plans.length).toBeGreaterThan(0);
+    await page.getByTestId("setup-fold-safety").getByRole("button", { name: "Control and safety" }).click();
     await expect(page.getByTestId("setup-safety").locator('[data-path="system.allow_hardware_writes"] input')).toBeChecked();
     const inverter = page.getByTestId("setup-inverters").locator("[data-device]").first();
     await inverter.locator(".summary").click();
@@ -334,5 +335,128 @@ test.describe("Modern Admin: guided setup, a stuck transition", { tag: ["@setup"
     await recovery.getByTestId("setup-recovery-discard").click();
     await page.getByRole("dialog", { name: "Discard this setup?" }).getByTestId("confirm").click();
     await expect.poll(() => abandons.length).toBe(1);
+  });
+});
+
+test.describe("Modern Admin: guided setup, a page that fits the screen", { tag: ["@setup"] }, () => {
+  test.use({ viewport: { width: 1366, height: 768 } });
+
+  const folded = (page: Page, id: string) => page.getByTestId(`setup-fold-${id}`).locator(".card-fold");
+  const summary = (page: Page, id: string) => page.getByTestId(`setup-fold-${id}`).locator(".card-summary");
+
+  async function devicesStep(page: Page) {
+    await openSetup(page);
+    await confirmLatest(page);
+  }
+
+  async function settingsStep(page: Page) {
+    await devicesStep(page);
+    await page.getByTestId("setup-next").click();
+    await expect(page.getByTestId("setup-step-config")).toHaveAttribute("aria-selected", "true");
+  }
+
+  test("the optional cards of the search are folded with their state, open on a click, and Next stays in view", async ({ page }) => {
+    await devicesStep(page);
+
+    for (const id of ["networks", "manual", "details", "sources", "broker", "mapping"]) await expect(folded(page, id)).toHaveAttribute("aria-expanded", "false");
+    await expect(summary(page, "networks")).toHaveText(/^\d+ networks? · \d+ through a router$/);
+    await expect(summary(page, "sources")).toHaveText("0 broker credentials · no key saved · 0 bridge passwords");
+    await expect(summary(page, "broker")).toHaveText("Off");
+    await expect(summary(page, "mapping")).toHaveText("0 mapped devices");
+    await expect(page.getByTestId("setup-manual-scan")).toBeHidden();
+    await expect(page.getByTestId("setup-next")).toBeInViewport();
+
+    await page.getByTestId("setup-fold-manual").getByRole("button", { name: "Scan one network" }).click();
+    await expect(folded(page, "manual")).toHaveAttribute("aria-expanded", "true");
+    await expect(page.getByTestId("setup-manual-scan")).toBeVisible();
+    await expect(summary(page, "manual")).toHaveCount(0);
+
+    const counts = (await summary(page, "details").innerText()).match(/\d+/g);
+    await page.getByTestId("setup-sources").locator("li[data-source='local_api']").getByRole("button", { name: "Configure" }).click();
+    await page.getByRole("button", { name: "Show the results" }).click();
+    await expect(folded(page, "details")).toHaveAttribute("aria-expanded", "true");
+    await expect(page.locator("#setup-detail-local_api")).toHaveJSProperty("open", true);
+    await expect(page.locator("#setup-detail-local_api > summary")).toContainText(`(${counts![0]} device`);
+    await expect(page.locator("#setup-detail-local_mqtt > summary")).toContainText(`· ${counts![1]} device`);
+    await expect(page.locator("#setup-detail-zendure_mqtt > summary")).toContainText(`(${counts![2]} device`);
+  });
+
+  test("a step without a network found, or a broker with an issue, opens that card on its own", async ({ page }) => {
+    await page.route("**/api/discovery/networks", (route) => route.fulfill({ json: { networks: [], warnings: [] } }));
+    await page.route("**/discovery/gateway-probe", (route) => route.fulfill({ json: { candidates: [] } }));
+    await page.route(/\/api\/discovery\/mqtt-broker$/, (route) => route.request().method() === "GET"
+      ? route.fulfill({ json: { configured: true, issues: [{ code: "mqtt_broker_port_in_use", message: "port in use" }], running: false, host_address: "192.0.2.40", settings: { schema_version: 1, enabled: true, port: 1883, anonymous: false, accounts: [] }, accounts: [], containers: {} } })
+      : route.fallback());
+    await devicesStep(page);
+
+    await expect(folded(page, "networks")).toHaveAttribute("aria-expanded", "true");
+    await expect(folded(page, "manual")).toHaveAttribute("aria-expanded", "true");
+    await expect(page.getByTestId("setup-manual-scan")).toBeVisible();
+    await expect(folded(page, "broker")).toHaveAttribute("aria-expanded", "true");
+    await expect(folded(page, "sources")).toHaveAttribute("aria-expanded", "false");
+  });
+
+  test("a network warning opens the networks and the scan by hand on their own", async ({ page }) => {
+    await page.route("**/api/discovery/networks", (route) => route.fulfill({ json: {
+      networks: [{ cidr: "10.20.0.0/24", original_cidr: "10.20.0.0/24", interface: "eth9", address: "10.20.0.5", is_docker_like: false, scan_recommended: false, label: "Other network", reason: "Not the default route" }],
+      warnings: ["No obvious LAN network was found; enter your LAN CIDR manually."],
+    } }));
+    await page.route("**/discovery/gateway-probe", (route) => route.fulfill({ json: { candidates: [] } }));
+    await devicesStep(page);
+
+    await expect(folded(page, "networks")).toHaveAttribute("aria-expanded", "true");
+    await expect(page.getByTestId("setup-networks")).toContainText("enter your LAN CIDR manually");
+    await expect(folded(page, "manual")).toHaveAttribute("aria-expanded", "true");
+    await expect(page.getByTestId("setup-manual-scan")).toBeVisible();
+  });
+
+  test("the safety and advanced settings are folded with what they say, and a value away from its default opens its card on its own", async ({ page }) => {
+    await settingsStep(page);
+
+    await expect(folded(page, "safety")).toHaveAttribute("aria-expanded", "false");
+    await expect(folded(page, "advanced")).toHaveAttribute("aria-expanded", "false");
+    await expect(summary(page, "safety")).toHaveText(/^EMS controls · writes to devices allowed · max 800\sW · per device 800\sW · min 35\sW$/);
+    await expect(summary(page, "advanced")).toHaveText("All at their defaults");
+    await expect(page.getByTestId("setup-next")).toBeInViewport();
+
+    await folded(page, "safety").click();
+    await page.getByTestId("setup-safety").locator('[data-path="system.dry_run"] input').check();
+    await page.getByTestId("setup-safety").locator('[data-path="system.allow_mqtt_zendure_control_writes"] input').uncheck();
+    await expect(folded(page, "advanced")).toHaveAttribute("aria-expanded", "false");
+    await folded(page, "safety").click();
+    await expect(summary(page, "safety")).toHaveText(/^EMS controls · writes only over Local API, Local MQTT · dry run · max 800\sW · per device 800\sW · min 35\sW$/);
+
+    await page.getByRole("button", { name: "Back" }).click();
+    await expect(page.getByTestId("setup-step-devices")).toHaveAttribute("aria-selected", "true");
+    await page.getByTestId("setup-next").click();
+    await expect(page.getByTestId("setup-step-config")).toHaveAttribute("aria-selected", "true");
+    await expect(folded(page, "safety")).toHaveAttribute("aria-expanded", "true");
+    await expect(page.getByTestId("setup-safety").locator('[data-path="system.dry_run"] input')).toBeChecked();
+    await expect(folded(page, "advanced")).toHaveAttribute("aria-expanded", "false");
+  });
+
+  test("a field the keyboard reaches is never hidden under the bar with Next", async ({ page }) => {
+    await settingsStep(page);
+    await folded(page, "safety").click();
+    await folded(page, "advanced").click();
+    const target = page.getByTestId("setup-safety").locator('[data-path="system.simulation_mode"] input');
+    await page.evaluate(() => window.scrollTo(0, 0));
+    await folded(page, "safety").focus();
+    for (let step = 0; step < 40 && !(await target.evaluate((node) => node === document.activeElement)); step += 1) await page.keyboard.press("Tab");
+    await expect(target).toBeFocused();
+    const field = await target.boundingBox();
+    const bar = await page.locator(".step-nav").boundingBox();
+    expect(field!.y + field!.height).toBeLessThanOrEqual(bar!.y);
+  });
+
+  test("on a phone the bar with Next sits right above the menu bar", async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await devicesStep(page);
+
+    await expect(page.getByTestId("setup-next")).toBeInViewport();
+    const bar = await page.locator(".step-nav").boundingBox();
+    const menu = await page.locator(".bottom-nav").boundingBox();
+    expect(bar && menu).toBeTruthy();
+    expect(Math.round(bar!.y + bar!.height)).toBe(Math.round(menu!.y));
   });
 });

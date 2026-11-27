@@ -188,6 +188,14 @@ pages — Overview, Updates, Settings and Services until you choose others — a
 **More** for the rest, the language, the colour scheme and signing out. See
 [Appearance, language and phone](admin/appearance.md#on-a-phone).
 
+The side menu ends with the version that runs, and so does **More** on a phone:
+a release by its version, `v0.10.9`; a `latest` build, which is always called
+latest, by its build number and short commit, `latest · build 812 · 9168b7a`,
+so you can tell which latest you have. The line is the Admin console's own
+build; Admin console and EMS are updated as one pair, so outside an update it
+names the EMS as well. During a Guided Upgrade the console is replaced first, and
+**Updates** shows each of the two on its own.
+
 The app can sit on a phone's or a tablet's home screen like an app of its
 own, with the EMS SolarFlow mark and without the browser's address bar: open
 `http://<host>:8090`, then **Add to Home Screen** in the browser's share or

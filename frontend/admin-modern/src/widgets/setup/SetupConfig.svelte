@@ -8,9 +8,10 @@
   import CatalogText from "../CatalogText.svelte";
   import SettingsSection from "../SettingsSection.svelte";
   import SetupHardware from "./SetupHardware.svelte";
-  import { t } from "../../i18n/i18n.svelte.js";
+  import { untrack } from "svelte";
+  import { t, tn, fmt } from "../../i18n/i18n.svelte.js";
   import { safetyBlocks, sharedRisk, tabSections } from "../../lib/settings.js";
-  import { BUSY_OPERATIONS, CONFIG_CONFLICTS, featureValue } from "../../lib/setupDraft.js";
+  import { BUSY_OPERATIONS, CONFIG_CONFLICTS, departedFields, featureValue, safetySummary, setupSettingsFields } from "../../lib/setupDraft.js";
   import { setup } from "../../state/setup.svelte.js";
   import { setupDraft, applyConfig, clearDraft, discardLocal, downloadConfig, rejoinCurrent, reviewAgain, setFeature } from "../../state/setupDraft.svelte.js";
 
@@ -21,7 +22,8 @@
   let clearing = $state(false);
 
   const catalog = $derived(setupDraft.catalog);
-  const config = $derived({ catalog: { feature_sections: (catalog?.sections || []).filter((section) => !["devices", "grid_meter"].includes(section.id)) } });
+  const settingsFields = $derived(setupSettingsFields(catalog));
+  const config = $derived(settingsFields.config);
   const features = $derived(tabSections(config, "features"));
   const advanced = $derived(tabSections(config, "expert"));
   const blocks = $derived(safetyBlocks(config));
@@ -36,6 +38,28 @@
   const inverterCount = $derived(Number(summary.inverters || 0));
   const meterCount = $derived(Number(summary.grid_meters || 0));
   const readOnlyCount = $derived(Number(summary.read_only_devices || 0));
+  const safetyFields = $derived(settingsFields.safety);
+  const advancedFields = $derived(settingsFields.advanced);
+  const safetyLine = $derived(safetySummary(values, safetyFields).map(safetyPart).join(" · "));
+  const safetyDeparted = $derived(departedFields(values, safetyFields).length);
+  const advancedDeparted = $derived(departedFields(values, advancedFields).length);
+  const advancedLine = $derived(advancedDeparted ? tn("setup.config.advancedChanged", advancedDeparted) : t("setup.config.advancedDefaults"));
+  const folds = $state({ safety: false, advanced: false });
+  let foldsChosen = false;
+
+  /** Entering the step, a card holding a value away from its default opens; later edits leave every card as it is. */
+  $effect(() => {
+    if (foldsChosen || !safetyFields.length) return;
+    foldsChosen = true;
+    const open = { safety: safetyDeparted > 0, advanced: advancedDeparted > 0 };
+    untrack(() => Object.assign(folds, open));
+  });
+
+  function safetyPart(part) {
+    if (part.sources) return t("setup.config.safetySummary.writesSome", { sources: part.sources.map((source) => t(`setup.source.${source}`)).join(", ") });
+    if (part.watts !== undefined) return t(`setup.config.safetySummary.${part.key}`, { power: fmt().power(part.watts) });
+    return t(`setup.config.safetySummary.${part.key}`);
+  }
 
   function onset(field, value) {
     setFeature(field.path, value);
@@ -101,7 +125,7 @@
     </div>
   </Card>
 
-  <Card icon="shield-check" tone="c-soc" title={t("setup.config.safety")} subtitle={t("setup.config.safetySub")} span="span-12">
+  <Card icon="shield-check" tone="c-soc" title={t("setup.config.safety")} subtitle={t("setup.config.safetySub")} span="span-12" fold bind:open={folds.safety} summary={safetyLine} testid="setup-fold-safety">
     <div class="sections" data-testid="setup-safety">
       {#each blocks as block (block.id)}
         {@const risk = sharedRisk(block.fields)}
@@ -117,7 +141,7 @@
     </div>
   </Card>
 
-  <Card icon="wrench" tone="c-pv" title={t("setup.config.advanced")} subtitle={t("setup.config.advancedSub")} span="span-12">
+  <Card icon="wrench" tone="c-pv" title={t("setup.config.advanced")} subtitle={t("setup.config.advancedSub")} span="span-12" fold bind:open={folds.advanced} summary={advancedLine} testid="setup-fold-advanced">
     <div class="sections" data-testid="setup-advanced">
       {#each advanced as section (section.id)}<SettingsSection {section} {values} {onset} startOpen={section.collapsible === false} />{/each}
     </div>

@@ -171,10 +171,11 @@ function comparable(field, value) {
 /**
  * The default a set value departs from, or undefined: the value is unset or at
  * its default, or the field has no default to name. Numbers compare by value,
- * lists without their spacing and months in any order.
+ * lists without their spacing and months in any order. An installation value
+ * has a default to depart from only with ``installation``.
  */
-export function departedDefault(field, value, fallback = field?.default) {
-  const standard = nameableDefault(field, fallback);
+export function departedDefault(field, value, fallback = field?.default, { installation = false } = {}) {
+  const standard = nameableDefault(field, fallback, { installation });
   if (standard === undefined) return undefined;
   if (field.type === "boolean") {
     if (value === null || value === undefined) return undefined;

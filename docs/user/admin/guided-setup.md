@@ -103,9 +103,13 @@ and **Continue** opens step 02.
 ![Guided setup step 02 Devices: the search order Local API, Local MQTT and Zendure MQTT, the search progress with two inverters and one grid meter, and the devices found](../../assets/screenshots/admin/admin-discovery-preview.png)
 
 **What you see:** **Search sources** with the **Search order** (Local API, Local
-MQTT, Zendure MQTT), **Search progress**, **Devices found**, **Networks and
-routers**, **Scan one network**, and **Credentials for the search** for local
-brokers and the Zendure cloud key.
+MQTT, Zendure MQTT), **Search progress** and **Devices found**. Below them, folded
+to a title and a line that says how each stands: **Networks and routers**, **Scan
+one network**, **What each source found**, **Credentials for the search** for
+local brokers and the Zendure cloud key, the **Built-in MQTT broker** and the
+**MQTT mapping**. A click on a title opens the card; a card also opens on its own
+when no network was found, the networks come with a warning, or the broker
+reports a problem. **Back** and **Next** stay at the bottom of the window.
 
 **What you select:** nothing, the first time: the search runs on its own. Use
 the boxes and arrows to choose which sources the search uses and in which
@@ -144,7 +148,11 @@ listed **once**.
 
 **What you see:** the **Settings check**, then **Hardware** (the grid meter and
 the inverters), **Features**, **Control and safety**, **Advanced and system**
-and **Generated settings**.
+and **Generated settings**. **Control and safety** and **Advanced and system**
+start folded: the first says in one line what EMS may do and the limits it stays
+inside, the second whether all its values are at their defaults. Either opens on
+its own as you enter the step when it holds a value you set away from its
+default, a power limit included.
 
 **What you enter:**
 

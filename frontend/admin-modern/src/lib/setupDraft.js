@@ -11,7 +11,7 @@
  */
 
 import { D0_TOPIC_PREFIX, D0_TOPIC_SUFFIX, IDENTITY_KEYS, deviceFallbacks, generations, hardwareModels, held, modelsForGeneration, withFallbacks } from "./devices.js";
-import { fieldIndex, sentFeatures } from "./settings.js";
+import { departedDefault, fieldIndex, safetyBlocks, sentFeatures, shownValue, tabSections } from "./settings.js";
 import { aliasTokens, bridgeValues, isConsumerProposal, isExternalProposal, isGridMeterProposal, issuedPhysicalIdentity, meterTypeOf, observationKey, proposalTopic, sourcesOf, unitValues } from "./discovery.js";
 import { HOMEWIZARD_TYPE, PAIRING_FIELDS, TOKEN_FIELD } from "./homewizard.js";
 
@@ -602,6 +602,49 @@ export function featureValue(features, field) {
   if (has(features, field.path)) return features[field.path];
   if (field.secret) return "";
   return field.default;
+}
+
+/** The write gate of each transport, in the order the line names them, with the source key that names the transport. */
+export const WRITE_GATES = Object.freeze([
+  ["system.allow_hardware_writes", "local_api"],
+  ["system.allow_mqtt_local_control_writes", "local_mqtt"],
+  ["system.allow_mqtt_zendure_control_writes", "zendure_mqtt"],
+]);
+
+/** The fields Guided Setup's Settings step shows in Control and safety, and in Advanced and system without those. */
+export function setupSettingsFields(catalog) {
+  const config = { catalog: { feature_sections: (catalog?.sections || []).filter((section) => !["devices", "grid_meter"].includes(section.id)) } };
+  const safety = safetyBlocks(config).flatMap((block) => block.fields);
+  const paths = new Set(safety.map((field) => field.path));
+  const advanced = tabSections(config, "expert").flatMap((section) => section.fields || []).filter((field) => !paths.has(field.path));
+  return { config, safety, advanced };
+}
+
+/**
+ * What Control and safety lets EMS do, for the line its folded card shows: each
+ * part a key under setup.config.safetySummary and the values it names. Writes
+ * are allowed over every transport, over none, or only over those named.
+ */
+export function safetySummary(features, fields) {
+  const byPath = Object.fromEntries(fields.map((field) => [field.path, field]));
+  const shown = (path) => (byPath[path] ? shownValue(byPath[path], featureValue(features, byPath[path])) : undefined);
+  const parts = [];
+  if (byPath["system.enabled"]) parts.push({ key: shown("system.enabled") ? "controlOn" : "controlOff" });
+  const gates = WRITE_GATES.filter(([path]) => byPath[path]);
+  const open = gates.filter(([path]) => shown(path)).map(([, source]) => source);
+  if (gates.length) parts.push(open.length === gates.length ? { key: "writesOn" } : open.length ? { key: "writesSome", sources: open } : { key: "writesOff" });
+  if (shown("system.dry_run") === true) parts.push({ key: "dryRun" });
+  if (shown("system.simulation_mode") === true) parts.push({ key: "simulation" });
+  for (const [path, key] of [["system.max_total_power", "max"], ["system.max_device_power", "device"], ["system.min_output_limit", "min"]]) {
+    const watts = shown(path);
+    if (watts !== undefined && watts !== "") parts.push({ key, watts: Number(watts) });
+  }
+  return parts;
+}
+
+/** The fields set away from their default, an installation value's included: a folded card holding any of them opens on its own. */
+export function departedFields(features, fields) {
+  return fields.filter((field) => !field.secret && departedDefault(field, featureValue(features, field), field.default, { installation: true }) !== undefined);
 }
 
 /** Changed feature values without secrets, which stay in memory: localStorage outlives logout and setup. */

@@ -13,6 +13,7 @@ import re
 from pathlib import Path
 
 import pytest
+import yaml
 
 pytestmark = [pytest.mark.contract, pytest.mark.documentation]
 
@@ -70,4 +71,25 @@ def test_each_image_build_names_its_version_and_commit_for_the_about_page(docker
     assert line.startswith("RUN python"), dockerfile
     assert '"version": os.environ["EMS_RELEASE_TAG"]' in line
     assert f'"revision": os.environ["{revision}"]' in line
+    assert '"build_serial": os.environ["EMS_BUILD_SERIAL"]' in line
     assert text.index(f"ARG {revision}") < text.index(line)
+    assert text.index("ARG EMS_BUILD_SERIAL") < text.index(line)
+
+
+@pytest.mark.parametrize("workflow", ("docker-publish.yml", "docker-feature-publish.yml"))
+def test_every_image_build_with_a_build_identity_passes_its_build_number(workflow):
+    """The menu names a latest build by its number, which the image only knows from this argument."""
+
+    document = yaml.safe_load((ROOT / ".github" / "workflows" / workflow).read_text(encoding="utf-8"))
+    builds = [
+        step["with"]
+        for job in document["jobs"].values()
+        for step in job.get("steps", [])
+        if str(step.get("uses", "")).startswith("docker/build-push-action")
+        and step.get("with", {}).get("file") in ("./Dockerfile", "./deploy/admin/Dockerfile")
+        and "steps.build_identity.outputs" in str(step["with"].get("build-args", ""))
+    ]
+
+    assert {build["file"] for build in builds} == {"./Dockerfile", "./deploy/admin/Dockerfile"}
+    for build in builds:
+        assert "EMS_BUILD_SERIAL=${{ steps.build_identity.outputs.build_serial }}" in build["build-args"], build["file"]

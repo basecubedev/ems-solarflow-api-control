@@ -15,6 +15,7 @@ import {
   noticeEntries,
   sourceLinks,
   sourceRef,
+  versionText,
 } from "../lib/about.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "../../..");
@@ -40,8 +41,22 @@ test("a local build points at the main branch rather than at a commit that does 
   assert.equal(knownRevision("0".repeat(40)), "");
   assert.equal(sourceRef({ revision: "0".repeat(40), version: "local" }), "main");
   assert.equal(sourceRef({ revision: "abc123", version: "" }), "main");
-  assert.deepEqual(buildFacts({ version: "local", revision: "0".repeat(40) }), { version: "", revision: "" });
-  assert.deepEqual(buildFacts(null), { version: "", revision: "" });
+  assert.deepEqual(buildFacts({ version: "local", revision: "0".repeat(40) }), { version: "", revision: "", serial: 0 });
+  assert.deepEqual(buildFacts(null), { version: "", revision: "", serial: 0 });
+});
+
+test("the menu names a release by its version and a latest build by its number and commit", () => {
+  const t = (key, values) => ({ "about.latest": "latest", "about.build": `build ${values?.serial}` })[key];
+  const commit = "9168b7a2b2896524c554039547e75e7b4d88fb8a";
+  assert.equal(versionText(buildFacts({ version: "v0.10.9", revision: commit, build_serial: "812", channel: "stable" }), t), "v0.10.9");
+  assert.equal(versionText(buildFacts({ version: "", revision: commit, build_serial: "812", channel: "latest" }), t), "latest · build 812 · 9168b7a");
+  assert.equal(versionText(buildFacts({ version: "latest", revision: commit, build_serial: "812", channel: "latest" }), t), "latest · build 812 · 9168b7a");
+  assert.equal(versionText(buildFacts({ version: "latest", revision: commit, build_serial: "0", channel: "latest" }), t), "latest · 9168b7a");
+  assert.equal(versionText(buildFacts({ version: "local", revision: "0".repeat(40), build_serial: "0", channel: "development" }), t), "");
+  assert.equal(versionText(buildFacts(null), t), "");
+  assert.equal(buildFacts({ version: "latest", build_serial: "0x10" }).serial, 0);
+  assert.equal(buildFacts({ version: "latest", build_serial: "1e3" }).serial, 0);
+  assert.equal(buildFacts({ version: "latest", build_serial: 812 }).serial, 812);
 });
 
 test("a ref is encoded but keeps its slashes", () => {
@@ -72,9 +87,9 @@ test("a development Manager points at the commit its version carries", () => {
 });
 
 test("a build of a channel names the channel, a local build names nothing", () => {
-  assert.deepEqual(buildFacts({ version: "", channel: "latest", revision: COMMIT }), { version: "latest", revision: COMMIT });
-  assert.deepEqual(buildFacts({ version: "", channel: "development" }), { version: "", revision: "" });
-  assert.deepEqual(buildFacts({ version: "v0.9.0", channel: "stable" }), { version: "v0.9.0", revision: "" });
+  assert.deepEqual(buildFacts({ version: "", channel: "latest", revision: COMMIT }), { version: "latest", revision: COMMIT, serial: 0 });
+  assert.deepEqual(buildFacts({ version: "", channel: "development" }), { version: "", revision: "", serial: 0 });
+  assert.deepEqual(buildFacts({ version: "v0.9.0", channel: "stable" }), { version: "v0.9.0", revision: "", serial: 0 });
 });
 
 test("the same package listed twice is shown once", () => {
