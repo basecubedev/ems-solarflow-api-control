@@ -717,9 +717,10 @@ test.describe("Modern Admin: settings", { tag: ["@smoke"] }, () => {
 
   test("battery care is a feature right after winter mode, with its own name, mark, switch and every setting in view", async ({ page, seedAdminScenario }) => {
     await seededAt(page, seedAdminScenario, "#/settings");
+    const care = page.locator('[data-section="battery_care"]');
+    await expect(care).toBeVisible();
     const sections = await page.locator("[data-section]").evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-section")));
     expect(sections.indexOf("battery_care")).toBe(sections.indexOf("winter") + 1);
-    const care = page.locator('[data-section="battery_care"]');
     await expect(care.getByRole("checkbox", { name: "Battery care on or off" })).toBeVisible();
     await expect(care.locator(".summary .name")).toHaveText("Battery care");
     await expect(care.locator(".summary .icon-tile use")).toHaveAttribute("href", "#i-battery-low");

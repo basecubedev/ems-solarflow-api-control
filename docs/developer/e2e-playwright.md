@@ -32,6 +32,7 @@ assert on stays real:
 | Embedded resource bundle location      | `SystemAlignmentService` state machine|
 | Admin-replacement launcher             | Resource-strategy decisions           |
 | Network scan (every host checked, none contacted; devices come from the seeded mDNS path) | Scan registry, progress and result routes |
+| Router probe (no gateway answers) and MQTT broker check (only a broker on this machine, such as a spec's own on 127.0.0.1) | Broker probe, refresh and topic discovery |
 | —                                      | Transition persistence                |
 | —                                      | Discovery authorization               |
 | —                                      | Server-driven button gating           |
