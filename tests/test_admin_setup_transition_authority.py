@@ -41,6 +41,8 @@ from tests.test_admin_server import (
     _FakeSystemAlignment,
     _attach_system_alignment,
     _control_export_manager,
+    _last_answer_order,
+    _record_answer_order,
     _request,
     _serve,
 )
@@ -752,6 +754,28 @@ def test_unproven_transition_ownership_keeps_the_setup_intent(tmp_path):
     finally:
         srv.shutdown()
         srv.server_close()
+
+
+def test_an_unproven_ownership_answers_only_once_its_claim_is_released(
+    tmp_path, monkeypatch
+):
+    """The ownership refusal comes after the mutation claim was taken: the
+    request thread gives that claim up, then refuses, so the confirm that
+    follows the link never meets it."""
+
+    alignment = _ActiveTransitionAlignment(operation_id="op-1")
+    srv, base = _serve(release_manager=_control_export_manager(tmp_path))
+    _attach_system_alignment(srv, alignment)
+    try:
+        workflow_id, intent_id = _authority(base)
+        events = _record_answer_order(monkeypatch)
+        status, _, refused = _post_creation(base, CONFIRM, workflow_id, intent_id)
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    assert (status, refused["error"]) == (409, "setup_transition_owner_unproven")
+    assert _last_answer_order(events)[-2:] == ["released", ("answered", 409)]
 
 
 def test_a_creation_route_still_needs_its_setup_intent(tmp_path):

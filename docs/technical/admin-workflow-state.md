@@ -235,7 +235,7 @@ Four terms, four distinct jobs — none of them substitutes for another:
 | `setup_intent_id` | a **workflow-bound one-shot user confirmation**: this session confirmed Fresh Setup, for this workflow, against this installation state | consumed by one mutation; retired with its workflow |
 | `setup_workflow_id` | the **durable owner** of the Setup state (B0) | until the workflow is terminal and its cleanup converged |
 | transition `operation_id` | the **exact System Alignment transition reference** the workflow owns | the transition's own lifecycle |
-| lifecycle claim | **mutual exclusion** while a mutation's irreversible work — including transition creation — can still commit | one request (or one worker) |
+| lifecycle claim | **mutual exclusion** while a mutation's irreversible work — including transition creation — can still commit; a request gives it up before it answers, with a result or a refusal, so the client's next step never meets the claim of the step that already answered (a worker's claim aside) | one request (or one worker, which keeps it past the answer) |
 
 | Route | `setup_workflow_id` | `setup_intent_id` | `config_preview_id` | bound generated artifact | transition `operation_id` | lifecycle claim |
 |---|---|---|---|---|---|---|
