@@ -424,7 +424,7 @@ test.describe("Modern Admin: guided setup, a page that fits the screen", { tag: 
     await page.getByTestId("setup-safety").locator('[data-path="system.allow_mqtt_zendure_control_writes"] input').uncheck();
     await expect(folded(page, "advanced")).toHaveAttribute("aria-expanded", "false");
     await folded(page, "safety").click();
-    await expect(summary(page, "safety")).toHaveText(/^EMS controls · writes only over Local API, Local MQTT · dry run · max 800\sW · per device 800\sW · min 35\sW$/);
+    await expect(summary(page, "safety")).toHaveText(/^EMS controls · writes only over Local API and Local MQTT · dry run · max 800\sW · per device 800\sW · min 35\sW$/);
 
     await page.getByRole("button", { name: "Back" }).click();
     await expect(page.getByTestId("setup-step-devices")).toHaveAttribute("aria-selected", "true");

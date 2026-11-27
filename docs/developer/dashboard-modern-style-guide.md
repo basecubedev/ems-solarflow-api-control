@@ -74,8 +74,8 @@ app adds only what is its own:
 | `shell/`: side menu, top bar, phone bar, Appearance, the router and the page set | `app/pages.js` (the pages and the four of the phone bar) |
 | `widgets/DiagnosisReport.svelte`: one EMS diagnosis, drawn once; `widgets/About.svelte`: the About & licenses page every app registers as its hidden `about` page | its own `src/i18n/strings.js` |
 | `i18n/`: `t`, `tn` (plural forms), `fmt` and the shell's own strings | the auth model of its server |
-| `lib/`: `format.js`, `api.js`, `download.js`, `about.js` (the source links and notice list of the About page, and `versionText`, the line that names the running build where the side menu and the phone's **More** end: a release by its version, a `latest` build by its build number and short commit) | |
-| `state/`: `prefs.svelte.js` (appearance and language, per browser), `build.svelte.js` (the image's `build.json`, read once and shared by that line and the About page; an app that names its version itself, the Appliance Manager, passes it to the side menu instead) | |
+| `lib/`: `format.js`, `api.js`, `download.js`, `about.js` (the source links and notice list of the About page, and `versionText`, the line that names the running build where the side menu and the phone's **More** end: a release by its version, a `latest` build by its build number and short commit, a feature build as `dev` and its short commit; `format.js`'s `list` joins names as the reader's language does) | |
+| `state/`: `prefs.svelte.js` (appearance and language, per browser), `build.svelte.js` (the image's `build.json`, read once and shared by that line and the About page; an app that names its version itself, the Appliance Manager, passes it to the side menu and the phone bar instead) | |
 | `vite/page.js`: the tab icon, the icon sprite, the licence notices and the build settings | |
 
 - **The shell** gets what it needs from the app through one context

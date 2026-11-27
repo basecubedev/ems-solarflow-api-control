@@ -1279,6 +1279,12 @@ test.describe("on a phone", () => {
     await expect(page.locator("#content")).toBeFocused();
   });
 
+  test("More ends with the Manager's version, as the side menu does on a wide screen", async ({ page }) => {
+    await createPassword(page);
+    await page.getByTestId("nav-more").click();
+    await expect(page.getByTestId("sheet-version")).toHaveText(/^Manager \d+\.\d+\.\d+/);
+  });
+
   test("a page opened through More keeps the chevron free of its attention mark", async ({ page, request }) => {
     await resetAppliance(request, { confirmed_password: "the-previous-manager-password", shared_password: PASSWORD });
     await page.goto("/");

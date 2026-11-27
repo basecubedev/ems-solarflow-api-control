@@ -8,7 +8,6 @@ import { BUILD_FILE, buildFacts } from "../lib/about.js";
 
 class Build {
   facts = $state.raw(buildFacts(null));
-  loaded = $state(false);
 }
 
 export const build = new Build();
@@ -25,7 +24,6 @@ export function loadBuild() {
     .then(
       (value) => {
         build.facts = buildFacts(value);
-        build.loaded = true;
       },
       () => {
         reading = null;

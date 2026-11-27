@@ -50,6 +50,7 @@ export function createFormat(lang) {
   const dateFormat = new Intl.DateTimeFormat(locale, { day: "numeric", month: "long", year: "numeric" });
   const shortDateFormat = new Intl.DateTimeFormat(locale, { day: "numeric", month: "short" });
   const numericDateFormat = new Intl.DateTimeFormat(locale, { day: "2-digit", month: "2-digit", year: "numeric" });
+  const listFormat = new Intl.ListFormat(locale, { style: "long", type: "conjunction" });
   const dateTimeFormat = new Intl.DateTimeFormat(locale, {
     day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", hourCycle: "h23",
   });
@@ -209,5 +210,10 @@ export function createFormat(lang) {
     return `${one.format(parsed / (1024 * 1024 * 1024))}\u00a0GB`;
   }
 
-  return { lang, locale, power, energy, percent, voltage, temperature, money, number, time, date, dateTime, when, month, monthYear, weekday, relative, bytes };
+  /** Names joined as the reader's language joins them: "A and B", "A, B und C". */
+  function list(items) {
+    return listFormat.format((items || []).map(String));
+  }
+
+  return { lang, locale, power, energy, percent, voltage, temperature, money, number, time, date, dateTime, when, month, monthYear, weekday, relative, bytes, list };
 }

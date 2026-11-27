@@ -688,8 +688,9 @@ journalctl -u ems-appliance-agent -n 200
 ## Appliance Manager self-update
 
 The Appliance Manager updates through its signed package, separately from Admin
-updates. Its current version is shown at the foot of the side menu and under
-**Installed** on the **Updates** page's **Appliance Manager package** card.
+updates. Its current version is shown at the foot of the side menu, at the end
+of **More** on a phone, and under **Installed** on the **Updates** page's
+**Appliance Manager package** card.
 
 `sudo ems-appliance rollback-manager` reinstalls the package that was running
 before the current one, from

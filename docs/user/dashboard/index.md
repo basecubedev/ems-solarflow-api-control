@@ -68,8 +68,9 @@ at the bottom, see [Overview and navigation](overview.md#on-a-phone).
 
 The foot of the side menu, and **More** on a phone, hold **About & licenses**
 and below it the version that runs: a release by its version, a `latest` build
-by its build number and short commit. The page shows the version and commit, the source code of exactly
-that version, the project's license (GNU AGPL v3 or later, without any
+by its build number and short commit, a feature build by `dev` and its short
+commit. The page shows the version and commit,
+the source code of exactly that version, the project's license (GNU AGPL v3 or later, without any
 warranty), the note that this is an independent community project and not a
 Zendure product with links to its Discussions and issues on GitHub, the
 invitation to report a device that works (or does not) with links to the

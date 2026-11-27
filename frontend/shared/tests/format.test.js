@@ -116,3 +116,9 @@ test("a moment from today is a clock time, any other has its day", () => {
   assert.equal(f.when(earlier), f.dateTime(earlier));
   assert.equal(f.when(null), MISSING);
 });
+
+test("a list of names is joined as the reader's language joins it", () => {
+  assert.equal(createFormat("en").list(["Local API", "Local MQTT"]), "Local API and Local MQTT");
+  assert.equal(createFormat("de").list(["Local API", "Local MQTT", "Zendure MQTT"]), "Local API, Local MQTT und Zendure MQTT");
+  assert.equal(createFormat("en").list(["Local API"]), "Local API");
+});
