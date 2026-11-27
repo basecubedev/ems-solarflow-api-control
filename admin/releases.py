@@ -440,9 +440,10 @@ class ReleaseManager:
         warnings = []
         remote = []
         remote_available = True
+        checked_at = None
         catalogued = self._catalogued_releases()
         if catalogued is not None:
-            remote = catalogued
+            remote, checked_at = catalogued
         else:
             try:
                 remote = self._fetch_release_metadata()
@@ -690,7 +691,7 @@ class ReleaseManager:
             )
         )
         if for_upgrade and remote_available:
-            self._remember_check(default_release)
+            self._remember_check(default_release, checked_at=checked_at)
         return {
             "active_release": active,
             "prepared_release": prepared,
@@ -702,10 +703,12 @@ class ReleaseManager:
             "warnings": warnings,
         }
 
-    def _remember_check(self, recommended):
+    def _remember_check(self, recommended, *, checked_at=None):
+        """Note what the listing proposed, as of when its release list was fetched."""
+
         record = {
             "version": RELEASE_CHECK_VERSION,
-            "checked_at": _utc_now(),
+            "checked_at": checked_at or _utc_now(),
             "recommended": recommended,
         }
         try:
@@ -1232,14 +1235,15 @@ class ReleaseManager:
         return payload
 
     def _catalogued_releases(self):
-        """The release list from the CI-published catalogue, or ``None``.
+        """The release list from the CI-published catalogue and when it was fetched, or ``None``.
 
         The catalogue answers both questions the upgrade page used to put to
         the GitHub API on every visit -- which releases exist, and whether each
         one's setup resources are present -- from one file read over the content
         CDN, which is not rate limited. ``None`` means the catalogue could not be
         used and the API path decides as before; a failing source never breaks
-        the listing.
+        the listing. The time is ``None`` for a catalogue fetched just now and
+        the cache's time for one a failed fetch fell back to.
         """
 
         source = self._release_source
@@ -1271,7 +1275,7 @@ class ReleaseManager:
         self._known_downloads["latest"] = (
             f"https://codeload.github.com/{REPO}/zip/refs/heads/main"
         )
-        return releases
+        return releases, catalogue.get("cached_at")
 
     def _fetch_release_metadata(self):
         payload = []
