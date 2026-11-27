@@ -18,6 +18,7 @@ import json
 import os
 import threading
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import pytest
 
@@ -761,8 +762,43 @@ def test_the_deployment_is_read_only_from_a_regular_file_of_bounded_size(tmp_pat
 
     assert read(regular) == "services: {}\n"
     assert read(linked) == "services: {}\n"
-    assert read(fifo) == ""
+    assert _read_without_blocking(read, fifo) == ""
     assert read(large) == ""
     assert read(undecodable) == ""
     assert read(tmp_path / "missing.yml") == ""
     assert read(tmp_path) == ""
+
+
+def test_a_file_of_exactly_the_bound_is_read_and_a_pipe_holding_text_is_not(tmp_path):
+    exact = tmp_path / "exact.yml"
+    exact.write_bytes(b"#" * admin_transition.MAX_DEPLOYMENT_FILE_BYTES)
+    read_end, write_end = os.pipe()
+    os.write(write_end, b"services: {}\n")
+    os.close(write_end)
+    try:
+        fed = _read_without_blocking(admin_transition._regular_text, Path(f"/proc/self/fd/{read_end}"))
+    finally:
+        os.close(read_end)
+
+    assert admin_transition._regular_text(exact) == "#" * admin_transition.MAX_DEPLOYMENT_FILE_BYTES
+    assert fed == ""
+
+
+def _read_without_blocking(read, fifo):
+    """``read(fifo)``, failing instead of hanging when the reader blocks on the FIFO.
+
+    A reader that blocks is released by opening the FIFO's write end, so the
+    suite finishes either way; the protected interleaving is "read returns
+    before anything writes".
+    """
+
+    result = {}
+    worker = threading.Thread(target=lambda: result.setdefault("text", read(fifo)), daemon=True)
+    worker.start()
+    worker.join(timeout=10)
+    if worker.is_alive():
+        release = os.open(fifo, os.O_WRONLY | os.O_NONBLOCK)
+        os.close(release)
+        worker.join(timeout=10)
+        pytest.fail(f"reading {fifo.name} blocked")
+    return result["text"]
