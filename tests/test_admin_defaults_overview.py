@@ -81,6 +81,8 @@ def test_a_config_from_this_releases_template_departs_from_no_default(tmp_path):
 
 
 def test_every_value_an_earlier_release_shipped_as_its_default_is_listed(tmp_path):
+    """A retired value the EMS cannot run shows as what runs: a winter step of 5 runs as 3, the default."""
+
     config = _template()
     retired = {}
     for entry in RETIRED_DEFAULTS:
@@ -91,8 +93,9 @@ def test_every_value_an_earlier_release_shipped_as_its_default_is_listed(tmp_pat
 
     listed = {row[1]: row for row in _departures(tmp_path)}
 
-    assert set(listed) == set(retired)
-    assert all(listed[path][2] == value for path, value in retired.items())
+    runs_as_default = {"winter.ramp_step_percent"}
+    assert set(listed) == set(retired) - runs_as_default
+    assert all(listed[path][2] == value for path, value in retired.items() if path in listed)
 
 
 def test_an_operating_value_is_listed_once_as_the_ems_runs_it(tmp_path):

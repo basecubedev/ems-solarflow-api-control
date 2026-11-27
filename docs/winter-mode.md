@@ -23,11 +23,17 @@ capacity for the installation before unattended winter operation.
 
 `winter.enabled` can be toggled at runtime through `runtime-state.json`,
 `emsctl.py`, the **Winter mode** card in the runtime settings on the
-dashboard's **Control** page, or a rule on its **Schedule** page (see
-[Runtime settings and schedules](user/dashboard/runtime-settings.md)). The
-technical winter settings below remain static config, set in `config.json` or
-under **Winter mode** on the **Features** tab of the Admin Console's **Settings
-& devices**.
+dashboard's **Control** page, or a rule on its **Schedule** page (see [Runtime
+settings and schedules](user/dashboard/runtime-settings.md)). The months, both
+reserves, the step and the step hour are operating values too: the Admin
+Console's **Settings & devices** changes them under **Winter mode** on the
+**Features** tab, and the EMS takes a change at once, without a restart; a
+reserve lowered below the minSoc a battery holds brings it down in the next
+cycle. The EMS reads them from `runtime-state.json`; `config.json` keeps a
+copy the Admin writes as well, so a rollback to an earlier v0.10 release runs
+the same values, and a value edited into `config.json` by hand does not take
+effect once the runtime state holds one. The policy per device type stays in
+`config.json`.
 
 ## Configuration
 

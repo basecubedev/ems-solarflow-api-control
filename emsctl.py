@@ -1647,7 +1647,8 @@ def runtime_defaults(config, existing=None):
             "enabled": config_mod.safe_bool(
                 config_section(config, "winter").get("enabled"),
                 config_mod.WINTER_DEFAULTS["enabled"],
-            )
+            ),
+            **config_mod.winter_operating_values(config_section(config, "winter")),
         },
         "ac_charge_control": {
             "enabled": config_mod.normalize_ac_charge_control_config(

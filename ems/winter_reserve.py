@@ -176,7 +176,10 @@ class WinterReserve:
         day, follows a point below the SoC the battery reaches. While the
         report carries no minSoc nothing is planned: a 0 read for it would be
         adopted as the floor, or stepped up from, and written over the
-        reserve (K18).
+        reserve (K18). The target held is kept within the floor and the winter
+        reserve every cycle, and stored when that moves it, so a reserve
+        lowered while the EMS runs lowers it at once, as a restart would, and
+        a restart after it does not bring the old target back.
         """
 
         if not cfg.winter_feature_enabled(self._runtime_state()):
@@ -208,7 +211,7 @@ class WinterReserve:
             return self.summer_min_soc(dev, state, item, now), False
 
         today = now.date().isoformat()
-        past_step_hour = now.hour >= cfg.winter_adjust_hour()
+        past_step_hour = now.hour >= cfg.winter_adjust_hour(self._runtime_state())
         if not item.seen:
             item.seen = True
             self.restore(dev, state, policy, item, today, past_step_hour)
@@ -216,6 +219,9 @@ class WinterReserve:
             self.reload(dev, item, today)
         if item.target is None:
             item.target = self.held_min_soc(dev, state)
+        elif self.clamped_target(dev, item.target) != item.target:
+            item.target = self.clamped_target(dev, item.target)
+            self.persist(dev, item, now)
         self.observe_pv(dev, state, item, today, now)
 
         stepped_today = today in (item.step_date, item.skipped_date)
@@ -227,7 +233,7 @@ class WinterReserve:
         else:
             due = (
                 not stepped_today
-                and now.hour == cfg.winter_adjust_hour()
+                and now.hour == cfg.winter_adjust_hour(self._runtime_state())
                 and not self.reports_pv_unexpectedly(dev, item, today)
             )
 
@@ -353,8 +359,8 @@ class WinterReserve:
     def clamped_target(self, dev, target):
         """``target`` within the configured floor and ``winter_min_soc``."""
 
-        floor = dev.min_soc if dev.min_soc > 0 else cfg.winter_summer_min_soc()
-        ceiling = max(floor, cfg.winter_min_soc_percent())
+        floor = dev.min_soc if dev.min_soc > 0 else cfg.winter_summer_min_soc(self._runtime_state())
+        ceiling = max(floor, cfg.winter_min_soc_percent(self._runtime_state()))
         return max(floor, min(ceiling, target))
 
     def persist(self, dev, item, now):
@@ -406,7 +412,7 @@ class WinterReserve:
     def summer_min_soc(self, dev, state, item, now):
         """Outside winter: back to ``summer_min_soc``, forgetting the winter target."""
 
-        summer_min_soc = cfg.winter_summer_min_soc()
+        summer_min_soc = cfg.winter_summer_min_soc(self._runtime_state())
         had_target = item.target is not None
         if had_target or item.step_date is not None:
             item.reset_plan()
@@ -434,9 +440,9 @@ class WinterReserve:
     def take_step(self, dev, state, policy, item, today, now):
         """Raise the target by today's step, or wait while the battery is too far below."""
 
-        winter_min_soc = cfg.winter_min_soc_percent()
+        winter_min_soc = cfg.winter_min_soc_percent(self._runtime_state())
         base = state.min_soc if state.min_soc > 0 else item.target
-        step = cfg.winter_step_percent()
+        step = cfg.winter_step_percent(self._runtime_state())
 
         if policy.step == winter_policies.STEP_MORNING_PV:
             target = cfg.winter_morning_step_target(state.soc, base, winter_min_soc, step)
@@ -464,7 +470,7 @@ class WinterReserve:
             current_min_soc=state.min_soc,
             target_min_soc=target,
             winter_min_soc=winter_min_soc,
-            estimated_days_remaining=cfg.estimate_winter_ramp_days(target)
+            estimated_days_remaining=cfg.estimate_winter_ramp_days(target, self._runtime_state())
         )
         return target, True
 
@@ -472,7 +478,7 @@ class WinterReserve:
         """After today's step, raise the target to a point below the SoC the battery reached."""
 
         target = cfg.winter_daytime_follow_target(
-            state.soc, item.target, cfg.winter_min_soc_percent()
+            state.soc, item.target, cfg.winter_min_soc_percent(self._runtime_state())
         )
         if target is None:
             return
@@ -523,7 +529,7 @@ class WinterReserve:
             "winter_step_waits_for_pv",
             device=dev.name,
             policy=policy.name,
-            step_hour=cfg.winter_adjust_hour(),
+            step_hour=cfg.winter_adjust_hour(self._runtime_state()),
             hint="a battery without PV of its own needs pv_kwp 0"
         )
 

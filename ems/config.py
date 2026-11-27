@@ -2313,15 +2313,16 @@ def without_operating_values(data):
 
     The template still names them, as the starting values of a config written
     by hand that the first live start moves; the config upgrade never adds one
-    back, and diagnose does not miss one.
+    back, and diagnose does not miss one. A value ``config.json`` keeps a copy
+    of for a rollback (``ROLLBACK_CONFIG_COPIES``) stays.
     """
 
-    from ems.runtime_commands import OPERATION_DEVICE_KEYS, OPERATION_SETTING_PATHS
+    from ems.runtime_commands import OPERATION_DEVICE_KEYS, OPERATION_SETTING_PATHS, ROLLBACK_CONFIG_COPIES
 
     stripped = copy.deepcopy(data)
     if not isinstance(stripped, dict):
         return stripped
-    for setting in OPERATION_SETTING_PATHS:
+    for setting in OPERATION_SETTING_PATHS - ROLLBACK_CONFIG_COPIES:
         section, _, key = setting.partition(".")
         block = stripped.get(section)
         if isinstance(block, dict):
@@ -2377,15 +2378,24 @@ def _without_operating_values(raw_config, runtime_data):
     ``dropped`` names each moved value the config held differently from the
     runtime state, ``(path, config value, running value)``: the running one
     is kept, so a value edited into the file by hand does not take effect.
+    A value the config keeps a copy of for a rollback to an earlier v0.10
+    release (``ROLLBACK_CONFIG_COPIES``) does not move.
     """
 
-    from ems.runtime_commands import DEVICE_FIELDS, OPERATION_DEVICE_KEYS, OPERATION_SETTING_PATHS, SECTION_FIELDS, SYSTEM_FIELDS
+    from ems.runtime_commands import (
+        DEVICE_FIELDS,
+        OPERATION_DEVICE_KEYS,
+        OPERATION_SETTING_PATHS,
+        ROLLBACK_CONFIG_COPIES,
+        SECTION_FIELDS,
+        SYSTEM_FIELDS,
+    )
 
     remaining = copy.deepcopy(raw_config)
     runtime_data = runtime_data if isinstance(runtime_data, dict) else {}
     moved = []
     dropped = []
-    for setting in sorted(OPERATION_SETTING_PATHS):
+    for setting in sorted(OPERATION_SETTING_PATHS - ROLLBACK_CONFIG_COPIES):
         section, _, key = setting.partition(".")
         block = remaining.get(section)
         held = runtime_data.get(section)
@@ -4442,34 +4452,63 @@ def ac_charge_stop_w():
     return max(0, start - hysteresis)
 
 
-def winter_config_bool(key, default=False):
-    return safe_bool(WINTER_CONFIG.get(key, default), default)
+def winter_settings(runtime_state=None):
+    """Winter as it holds now: the runtime section over the config.
+
+    The operating values (``SECTION_FIELDS["winter"]`` in
+    ``ems.runtime_commands``) are read every cycle against whatever runtime
+    state the caller holds; the per-class policies stay in the config.
+    """
+
+    settings = dict(WINTER_CONFIG)
+    data = getattr(runtime_state, "data", None)
+    if isinstance(data, dict) and isinstance(data.get("winter"), dict):
+        settings.update(data["winter"])
+    return settings
 
 
-def winter_config_int(key, default=0, minimum=None):
-    return safe_int(WINTER_CONFIG.get(key, default), default, minimum=minimum)
+def winter_config_bool(key, default=False, runtime_state=None):
+    return safe_bool(winter_settings(runtime_state).get(key, default), default)
 
 
-def winter_months():
-    months = WINTER_CONFIG.get("months", WINTER_DEFAULTS["months"])
+def winter_operating_values(settings):
+    """The winter operating values ``settings`` holds, each read as the EMS reads it.
 
-    if not isinstance(months, list):
-        months = WINTER_DEFAULTS["months"]
+    ``settings`` is a winter section (``winter_settings`` merges the runtime
+    one over the config's); a value missing or unreadable there takes the
+    default. The step is never more than ``MAX_RAISE_ABOVE_SOC``: configs from
+    before the step was 3 carry 5, and a noon step of 5 could lead the SoC by
+    ten points.
+    """
 
+    settings = settings if isinstance(settings, dict) else {}
+    months = settings.get("months", WINTER_DEFAULTS["months"])
     parsed = []
-
-    for month in months:
+    for month in months if isinstance(months, list) else []:
         value = safe_int(month, 0)
         if 1 <= value <= 12:
             parsed.append(value)
 
-    return parsed or WINTER_DEFAULTS["months"]
+    def number(key, minimum):
+        return safe_int(settings.get(key, WINTER_DEFAULTS[key]), WINTER_DEFAULTS[key], minimum=minimum)
+
+    return {
+        "months": parsed or list(WINTER_DEFAULTS["months"]),
+        "summer_min_soc": number("summer_min_soc", 0),
+        "winter_min_soc": number("winter_min_soc", 0),
+        "ramp_step_percent": min(number("ramp_step_percent", 1), MAX_RAISE_ABOVE_SOC),
+        "adjust_hour": number("adjust_hour", 0) % 24,
+    }
 
 
-def winter_month_active(now):
-    """Return True when the configured winter month set contains now.month."""
+def winter_months(runtime_state=None):
+    return winter_operating_values(winter_settings(runtime_state))["months"]
 
-    return now.month in winter_months()
+
+def winter_month_active(now, runtime_state=None):
+    """Return True when the winter month set contains now.month."""
+
+    return now.month in winter_months(runtime_state)
 
 
 def winter_feature_enabled(runtime_state=None):
@@ -4485,7 +4524,7 @@ def winter_feature_enabled(runtime_state=None):
 
 
 def winter_mode_active(now, runtime_state=None):
-    return winter_feature_enabled(runtime_state) and winter_month_active(now)
+    return winter_feature_enabled(runtime_state) and winter_month_active(now, runtime_state)
 
 
 def battery_care_points(value, default):
@@ -4553,43 +4592,28 @@ def winter_soc_reading(soc):
     return soc if usable else None
 
 
-def winter_step_percent():
-    """The daily winter step, never more than ``MAX_RAISE_ABOVE_SOC``.
+def winter_step_percent(runtime_state=None):
+    """The daily winter step, never more than ``MAX_RAISE_ABOVE_SOC``."""
 
-    Configs from before the step was 3 carry 5; a noon step of 5 could lead
-    the SoC by ten points.
-    """
-
-    step = winter_config_int(
-        "ramp_step_percent",
-        WINTER_DEFAULTS["ramp_step_percent"],
-        minimum=1
-    )
-    return min(step, MAX_RAISE_ABOVE_SOC)
+    return winter_operating_values(winter_settings(runtime_state))["ramp_step_percent"]
 
 
-def winter_min_soc_percent():
-    """The configured winter reserve ceiling."""
+def winter_min_soc_percent(runtime_state=None):
+    """The winter reserve ceiling."""
 
-    return winter_config_int(
-        "winter_min_soc", WINTER_DEFAULTS["winter_min_soc"], minimum=0
-    )
+    return winter_operating_values(winter_settings(runtime_state))["winter_min_soc"]
 
 
-def winter_summer_min_soc():
-    """The configured reserve outside the winter months."""
+def winter_summer_min_soc(runtime_state=None):
+    """The reserve outside the winter months."""
 
-    return winter_config_int(
-        "summer_min_soc", WINTER_DEFAULTS["summer_min_soc"], minimum=0
-    )
+    return winter_operating_values(winter_settings(runtime_state))["summer_min_soc"]
 
 
-def winter_adjust_hour():
+def winter_adjust_hour(runtime_state=None):
     """The local hour a timed winter step is due from."""
 
-    return winter_config_int(
-        "adjust_hour", WINTER_DEFAULTS["adjust_hour"], minimum=0
-    ) % 24
+    return winter_operating_values(winter_settings(runtime_state))["adjust_hour"]
 
 
 def winter_policy_class_defaults():
@@ -4715,11 +4739,11 @@ def winter_min_soc_raise_limit(target, current_min_soc, soc, max_raise_above_soc
     return current
 
 
-def estimate_winter_ramp_days(current_min_soc):
+def estimate_winter_ramp_days(current_min_soc, runtime_state=None):
     """Estimate the remaining daily steps until winter minSoc is reached."""
 
-    winter_min_soc = winter_min_soc_percent()
-    step = winter_step_percent()
+    winter_min_soc = winter_min_soc_percent(runtime_state)
+    step = winter_step_percent(runtime_state)
     remaining = max(0, winter_min_soc - current_min_soc)
 
     return int((remaining + step - 1) / step)

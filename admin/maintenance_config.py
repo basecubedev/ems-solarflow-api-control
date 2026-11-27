@@ -44,6 +44,7 @@ from admin.operation_settings import (
     operating_provenance,
     operation_changes,
     new_device_entries,
+    rollback_copy_edits,
     running_runtime_entries,
     without_entry_values,
 )
@@ -1486,6 +1487,8 @@ def _merge_draft(
     _merge_features(merged, draft.get("features"), issues)
     if operating_in_config:
         _merge_features(merged, operating_feature_edits(draft), issues, operating=True)
+    else:
+        _merge_features(merged, rollback_copy_edits(draft), issues, operating=True)
     return merged
 
 
@@ -2578,7 +2581,8 @@ def _merge_features(merged, features, issues, *, operating=False):
 
     Those live in the runtime state and are written there by the apply
     (``admin.operation_settings``), except while a fresh setup's reset is
-    pending (``operating``: the changed ones, held_by_config).
+    pending (``operating``: the changed ones, held_by_config) or, for a value
+    ``config.json`` keeps a copy of for a rollback, always (rollback_copy_edits).
 
     Switching analytics on here puts the bundled InfluxDB secret where Docker
     reads it, as Setup does: a config that ran Setup with analytics off still

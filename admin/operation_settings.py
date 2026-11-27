@@ -33,6 +33,7 @@ from ems.runtime_state import PLACEHOLDER_SEEDED_KEY, owned_runtime_device, runt
 from ems.runtime_commands import (
     OPERATION_DEVICE_KEYS,
     OPERATION_SETTING_PATHS,
+    ROLLBACK_CONFIG_COPIES,
     RuntimeWriteError,
     build_validation_context,
     validate_device_values,
@@ -227,6 +228,31 @@ def operating_feature_edits(draft):
     }
 
 
+def rollback_copy_edits(draft):
+    """The operating settings a draft changes that ``config.json`` keeps a copy of.
+
+    An earlier v0.10 release reads them only from ``config.json``; the apply
+    writes them there besides the runtime state, so a rollback runs the same
+    values (``ROLLBACK_CONFIG_COPIES``, gone in v0.11.0). Each as the runtime
+    service stores it; one it refuses is left to the operating change, which
+    names the refusal.
+    """
+
+    base = draft.get(OPERATING_BASE_KEY) if isinstance(draft.get(OPERATING_BASE_KEY), dict) else {}
+    copies = {}
+    for path, value in operating_feature_edits(draft).items():
+        if path not in ROLLBACK_CONFIG_COPIES:
+            continue
+        section, _, key = path.partition(".")
+        try:
+            stored = validate_section_values(section, {key: value})[key]
+        except RuntimeWriteError:
+            continue
+        if path not in base or values_differ(base[path], stored):
+            copies[path] = stored
+    return copies
+
+
 def _edited(base, key, value):
     """Whether this page changed ``key`` from the value it loaded; a draft that carries none changed nothing.
 
@@ -277,6 +303,8 @@ def operation_changes(context, current, draft, *, merged=None, resolved=None):
                 target = (path, "section", section, key, value)
         except RuntimeWriteError as exc:
             issues.append({"code": "operating_value_invalid", "message": f"{path}: {exc}"})
+            continue
+        if not values_differ(before, value):
             continue
         changes.append({"path": path, "before": before, "after": value, "applies_live": True})
         targets.append(target)

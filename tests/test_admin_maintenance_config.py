@@ -629,11 +629,15 @@ def test_feature_change_is_coerced_and_diffed(tmp_path):
     draft = load_maintenance_config(base_dir=str(tmp_path))["draft"]
     draft["features"]["winter.winter_min_soc"] = 35
     draft["features"]["winter.enabled"] = not draft["features"]["winter.enabled"]
+    draft["features"]["dashboard.port"] = "8081"
     preview = preview_maintenance_config(draft, base_dir=str(tmp_path))
     rows = {c["path"]: c for bucket in ("changes", "added") for c in preview["diff"][bucket]}
-    assert preview["preview"]["winter"]["winter_min_soc"] == 35
-    assert rows["winter.winter_min_soc"]["applies_live"] is False
+    assert preview["preview"]["dashboard"]["port"] == 8081
+    assert rows["dashboard.port"]["applies_live"] is False
+    assert rows["winter.winter_min_soc"]["applies_live"] is True
     assert rows["winter.enabled"]["applies_live"] is True
+    assert preview["preview"]["winter"]["winter_min_soc"] == 35
+    assert [row["path"] for row in preview["diff"]["changes"]].count("winter.winter_min_soc") == 1
     assert preview["preview"]["winter"].get("enabled") == _config()["winter"].get("enabled")
 
 
@@ -2202,32 +2206,69 @@ def test_a_port_the_ems_accepts_passes(port):
     assert "zendure_mqtt_port_invalid" not in codes
 
 
-def test_an_operating_value_the_runtime_service_refuses_blocks_the_apply(tmp_path):
-    _write_config(tmp_path, _config())
+@pytest.mark.parametrize("copy", [[10, 11, 12, 1, 2, 3], [11, 12]])
+def test_months_typed_again_as_they_are_change_nothing(tmp_path, copy):
+    """Not even a copy edited into config.json by hand, which the EMS does not run."""
+
+    config = _config()
+    config["winter"]["months"] = copy
+    _write_config(tmp_path, config)
+    runtime = {"winter": {"enabled": False, "months": [10, 11, 12, 1, 2, 3]}}
+    (tmp_path / "runtime-state.json").write_text(json.dumps(runtime))
     draft = load_maintenance_config(base_dir=str(tmp_path))["draft"]
-    draft["features"]["winter.enabled"] = "perhaps"
+    draft["features"]["winter.months"] = "10,11,12,1,2,3"
 
     preview = preview_maintenance_config(draft, base_dir=str(tmp_path))
 
-    codes = [e["code"] for e in preview["validation"]["errors"] if "winter.enabled" in e["message"]]
-    assert codes == ["operating_value_invalid"]
-    assert not (tmp_path / "runtime-state.json").exists()
+    assert not [row for bucket in ("changes", "added") for row in preview["diff"][bucket] if row["path"] == "winter.months"]
+    assert preview["diff"]["changed"] is False
+
+
+def test_months_typed_into_the_settings_field_reach_both_stores(tmp_path):
+    """The Admin's month field sends text; the runtime state and config.json's rollback copy both get the list."""
+
+    _write_config(tmp_path, _config())
+    draft = load_maintenance_config(base_dir=str(tmp_path))["draft"]
+    draft["features"]["winter.months"] = "11, 12, 1"
+
+    preview = preview_maintenance_config(draft, base_dir=str(tmp_path))
+
+    assert not [e for e in preview["validation"]["errors"] if "winter.months" in e["message"]]
+    rows = [row for row in preview["diff"]["changes"] if row["path"] == "winter.months"]
+    assert rows and rows[0]["after"] == [11, 12, 1] and rows[0]["applies_live"] is True
+    assert preview["preview"]["winter"]["months"] == [11, 12, 1]
 
 
 @pytest.mark.parametrize(
     "path,value",
     [
+        ("winter.enabled", "perhaps"),
         ("winter.adjust_hour", "noon"),
         ("winter.ramp_step_percent", 9),
+        ("winter.months", [13]),
     ],
 )
-def test_a_feature_value_its_type_cannot_hold_blocks_the_apply(path, value):
+def test_an_operating_value_the_runtime_service_refuses_blocks_the_apply(tmp_path, path, value):
+    _write_config(tmp_path, _config())
+    draft = load_maintenance_config(base_dir=str(tmp_path))["draft"]
+    draft["features"][path] = value
+
+    preview = preview_maintenance_config(draft, base_dir=str(tmp_path))
+
+    codes = [e["code"] for e in preview["validation"]["errors"] if path in e["message"]]
+    assert codes == ["operating_value_invalid"]
+    assert not (tmp_path / "runtime-state.json").exists()
+
+
+@pytest.mark.parametrize("value", ["eighty", 70000])
+def test_a_feature_value_its_type_cannot_hold_blocks_the_apply(value):
     from admin.maintenance_config import _merge_draft, _validate, build_maintenance_draft
 
+    path = "dashboard.port"
     config = {
         "system": {"enabled": True},
         "devices": [{"name": "INV_1", "ip": "192.0.2.5", "sn": "ABC"}],
-        "winter": {"enabled": True, "adjust_hour": 12, "ramp_step_percent": 3},
+        "dashboard": {"enabled": True, "port": 8080},
     }
     draft = build_maintenance_draft(config)
     draft["features"][path] = value
@@ -2236,7 +2277,7 @@ def test_a_feature_value_its_type_cannot_hold_blocks_the_apply(path, value):
     merged = _merge_draft(config, draft, issues)
     errors = _validate(merged, issues)["errors"]
 
-    assert merged["winter"] == {"enabled": True, "adjust_hour": 12, "ramp_step_percent": 3}
+    assert merged["dashboard"] == {"enabled": True, "port": 8080}
     assert [e["code"] for e in errors if path in e["message"]] == ["config_value_invalid"]
 
 
@@ -2267,18 +2308,18 @@ def test_a_stored_value_outside_the_catalog_range_does_not_block_other_edits():
     config = {
         "system": {"enabled": True},
         "devices": [{"name": "INV_1", "ip": "192.0.2.5", "sn": "ABC"}],
-        "winter": {"enabled": True, "ramp_step_percent": 5, "adjust_hour": 12},
+        "dashboard": {"enabled": True, "port": 70000, "history_hours": 48},
     }
     draft = build_maintenance_draft(config)
-    draft["features"]["winter.adjust_hour"] = 13
+    draft["features"]["dashboard.history_hours"] = 24
     issues = []
 
     merged = _merge_draft(config, draft, issues)
     codes = [e["code"] for e in _validate(merged, issues)["errors"]]
 
     assert "config_value_invalid" not in codes
-    assert merged["winter"]["ramp_step_percent"] == 5
-    assert merged["winter"]["adjust_hour"] == 13
+    assert merged["dashboard"]["port"] == 70000
+    assert merged["dashboard"]["history_hours"] == 24
 
 
 def test_a_stored_out_of_range_value_sent_back_as_text_is_still_left_alone():
@@ -2287,17 +2328,17 @@ def test_a_stored_out_of_range_value_sent_back_as_text_is_still_left_alone():
     config = {
         "system": {"enabled": True},
         "devices": [{"name": "INV_1", "ip": "192.0.2.5", "sn": "ABC"}],
-        "winter": {"enabled": True, "ramp_step_percent": 5},
+        "dashboard": {"enabled": True, "port": 70000},
     }
     draft = build_maintenance_draft(config)
-    draft["features"]["winter.ramp_step_percent"] = "5"
+    draft["features"]["dashboard.port"] = "70000"
     issues = []
 
     merged = _merge_draft(config, draft, issues)
     codes = [e["code"] for e in _validate(merged, issues)["errors"]]
 
     assert "config_value_invalid" not in codes
-    assert merged["winter"]["ramp_step_percent"] == 5
+    assert merged["dashboard"]["port"] == 70000
 
 
 def _config_with_an_mqtt_device_and_meter():

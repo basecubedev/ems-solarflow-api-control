@@ -333,6 +333,8 @@ def _coerce(value, value_type):
         return cfg.safe_int(value, 0)
     if value_type == "float":
         return cfg.safe_float(value, 0.0)
+    if value_type == "month_list":
+        return cfg.winter_operating_values({"months": value})["months"]
     return "" if value is None else str(value).strip().lower()
 
 
@@ -352,6 +354,10 @@ _EMS_SECTION_READS = {
     ("battery_care", "pv_margin_percent"): (
         lambda value: cfg.battery_care_percent(value, cfg.BATTERY_CARE_DEFAULTS["pv_margin_percent"])
     ),
+    **{
+        ("winter", key): (lambda value, key=key: cfg.winter_operating_values({key: value})[key])
+        for key in ("summer_min_soc", "winter_min_soc", "ramp_step_percent", "adjust_hour")
+    },
 }
 
 _EMS_SYSTEM_READS = {

@@ -334,7 +334,7 @@ def _winter_target(pack_num):
     )
     morning = datetime(2026, 11, 2, 9, 0)
     with patch("ems.controller.cfg.winter_feature_enabled", return_value=True), patch(
-        "ems.controller.cfg.winter_config_int", return_value=40
+        "ems.controller.cfg.winter_min_soc_percent", return_value=40
     ), patch("ems.controller.cfg.ZENDURE_CONFIG", []):
         controller.winter.reconciliation_target(
             dev, state(soc=50, solar=0, pack_num=pack_num), True, morning
