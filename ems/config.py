@@ -18,7 +18,11 @@ from urllib.parse import urlparse
 from ems.device_fingerprints import device_fingerprints
 from ems.logging_utils import log_event
 from ems.modbus_meters import PROFILES_BY_TYPE as MODBUS_METER_PROFILES
-from ems.paths import resolve_config_path, resolve_template_path
+from ems.paths import (
+    RUNTIME_STATE_PATH_WITHOUT_SETTING,
+    resolve_config_path,
+    resolve_template_path,
+)
 from ems.read_only_devices import E3DC_MODBUS_DEVICE_TYPE, is_read_only_device_config
 from ems.retired_defaults import (
     CONFIG_REVISION_KEY,
@@ -103,7 +107,7 @@ SYSTEM_DEFAULTS = {
 MISSING_KEY_SYSTEM_DEFAULTS = {
     "dry_run": True,
     "allow_state_reconciliation_writes": False,
-    "runtime_state_path": "runtime-state.json",
+    "runtime_state_path": RUNTIME_STATE_PATH_WITHOUT_SETTING,
 }
 
 SIMULATION_SYSTEM_OVERRIDES = {

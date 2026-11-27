@@ -43,7 +43,12 @@ from ems.mqtt_credentials import (
     DISCOVERY_CONNECTIONS_FILENAME,
     MANAGED_RECORD_NAME,
 )
-from ems.paths import BASE_DIR, resolve_data_dir, resolve_schedules_path
+from ems.paths import (
+    BASE_DIR,
+    RUNTIME_STATE_PATH_WITHOUT_SETTING,
+    resolve_data_dir,
+    resolve_schedules_path,
+)
 from ems.zendure_mqtt.builtin_broker import broker_settings_path, mappings_path
 
 APP_NAME = "ems-solarflow-api-control"
@@ -75,7 +80,7 @@ INFLUX_EXTERNAL_MESSAGE = (
 )
 INFLUX_ARCHIVE_SUBDIR = "influxdb"
 
-DEFAULT_RUNTIME_STATE_PATH = "data/runtime-state.json"
+DEFAULT_RUNTIME_STATE_PATH = RUNTIME_STATE_PATH_WITHOUT_SETTING
 DEFAULT_DASHBOARD_AUTH_PATH = DASHBOARD_DEFAULTS["auth_file"]
 DEFAULT_DASHBOARD_CERT_PATH = DASHBOARD_DEFAULTS["ssl_cert_file"]
 DEFAULT_DASHBOARD_KEY_PATH = DASHBOARD_DEFAULTS["ssl_key_file"]

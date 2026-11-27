@@ -163,6 +163,14 @@ def test_an_unreadable_tuning_value_runs_the_template_value(tmp_path):
         restore_config_module(snapshot)
 
 
+def test_every_surface_names_the_same_shared_password_file():
+    from admin import auth as admin_auth
+    from dashboard import auth as dashboard_auth
+
+    assert DASHBOARD_DEFAULTS["auth_file"] == dashboard_auth.DEFAULT_AUTH_FILE
+    assert admin_auth.SHARED_AUTH_HINT == dashboard_auth.DEFAULT_AUTH_FILE
+
+
 def test_backup_and_statistics_defaults_are_the_template_values():
     template = json.loads(Path("config/config.template.json").read_text())
 
