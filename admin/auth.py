@@ -22,13 +22,14 @@ from pathlib import Path
 
 from admin.install_context import detect_install_context
 from dashboard.auth import (
+    DEFAULT_AUTH_FILE,
     create_password_file_if_missing,
     load_auth_file,
     verify_password_file,
 )
 
 # Friendly relative hint surfaced to the UI; never an absolute host path.
-SHARED_AUTH_HINT = "config/dashboard-auth.json"
+SHARED_AUTH_HINT = DEFAULT_AUTH_FILE
 
 # Surfaced when the shared file exists but cannot be parsed/validated. This is a
 # recovery state, never first-password setup.
@@ -96,7 +97,7 @@ def resolve_admin_auth_paths(base_dir=None):
     install_root = Path(context.install_root)
     config_path = Path(context.config_path)
     config_exists = context.config_exists
-    default_auth = install_root / "config" / "dashboard-auth.json"
+    default_auth = install_root / DEFAULT_AUTH_FILE
 
     if not config_exists:
         return AdminAuthPaths(

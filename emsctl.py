@@ -54,7 +54,6 @@ from ems import config as config_mod
 from ems import config_init as config_init_mod
 from ems.cli_privilege import PrivilegeDropError, maybe_drop_privileges
 
-DEFAULT_RUNTIME_STATE_PATH = os.path.join(BASE_DIR, "runtime-state.json")
 TOP_LEVEL_COMMANDS = (
     "status",
     "system",

@@ -207,13 +207,16 @@ def resolve_project_path(path):
     return os.path.join(BASE_DIR, path)
 
 
+RUNTIME_STATE_PATH_WITHOUT_SETTING = "runtime-state.json"
+
+
 def resolve_runtime_path(args, config):
     if args.runtime_state:
         path = args.runtime_state
     else:
         path = (
             config.get("system", {})
-            .get("runtime_state_path", "runtime-state.json")
+            .get("runtime_state_path", RUNTIME_STATE_PATH_WITHOUT_SETTING)
         )
 
     if not os.path.isabs(path):

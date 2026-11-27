@@ -23,10 +23,11 @@ from ems.config import (
     BATTERY_CARE_MAX_WATTS,
     GRID_TARGET_MAX_W,
 )
+from ems.config import OFFGRID_SOCKET_MODES as FIRMWARE_OFFGRID_SOCKET_MODES
 from ems.logging_utils import log_event
 
 
-OFFGRID_SOCKET_MODES = ("off", "eco", "standard")
+OFFGRID_SOCKET_MODES = tuple(reversed(FIRMWARE_OFFGRID_SOCKET_MODES))
 GENERIC_MAX_POWER_W = 5000
 DEVICE_MAXIMUM = "max"
 
@@ -583,6 +584,30 @@ def attach_limits(payload, validation_context, offered_settings=None, defaults=N
     return result
 
 
+def field_specs():
+    """Each runtime field's kind, range and choices as the writer checks them, for a form to offer the same."""
+
+    return {
+        "system": {key: _field_spec(*rule) for key, rule in SYSTEM_FIELDS.items()},
+        "devices": {
+            key: _field_spec(*rule) for key, rule in {**DEVICE_FIELDS, **DEVICE_AC_FIELDS}.items()
+        },
+        "sections": {
+            section: {key: _field_spec(*rule) for key, rule in fields.items()}
+            for section, fields in SECTION_FIELDS.items()
+        },
+    }
+
+
+def _field_spec(value_type, rule):
+    spec = {"type": value_type}
+    if value_type == "enum":
+        spec["options"] = list(rule)
+    elif isinstance(rule, tuple) and len(rule) == 2:
+        spec["min"], spec["max"] = rule
+    return spec
+
+
 def effective_limits(validation_context=None):
     context = validation_context if isinstance(validation_context, dict) else {}
     return {
@@ -609,6 +634,7 @@ def effective_limits(validation_context=None):
         "ac_charge_power_max": DEVICE_AC_FIELDS["ac_charge_power_w"][1][1],
         "ac_role_unsupported": list(context.get("ac_role_unsupported") or ()),
         "device_settings": device_settings.catalogue(),
+        "fields": field_specs(),
     }
 
 

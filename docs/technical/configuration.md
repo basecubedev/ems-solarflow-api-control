@@ -81,10 +81,15 @@ python3 -B ems-solarflow-api-control.py --dry-run --once
 
 ## Updating config.json After Upgrades
 
-New releases may add config keys. EMS keeps older configs running by applying
-conservative runtime fallback defaults in memory. Normal startup does not add
-them to `config.json`; it writes the file only to refresh
-[old defaults](#old-defaults).
+New releases may add config keys. EMS keeps older configs running by filling a
+missing key in memory with the template's value, the default the Admin console
+and this documentation show. Three keys keep a value of their own when
+missing: without `system.dry_run` the EMS runs as a dry run, without
+`system.allow_state_reconciliation_writes` it writes no device state, and
+without `system.runtime_state_path` it keeps the runtime state in
+`runtime-state.json` in the installation folder, where such a config always
+had it. Normal startup does not add the keys to `config.json`; it writes the
+file only to refresh [old defaults](#old-defaults).
 
 To review missing keys:
 

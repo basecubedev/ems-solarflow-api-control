@@ -71,6 +71,21 @@ def test_the_control_page_offers_every_device_runtime_field():
     assert set(DEVICE_FIELDS) | set(DEVICE_AC_FIELDS) <= offered
 
 
+def test_the_control_page_takes_its_fixed_ranges_and_choices_from_the_writer():
+    """A range or a choice list spelled out in the page drifts from the writer's checks."""
+
+    from pathlib import Path
+
+    editor = (Path(__file__).resolve().parents[1] / "frontend/dashboard-modern/src/widgets/RuntimeEditor.svelte").read_text(encoding="utf-8")
+
+    assert '...accepted("system", "loop_interval")' in editor
+    assert '...accepted("devices", "pv_priority_factor")' in editor
+    assert 'choices("offgrid_socket_mode")' in editor
+    assert 'choices("runtime_role")' in editor
+    assert '"off", "eco", "standard"' not in editor
+    assert 'value: "ac_output"' not in editor
+
+
 def test_every_dashboard_runtime_section_reaches_the_runtime_state():
     """Seeded defaults are only half: the merge kept two sections by name and
     dropped battery_care, so both dashboards showed it off while it ran."""

@@ -18,7 +18,11 @@ from urllib.parse import urlparse
 from ems.device_fingerprints import device_fingerprints
 from ems.logging_utils import log_event
 from ems.modbus_meters import PROFILES_BY_TYPE as MODBUS_METER_PROFILES
-from ems.paths import resolve_config_path, resolve_template_path
+from ems.paths import (
+    RUNTIME_STATE_PATH_WITHOUT_SETTING,
+    resolve_config_path,
+    resolve_template_path,
+)
 from ems.read_only_devices import E3DC_MODBUS_DEVICE_TYPE, is_read_only_device_config
 from ems.retired_defaults import (
     CONFIG_REVISION_KEY,
@@ -69,6 +73,51 @@ OUTPUT_CONTROL_DEFAULTS = {
     "telemetry_max_age_seconds": 10,
     "stale_telemetry_ramp_factor": 0.5,
     "write_dead_time_seconds": 0.0
+}
+
+SYSTEM_DEFAULTS = {
+    "enabled": True,
+    "dry_run": False,
+    "simulation_mode": False,
+    "allow_hardware_writes": True,
+    "allow_mqtt_local_control_writes": True,
+    "allow_mqtt_zendure_control_writes": True,
+    "allow_state_reconciliation_writes": True,
+    "reconcile_smart_mode": True,
+    "log_level": "info",
+    "max_total_power": 800,
+    "max_device_power": 800,
+    "deadband": 2,
+    "runtime_state_path": "data/runtime-state.json",
+    "min_output_limit": 35,
+    "grid_target_discharge_w": 0,
+    "grid_target_charge_w": 0,
+    "loop_interval": 5,
+    "output_control": OUTPUT_CONTROL_DEFAULTS,
+    "redistribute_clamped_power": True,
+    "pv_kwp_weighting": True,
+    "pv_charge_balance_enabled": True,
+    "pv_charge_balance_deadband_percent": 1,
+    "pv_charge_balance_full_bias_percent": 15,
+    "pv_charge_balance_strength": 0.7,
+    "battery_kwh_weighting": True,
+    "soc_reconcile_interval": 10,
+}
+
+MISSING_KEY_SYSTEM_DEFAULTS = {
+    "dry_run": True,
+    "allow_state_reconciliation_writes": False,
+    "runtime_state_path": RUNTIME_STATE_PATH_WITHOUT_SETTING,
+}
+
+SIMULATION_SYSTEM_OVERRIDES = {
+    "simulation_mode": True,
+    "dry_run": True,
+    "allow_hardware_writes": False,
+    "allow_mqtt_local_control_writes": False,
+    "allow_mqtt_zendure_control_writes": False,
+    "allow_state_reconciliation_writes": False,
+    "log_level": "debug",
 }
 
 WINTER_DEFAULTS = {
@@ -988,37 +1037,39 @@ def render_config_json(data, layout=None):
 
 
 def default_safe_config():
-    """Return a minimal safe config for simulation and replay."""
+    """Return a minimal safe config for simulation and replay.
 
+    The defaults a live config resolves missing keys with, with simulation on
+    and every write switched off.
+    """
+
+    return _default_config(SIMULATION_SYSTEM_OVERRIDES)
+
+
+def default_runtime_config():
+    """Missing-key defaults for a normal (non-simulation) config load.
+
+    The template's values (``SYSTEM_DEFAULTS`` and the section defaults), so a
+    config that omits a key runs what the Admin and the documentation show as
+    its default. Three keys keep a value of their own when missing
+    (``MISSING_KEY_SYSTEM_DEFAULTS``): a config without ``dry_run`` or
+    ``allow_state_reconciliation_writes`` stays without those writes, and one
+    without ``runtime_state_path`` keeps its runtime state in the file it
+    always used. The write gates resolve to the release defaults, the same with
+    or without a config-upgrade file rewrite. Safe-mode paths keep
+    ``default_safe_config``.
+    """
+
+    return _default_config({"simulation_mode": False, **RELEASE_WRITE_GATE_DEFAULTS})
+
+
+def _default_config(system_overrides):
     return {
         "config_schema_version": CURRENT_CONFIG_SCHEMA_VERSION,
         "system": {
-            "enabled": True,
-            "dry_run": True,
-            "simulation_mode": True,
-            "allow_hardware_writes": False,
-            "allow_mqtt_local_control_writes": False,
-            "allow_mqtt_zendure_control_writes": False,
-            "allow_state_reconciliation_writes": False,
-            "reconcile_smart_mode": True,
-            "max_total_power": 800,
-            "max_device_power": 800,
-            "deadband": 2,
-            "runtime_state_path": "runtime-state.json",
-            "min_output_limit": 35,
-            "grid_target_discharge_w": 0,
-            "grid_target_charge_w": 0,
-            "loop_interval": 5,
-            "output_control": copy.deepcopy(OUTPUT_CONTROL_DEFAULTS),
-            "soc_reconcile_interval": 0,
-            "log_level": "debug",
-            "redistribute_clamped_power": True,
-            "pv_kwp_weighting": True,
-            "pv_charge_balance_enabled": True,
-            "pv_charge_balance_deadband_percent": 5,
-            "pv_charge_balance_full_bias_percent": 15,
-            "pv_charge_balance_strength": 1.0,
-            "battery_kwh_weighting": True
+            **copy.deepcopy(SYSTEM_DEFAULTS),
+            **MISSING_KEY_SYSTEM_DEFAULTS,
+            **system_overrides,
         },
         "winter": copy.deepcopy(WINTER_DEFAULTS),
         "dashboard": copy.deepcopy(DASHBOARD_DEFAULTS),
@@ -1040,21 +1091,6 @@ def default_safe_config():
             "ip": ""
         }
     }
-
-
-def default_runtime_config():
-    """Missing-key defaults for a normal (non-simulation) config load.
-
-    Starts from the explicit safe defaults, then switches simulation off and
-    applies the canonical release write-gate defaults so a normal config that
-    omits the gate keys resolves the same effective values with or without a
-    config-upgrade file rewrite. Safe-mode paths keep ``default_safe_config``.
-    """
-
-    config = default_safe_config()
-    config["system"]["simulation_mode"] = False
-    config["system"].update(RELEASE_WRITE_GATE_DEFAULTS)
-    return config
 
 
 def _deep_merge_defaults(defaults, values):
@@ -2788,16 +2824,16 @@ def initialize(args, base_dir):
     }
     RUNTIME_STATE_PATH = CONFIG["system"].get(
         "runtime_state_path",
-        "runtime-state.json"
+        MISSING_KEY_SYSTEM_DEFAULTS["runtime_state_path"]
     )
 
     try:
         MIN_OUTPUT_LIMIT = max(
             0,
-            int(CONFIG["system"].get("min_output_limit", 0))
+            int(CONFIG["system"].get("min_output_limit", SYSTEM_DEFAULTS["min_output_limit"]))
         )
     except (TypeError, ValueError):
-        MIN_OUTPUT_LIMIT = 0
+        MIN_OUTPUT_LIMIT = SYSTEM_DEFAULTS["min_output_limit"]
     GRID_TARGET_DISCHARGE_W = grid_target_w(CONFIG["system"].get("grid_target_discharge_w"))
     GRID_TARGET_CHARGE_W = grid_target_w(CONFIG["system"].get("grid_target_charge_w"))
 
@@ -2817,39 +2853,50 @@ def initialize(args, base_dir):
         system_config, "allow_state_reconciliation_writes"
     )
     RECONCILE_SMART_MODE = runtime_control_flag(system_config, "reconcile_smart_mode")
-    LOG_LEVEL = CONFIG["system"].get("log_level", "info").lower()
+    LOG_LEVEL = CONFIG["system"].get("log_level", SYSTEM_DEFAULTS["log_level"]).lower()
 
     if args.simulate or args.replay:
         LOG_LEVEL = "debug"
 
-    REDISTRIBUTE_CLAMPED_POWER = _allocation_switch(CONFIG["system"].get("redistribute_clamped_power", True))
-    PV_KWP_WEIGHTING = _allocation_switch(CONFIG["system"].get("pv_kwp_weighting", True))
+    defaults = SYSTEM_DEFAULTS
+    REDISTRIBUTE_CLAMPED_POWER = _allocation_switch(
+        CONFIG["system"].get("redistribute_clamped_power", defaults["redistribute_clamped_power"])
+    )
+    PV_KWP_WEIGHTING = _allocation_switch(
+        CONFIG["system"].get("pv_kwp_weighting", defaults["pv_kwp_weighting"])
+    )
     PV_CHARGE_BALANCE_ENABLED = safe_bool(
-        CONFIG["system"].get("pv_charge_balance_enabled", True),
-        True
+        CONFIG["system"].get("pv_charge_balance_enabled", defaults["pv_charge_balance_enabled"]),
+        defaults["pv_charge_balance_enabled"]
     )
     PV_CHARGE_BALANCE_DEADBAND_PERCENT = safe_float(
-        CONFIG["system"].get("pv_charge_balance_deadband_percent", 5),
-        5.0,
+        CONFIG["system"].get(
+            "pv_charge_balance_deadband_percent", defaults["pv_charge_balance_deadband_percent"]
+        ),
+        float(defaults["pv_charge_balance_deadband_percent"]),
         minimum=0.0
     )
     PV_CHARGE_BALANCE_FULL_BIAS_PERCENT = safe_float(
-        CONFIG["system"].get("pv_charge_balance_full_bias_percent", 15),
-        15.0,
+        CONFIG["system"].get(
+            "pv_charge_balance_full_bias_percent", defaults["pv_charge_balance_full_bias_percent"]
+        ),
+        float(defaults["pv_charge_balance_full_bias_percent"]),
         minimum=0.0
     )
     PV_CHARGE_BALANCE_STRENGTH = min(
         1.0,
         safe_float(
-            CONFIG["system"].get("pv_charge_balance_strength", 1.0),
-            1.0,
+            CONFIG["system"].get("pv_charge_balance_strength", defaults["pv_charge_balance_strength"]),
+            float(defaults["pv_charge_balance_strength"]),
             minimum=0.0
         )
     )
-    BATTERY_KWH_WEIGHTING = _allocation_switch(CONFIG["system"].get("battery_kwh_weighting", True))
+    BATTERY_KWH_WEIGHTING = _allocation_switch(
+        CONFIG["system"].get("battery_kwh_weighting", defaults["battery_kwh_weighting"])
+    )
     SOC_RECONCILE_INTERVAL = CONFIG["system"].get(
         "soc_reconcile_interval",
-        10
+        defaults["soc_reconcile_interval"]
     )
     WINTER_CONFIG = {
         **WINTER_DEFAULTS,

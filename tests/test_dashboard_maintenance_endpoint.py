@@ -1333,3 +1333,12 @@ def test_a_bare_named_entry_names_the_normalised_location(tmp_path, monkeypatch)
 
     expected = str(tmp_path / "shared" / "dash.sqlite")
     assert any(expected in warning and "/../" not in warning for warning in plan["warnings"])
+
+
+def test_a_restore_takes_back_the_runtime_state_the_ems_uses_for_a_config_without_a_path():
+    """Without ``system.runtime_state_path`` that is ``runtime-state.json`` in the installation folder."""
+
+    sources = maintenance._config_restore_sources({"system": {}})
+
+    assert "runtime-state.json" in sources
+    assert "data/runtime-state.json" not in sources
