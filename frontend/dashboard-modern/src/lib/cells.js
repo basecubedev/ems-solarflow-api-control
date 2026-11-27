@@ -17,8 +17,20 @@ export function packCells(entries) {
   if (!Array.isArray(entries)) return [];
   return entries
     .filter((entry) => Number.isInteger(entry?.pack) && entry.pack > 0 && entry.pack <= MAX_PACK_NUMBER)
-    .map((entry) => ({ pack: entry.pack, low: finite(entry.cell_min_v), high: finite(entry.cell_max_v) }))
+    .map((entry) => ({ pack: entry.pack, low: finite(entry.cell_min_v), high: finite(entry.cell_max_v), soc: finite(entry.soc) }))
     .sort((a, b) => a.pack - b.pack);
+}
+
+/** The emptiest and the fullest pack's own state of charge, null where no pack reports one. */
+export function packChargeRange(packs) {
+  const values = packs.map((pack) => pack.soc).filter((value) => value !== null && value !== undefined);
+  return { low: values.length ? Math.min(...values) : null, high: values.length ? Math.max(...values) : null, count: values.length };
+}
+
+/** "30–70 %", one value when both agree, a dash when no pack reports one. */
+export function chargeText(f, low, high) {
+  if (low === null || high === null || low === high) return f.percent(low ?? high);
+  return `${f.number(low, 0)}–${f.percent(high)}`;
 }
 
 /** The lowest and the highest cell over every pack, null where no pack reports one. */
@@ -102,14 +114,14 @@ export function temperatureText(f, low, high) {
   return `${lowText}${low < 0 ? " – " : "–"}${f.temperature(high)}`;
 }
 
-/** The packs of a normalized device that report their cells, a power with its direction or a temperature, each with all three. */
+/** The packs of a normalized device that report their charge, their cells, a power with its direction or a temperature, each with all four. */
 export function packReadings(device) {
   if (!device.hasBattery) return [];
   const flows = new Map(device.packFlows.map((flow) => [flow.pack, flow.watts]));
   const temperatures = new Map((device.packTemps || []).map((reading) => [reading.pack, reading.celsius]));
   return device.cells
-    .map((pack) => ({ ...pack, watts: flows.get(pack.pack) ?? null, celsius: temperatures.get(pack.pack) ?? null }))
-    .filter((pack) => pack.low !== null || pack.high !== null || pack.watts !== null || pack.celsius !== null);
+    .map((pack) => ({ ...pack, soc: pack.soc ?? null, watts: flows.get(pack.pack) ?? null, celsius: temperatures.get(pack.pack) ?? null }))
+    .filter((pack) => pack.soc !== null || pack.low !== null || pack.high !== null || pack.watts !== null || pack.celsius !== null);
 }
 
 /** What the packs together report, null when none reports its power. */
@@ -140,7 +152,7 @@ export function historyCellDevices(devices, seen = {}) {
     .map((device) => {
       const cells = reportedCells(device);
       const known = Math.min(Math.max(device.packs ?? 0, seen[device.name] ?? 0) || 1, MAX_PACK_NUMBER);
-      const counted = Array.from({ length: known }, (_, index) => ({ pack: index + 1, low: null, high: null }));
+      const counted = Array.from({ length: known }, (_, index) => ({ pack: index + 1, low: null, high: null, soc: null }));
       return { name: device.name, cells: cells.length ? cells : counted, reporting: cells.length > 0 };
     });
 }

@@ -617,7 +617,7 @@ def _history(snapshot, points=96, now=None):
 
 _PREVIEW_BATTERY_STATES = ("heat_state", "low_temp", "ac_input", "winter_hold", "derate", "error_flag")
 _PREVIEW_BATTERY_VALUES = ("device_temp", "min_soc", "winter_target", "charge_avail", "discharge_avail", "input_limit")
-_PREVIEW_PACK_SERIES = ("pack_temp", "cell_min", "cell_max")
+_PREVIEW_PACK_SERIES = ("pack_temp", "pack_soc", "cell_min", "cell_max")
 
 
 def preview_battery_series(series):
@@ -636,7 +636,8 @@ def preview_battery_value(series, hour):
     they are too cold the battery accepts no charge and the device derates,
     and it heats from 05:00 until they are warm again, when the morning's
     charge request comes. Winter mode holds the midday solar power for the
-    battery. Each further pack runs 0.7 °C warmer and its cells 10 mV lower.
+    battery. Each further pack runs 0.7 °C warmer, its cells 10 mV lower and
+    its charge 8 points lower.
     Deterministic, like the rest of the preview's history.
     """
 
@@ -646,6 +647,8 @@ def preview_battery_value(series, hour):
     cold = temp < 0.0
     if kind == "pack_temp":
         return round(temp + 0.7 * offset, 1)
+    if kind == "pack_soc":
+        return round(min(100.0, max(0.0, 55.0 + 25.0 * math.sin(2 * math.pi * (hour - 10.0) / 24.0) - 8.0 * offset)))
     if kind in ("cell_min", "cell_max"):
         low = 3.22 + 0.06 * math.sin(2 * math.pi * (hour - 13.0) / 24.0) - 0.01 * offset
         return round(low + (0.02 if kind == "cell_max" else 0.0), 3)

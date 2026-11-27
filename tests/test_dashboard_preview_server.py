@@ -178,6 +178,8 @@ def test_the_preview_answers_the_batteries_view_with_a_cold_night(preview_server
     assert heated == list(range(heated[0], heated[-1] + 1))
     assert all((watts == 0) == bool(low) for watts, low in zip(series["charge_avail"], series["low_temp"]))
     assert all(3.0 < volts < 3.4 for volts in series["cell_min:1"])
+    charge = _get_json(base, "/api/analytics/series?range=24h&series=pack_soc:1,pack_soc:2&devices=WR1")["series"]
+    assert all(0 <= second < first <= 100 for first, second in zip(charge["pack_soc:1"], charge["pack_soc:2"]))
 
 
 def test_the_preview_still_falls_back_for_a_series_it_does_not_know(preview_server):

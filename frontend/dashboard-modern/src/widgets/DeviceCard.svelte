@@ -11,7 +11,7 @@
   import Status from "../../../shared/ui/Status.svelte";
   import { t, fmt, tv, translatedOr } from "../i18n/i18n.svelte.js";
   import { assistView, firmwareFacts } from "../lib/devices.js";
-  import { cellRange, cellText, packFlowTotal, packReadings, reportedCells, temperatureRange, temperatureText } from "../lib/cells.js";
+  import { cellRange, cellText, chargeText, packChargeRange, packFlowTotal, packReadings, reportedCells, temperatureRange, temperatureText } from "../lib/cells.js";
   import { batteryDirection } from "../lib/flow.js";
 
   let { device } = $props();
@@ -29,15 +29,18 @@
   const cellsAll = $derived(cellRange(cells));
   const packFlow = $derived(packFlowTotal(d.packFlows));
   const packTemps = $derived(temperatureRange(d.packTemps));
+  const packCharge = $derived(d.hasBattery ? packChargeRange(d.cells) : { count: 0 });
   const packRows = $derived(
-    packReadings(d).map((pack) => ({
-      pack: pack.pack,
-      text: [
+    packReadings(d).map((pack) => {
+      const name = t("device.pack", { n: pack.pack });
+      const charge = pack.soc !== null ? f.percent(pack.soc) : null;
+      const details = [
         pack.low !== null || pack.high !== null ? cellText(f, pack.low, pack.high) : null,
         pack.watts !== null ? f.power(pack.watts, { signed: true }) : null,
         pack.celsius !== null ? f.temperature(pack.celsius) : null,
-      ].filter(Boolean).join(" · "),
-    })),
+      ].filter(Boolean).join(" · ");
+      return { pack: pack.pack, label: details && charge ? `${name} · ${charge}` : name, text: details || charge };
+    }),
   );
   const settings = $derived(
     Object.entries(d.settings || {})
@@ -100,8 +103,9 @@
     {#if d.inputLimitW !== null}<Fact label={t("device.inputLimit")} icon="plug-zap" value={f.power(d.inputLimitW)} wide />{/if}
     {#if d.limitApplicable}<Fact label={t("device.limit")} icon="sliders-horizontal" value={f.power(d.limitW)} missing={d.limitW === null} />{/if}
     {#if d.packs !== null}<Fact label={t("device.packs")} icon="battery" value={String(d.packs)} />{/if}
-    {#if cells.length}<Fact label={t("device.cells")} icon="battery-medium" tone="c-bat" value={cellText(f, cellsAll.low, cellsAll.high)} />{/if}
-    {#if packFlow !== null}<Fact label={t("device.packPower")} icon="battery-charging" tone="c-bat" value={f.power(packFlow, { signed: true })} />{/if}
+    {#if packCharge.count > 1}<Fact label={t("device.packCharge")} icon="battery-medium" tone="c-bat" value={show(chargeText(f, packCharge.low, packCharge.high))} missing={!d.online} wide />{/if}
+    {#if cells.length}<Fact label={t("device.cells")} icon="battery-medium" tone="c-bat" value={cellText(f, cellsAll.low, cellsAll.high)} wide />{/if}
+    {#if packFlow !== null}<Fact label={t("device.packPower")} icon="battery-charging" tone="c-bat" value={f.power(packFlow, { signed: true })} wide />{/if}
     {#if d.temperatureC !== null}<Fact label={t("device.inverterTemp")} icon="thermometer" value={show(f.temperature(d.temperatureC))} missing={!d.online} wide />{/if}
     {#if d.hasBattery && d.packTemps.length}<Fact label={t("device.packTemp")} icon="thermometer" tone="c-bat" value={show(temperatureText(f, packTemps.low, packTemps.high))} missing={!d.online} wide />{/if}
   </div>
@@ -109,9 +113,9 @@
   {#if packRows.length > 1}
     <details class="more" data-testid="device-cells">
       <summary><Icon name="chevron-right" />{t("device.packs")} · {packRows.length}</summary>
-      <div class="facts body">
+      <div class="facts body packs">
         {#each packRows as row (row.pack)}
-          <Fact label={t("device.pack", { n: row.pack })} icon="battery-medium" tone="c-bat" value={row.text} />
+          <Fact label={row.label} icon="battery-medium" tone="c-bat" value={row.text} />
         {/each}
       </div>
     </details>
@@ -183,6 +187,7 @@
   .device { display: flex; flex-direction: column; gap: var(--s4); container-type: inline-size; }
   @container (max-width: 405px) { .facts.two { grid-template-columns: minmax(0, 1fr); } }
   .facts.main { grid-auto-flow: dense; }
+  .facts.packs { grid-template-columns: minmax(0, 1fr); }
   .device.offline { border-style: dashed; }
   .head { display: flex; gap: var(--s3); align-items: center; }
   .title { flex: 1; min-width: 0; }

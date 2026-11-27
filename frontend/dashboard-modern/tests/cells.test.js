@@ -3,7 +3,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createFormat } from "../../shared/lib/format.js";
-import { packCells, packFlows, packFlowTotal, packReadings, packTemperatures, temperatureRange, temperatureText, cellRange, cellText, cellSeriesIds, cellKind, cellStyle, cellDevices, historyCellDevices, analyticsCellDevices, packsSeen, reportedCells, seriesExtreme, shownPack, voltRange } from "../src/lib/cells.js";
+import { chargeText, packChargeRange, packCells, packFlows, packFlowTotal, packReadings, packTemperatures, temperatureRange, temperatureText, cellRange, cellText, cellSeriesIds, cellKind, cellStyle, cellDevices, historyCellDevices, analyticsCellDevices, packsSeen, reportedCells, seriesExtreme, shownPack, voltRange } from "../src/lib/cells.js";
 import { normalizeDevice } from "../src/lib/devices.js";
 import { ANALYTICS_VIEWS, requestedSeries, seriesStyle, viewById } from "../src/lib/analytics.js";
 
@@ -16,7 +16,7 @@ test("the live data's packs come in pack order, a missing voltage stays null and
       { pack: "3", cell_min_v: 3.2 },
       null,
     ]),
-    [{ pack: 1, low: 3.17, high: 3.18 }, { pack: 2, low: 3.3, high: null }],
+    [{ pack: 1, low: 3.17, high: 3.18, soc: null }, { pack: 2, low: 3.3, high: null, soc: null }],
   );
   assert.deepEqual(packCells([{ pack: 17, cell_min_v: 3.2 }]), []);
   assert.deepEqual(packCells(undefined), []);
@@ -58,8 +58,8 @@ test("the packs a card lists are those that report their cells or a power with i
     ],
   });
   assert.deepEqual(packReadings(device), [
-    { pack: 1, low: 3.2, high: 3.22, watts: 30, celsius: null },
-    { pack: 2, low: null, high: null, watts: -4, celsius: null },
+    { pack: 1, low: 3.2, high: 3.22, soc: null, watts: 30, celsius: null },
+    { pack: 2, low: null, high: null, soc: null, watts: -4, celsius: null },
   ]);
   assert.deepEqual(packReadings(normalizeDevice("Inverter", { hardware: { battery: false }, battery_packs: [{ pack: 1, cell_min_v: 3.2 }] })), []);
 });
@@ -87,7 +87,7 @@ test("a pack that reports only its temperature is still listed on the card", () 
     battery_packs: [{ pack: 1, cell_min_v: null, cell_max_v: null, temp_c: 13 }],
   });
   assert.equal(device.temperatureC, 31.5);
-  assert.deepEqual(packReadings(device), [{ pack: 1, low: null, high: null, watts: null, celsius: 13 }]);
+  assert.deepEqual(packReadings(device), [{ pack: 1, low: null, high: null, soc: null, watts: null, celsius: 13 }]);
   assert.equal(normalizeDevice("Shed", { temperature_c: null }).temperatureC, null);
   assert.deepEqual(normalizeDevice("Inverter", { hardware: { battery: false }, battery_packs: [{ pack: 1, temp_c: 13 }] }).packTemps, []);
 });
@@ -142,7 +142,7 @@ test("only a device with a battery and a reported cell voltage gets a chart", ()
     device("Inverter", { battery: false }, [{ pack: 1, cell_min_v: 3.2, cell_max_v: 3.2 }]),
     device("Old", { battery: true }, undefined),
   ];
-  assert.deepEqual(cellDevices(devices), [{ name: "Grill", cells: [{ pack: 1, low: 3.17, high: 3.18 }] }]);
+  assert.deepEqual(cellDevices(devices), [{ name: "Grill", cells: [{ pack: 1, low: 3.17, high: 3.18, soc: null }] }]);
   assert.deepEqual(reportedCells(devices[2]), []);
   assert.deepEqual(devices[3].cells, []);
 });
@@ -156,9 +156,9 @@ test("the cell history offers every battery device, one that reports nothing now
     normalizeDevice("Inverter", { hardware: { battery: false }, pack_num: 0 }),
   ];
   assert.deepEqual(historyCellDevices(devices), [
-    { name: "Grill", cells: [{ pack: 1, low: 3.17, high: 3.18 }], reporting: true },
-    { name: "Offline", cells: [{ pack: 1, low: null, high: null }, { pack: 2, low: null, high: null }], reporting: false },
-    { name: "Unknown", cells: [{ pack: 1, low: null, high: null }], reporting: false },
+    { name: "Grill", cells: [{ pack: 1, low: 3.17, high: 3.18, soc: null }], reporting: true },
+    { name: "Offline", cells: [{ pack: 1, low: null, high: null, soc: null }, { pack: 2, low: null, high: null, soc: null }], reporting: false },
+    { name: "Unknown", cells: [{ pack: 1, low: null, high: null, soc: null }], reporting: false },
   ]);
 });
 
@@ -213,4 +213,21 @@ test("the batteries view leaves its series to battery.js, and a battery overlay 
   assert.deepEqual(seriesStyle(view, "cell_max:2"), { token: "--m-muted", fill: false });
   assert.deepEqual(seriesStyle(view, "soc").dash, [6, 4]);
   assert.ok(ANALYTICS_VIEWS.filter((item) => item.modernOnly).every((item) => item.consumers || item.cells));
+});
+
+
+test("a device's packs give their own charge, and the card names the emptiest and the fullest", () => {
+  const packs = packCells([{ pack: 2, soc: 70, cell_min_v: 3.31 }, { pack: 1, soc: 30 }, { pack: 3 }]);
+  assert.deepEqual(packs.map((pack) => [pack.pack, pack.soc]), [[1, 30], [2, 70], [3, null]]);
+  assert.deepEqual(packChargeRange(packs), { low: 30, high: 70, count: 2 });
+  assert.deepEqual(packChargeRange([]), { low: null, high: null, count: 0 });
+  const f = { number: (value) => String(value), percent: (value) => (value === null ? "—" : `${value} %`) };
+  assert.equal(chargeText(f, 30, 70), "30–70 %");
+  assert.equal(chargeText(f, 55, 55), "55 %");
+  assert.equal(chargeText(f, null, null), "—");
+});
+
+test("a pack that reports only its charge is still listed on the card", () => {
+  const device = normalizeDevice("Shed", { battery_packs: [{ pack: 1, soc: 44 }, { pack: 2, soc: 46 }] });
+  assert.deepEqual(packReadings(device).map((pack) => [pack.pack, pack.soc]), [[1, 44], [2, 46]]);
 });

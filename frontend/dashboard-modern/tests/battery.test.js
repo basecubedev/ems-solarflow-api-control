@@ -20,15 +20,26 @@ import {
   laneTime,
   laneTotals,
   packExtreme,
-  packTempPack,
+  packSeriesIds,
+  seriesPack,
   shownMeasure,
   stateLanes,
-  temperaturePacks,
+  shownPacks,
 } from "../src/lib/battery.js";
 
-test("Basic offers temperature and cell voltage; Expert adds the limits", () => {
-  assert.deepEqual(batteryMeasures(false).map((m) => m.id), ["temperature", "cells"]);
-  assert.deepEqual(batteryMeasures(true).map((m) => m.id), ["temperature", "cells", "limits"]);
+test("Basic offers temperature, charge and cell voltage; Expert adds the limits", () => {
+  assert.deepEqual(batteryMeasures(false).map((m) => m.id), ["temperature", "charge", "cells"]);
+  assert.deepEqual(batteryMeasures(true).map((m) => m.id), ["temperature", "charge", "cells", "limits"]);
+});
+
+test("the charge draws every pack's own state of charge on a percent axis, with the percent overlays", () => {
+  assert.equal(batteryMeasures(false).find((m) => m.id === "charge").unit, "%");
+  assert.deepEqual(packSeriesIds("charge", [1, 2]), ["pack_soc:1", "pack_soc:2"]);
+  assert.deepEqual(packSeriesIds("cells", [1, 2]), []);
+  const all = ["soc", "min_soc", "winter_target", "device_temp"];
+  assert.deepEqual(batteryChartIds("charge", [1, 2], 1, all, true), ["pack_soc:1", "pack_soc:2", "soc", "min_soc", "winter_target"]);
+  assert.deepEqual(batteryChartIds("charge", [], null, all, true), []);
+  assert.deepEqual(batteryStyle("pack_soc:3"), { label: "series.pack", args: { n: 3 }, token: "--output", fill: false });
 });
 
 test("a measure Basic does not offer falls back to the temperature", () => {
@@ -61,11 +72,13 @@ test("one request carries the chart and the lanes of the detail level", () => {
   assert.deepEqual(stateLanes(true).map((lane) => lane.id), ["heat_state", "low_temp", "ac_input", "winter_hold", "derate", "error_flag"]);
 });
 
-test("a pack temperature series names its pack", () => {
-  assert.equal(packTempPack("pack_temp:12"), 12);
-  assert.equal(packTempPack("pack_temp:0"), null);
-  assert.equal(packTempPack("cell_min:1"), null);
-  assert.deepEqual(batteryStyle("pack_temp:2"), { label: "series.packTemp", args: { n: 2 }, token: "--pv", fill: false });
+test("a pack series names its pack", () => {
+  assert.equal(seriesPack("pack_temp:12"), 12);
+  assert.equal(seriesPack("pack_soc:2"), 2);
+  assert.equal(seriesPack("pack_temp:0"), null);
+  assert.equal(seriesPack("cell_min:1"), null);
+  assert.equal(seriesPack("pack_volt:1"), null);
+  assert.deepEqual(batteryStyle("pack_temp:2"), { label: "series.pack", args: { n: 2 }, token: "--pv", fill: false });
   assert.equal(batteryStyle("min_soc").unit, "%");
   assert.equal(batteryStyle("pv"), null);
 });
@@ -99,9 +112,9 @@ test("a lane the device never reported is told apart from one that stayed off", 
 
 test("the coldest and the warmest pack over the range", () => {
   const data = { series: { "pack_temp:1": [1.5, null, 2], "pack_temp:2": [-0.5, 3] } };
-  assert.equal(packExtreme(data, [1, 2], "min"), -0.5);
-  assert.equal(packExtreme(data, [1, 2], "max"), 3);
-  assert.equal(packExtreme({ series: {} }, [1], "min"), null);
+  assert.equal(packExtreme(data, ["pack_temp:1", "pack_temp:2"], "min"), -0.5);
+  assert.equal(packExtreme(data, ["pack_temp:1", "pack_temp:2"], "max"), 3);
+  assert.equal(packExtreme({ series: {} }, ["pack_temp:1"], "min"), null);
 });
 
 test("the folded States card names the states that were on and for how long", () => {
@@ -150,10 +163,10 @@ test("the lanes' time scale is labelled at its ends and evenly between", () => {
 test("the temperature draws a pack that reports no cell voltage, and every pack the device counts", () => {
   const device = { packs: 3, cells: [{ pack: 1, low: 3.2, high: 3.21 }, { pack: 2, low: null, high: null }] };
   const offered = { cells: [{ pack: 1, low: 3.2, high: 3.21 }] };
-  assert.deepEqual(temperaturePacks(device, offered), [1, 2, 3]);
-  assert.deepEqual(temperaturePacks({ packs: 0, cells: [] }, { cells: [{ pack: 1, low: null, high: null }] }), [1]);
-  assert.deepEqual(temperaturePacks(undefined, null), []);
+  assert.deepEqual(shownPacks(device, offered), [1, 2, 3]);
+  assert.deepEqual(shownPacks({ packs: 0, cells: [] }, { cells: [{ pack: 1, low: null, high: null }] }), [1]);
+  assert.deepEqual(shownPacks(undefined, null), []);
   const uncounted = { packs: null, cells: [{ pack: 1, low: 3.2, high: 3.21 }, { pack: 2, low: null, high: null }] };
-  assert.deepEqual(temperaturePacks(uncounted, offered), [1, 2]);
-  assert.deepEqual(temperaturePacks({ packs: 40, cells: [] }, null).length, 16);
+  assert.deepEqual(shownPacks(uncounted, offered), [1, 2]);
+  assert.deepEqual(shownPacks({ packs: 40, cells: [] }, null).length, 16);
 });

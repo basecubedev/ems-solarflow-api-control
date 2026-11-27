@@ -15,7 +15,7 @@
   import { analyticsCellDevices, cellStyle, seriesExtreme, shownPack } from "../lib/cells.js";
   import CellPicker from "../ui/CellPicker.svelte";
   import StateLanes from "../ui/StateLanes.svelte";
-  import { batteryChartIds, batteryMeasures, batteryOverlays, batteryRequest, batteryStyle, laneSummary, lanesCoarse, laneTotals, packExtreme, shownMeasure, stateLanes, temperaturePacks } from "../lib/battery.js";
+  import { batteryChartIds, batteryMeasures, batteryOverlays, batteryRequest, batteryStyle, laneSummary, lanesCoarse, laneTotals, packExtreme, packSeriesIds, shownMeasure, shownPacks, stateLanes } from "../lib/battery.js";
   import { analyticsDetail, setAnalyticsDetail } from "../state/prefs.svelte.js";
   import { chartConsumers, chartTokens, consumerPalette, consumerSeriesId, restOfHouse, OTHER_TOKEN } from "../lib/consumers.js";
   import { devices } from "../state/derived.svelte.js";
@@ -62,8 +62,9 @@
   const shownDevice = $derived(view.cells ? cellDevice?.name || "" : device);
   const expert = $derived(analyticsDetail.detail === "expert");
   const measure = $derived(shownMeasure(wantedMeasure, expert));
-  const tempPacks = $derived(view.cells && cellDevice ? temperaturePacks(devices().find((entry) => entry.name === cellDevice.name), cellDevice) : []);
-  const batteryIds = $derived(view.cells ? batteryChartIds(measure.id, tempPacks, pack, overlays, expert) : []);
+  const packList = $derived(view.cells && cellDevice ? shownPacks(devices().find((entry) => entry.name === cellDevice.name), cellDevice) : []);
+  const batteryIds = $derived(view.cells ? batteryChartIds(measure.id, packList, pack, overlays, expert) : []);
+  const perPackIds = $derived(view.cells ? packSeriesIds(measure.id, packList) : []);
   const chosen = $derived(view.consumers ? chartConsumers(live.snapshot, live.snapshot?.energy_stats?.lifetime) : { shown: [], rest: false });
   const palette = $derived(view.consumers ? consumerPalette(live.snapshot, live.snapshot?.energy_stats?.lifetime) : null);
   // A string, so a live frame naming the same consumers in the same colours
@@ -392,11 +393,20 @@
     {#if view.cells && measure.id === "temperature"}
       <div class="card kpi c-bat" data-testid="analytics-temp-kpi">
         <div class="kpi-label">{t("battery.coldest")} · {rangeLabel}</div>
-        <div class="kpi-value num">{f.temperature(packExtreme(data, tempPacks, "min"))}</div>
+        <div class="kpi-value num">{f.temperature(packExtreme(data, perPackIds, "min"))}</div>
       </div>
       <div class="card kpi c-bat" data-testid="analytics-temp-kpi">
         <div class="kpi-label">{t("battery.warmest")} · {rangeLabel}</div>
-        <div class="kpi-value num">{f.temperature(packExtreme(data, tempPacks, "max"))}</div>
+        <div class="kpi-value num">{f.temperature(packExtreme(data, perPackIds, "max"))}</div>
+      </div>
+    {:else if view.cells && measure.id === "charge"}
+      <div class="card kpi c-bat" data-testid="analytics-charge-kpi">
+        <div class="kpi-label">{t("battery.lowestCharge")} · {rangeLabel}</div>
+        <div class="kpi-value num">{f.percent(packExtreme(data, perPackIds, "min"))}</div>
+      </div>
+      <div class="card kpi c-bat" data-testid="analytics-charge-kpi">
+        <div class="kpi-label">{t("battery.highestCharge")} · {rangeLabel}</div>
+        <div class="kpi-value num">{f.percent(packExtreme(data, perPackIds, "max"))}</div>
       </div>
     {:else if view.cells && measure.id === "cells"}
       <div class="card kpi c-bat" data-testid="analytics-cell-kpi">

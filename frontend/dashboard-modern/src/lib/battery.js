@@ -5,7 +5,8 @@
  * range, as InfluxDB records it (ems.history.schema BATTERY_DOWNSAMPLED).
  *
  * One measure is drawn at a time, each on its own unit: the packs'
- * temperatures, one pack's cell voltages, or what the battery accepts. The
+ * temperatures, the packs' states of charge, one pack's cell voltages, or
+ * what the battery accepts. The
  * states the device and the EMS report (heating, too cold, charging role,
  * winter hold) are no lines but lanes under the chart. Basic shows what a
  * battery in the cold needs; Expert adds the rest.
@@ -16,7 +17,8 @@ import { cellSeriesIds, MAX_PACK_NUMBER } from "./cells.js";
 import { gapLimit, sampleSpacing, zoomSpan } from "./history.js";
 
 export const BATTERY_MEASURES = Object.freeze([
-  { id: "temperature", unit: "°C" },
+  { id: "temperature", unit: "°C", perPack: "pack_temp" },
+  { id: "charge", unit: "%", perPack: "pack_soc" },
   { id: "cells", unit: "V" },
   { id: "limits", unit: "W", expert: true },
 ]);
@@ -65,34 +67,39 @@ export function stateLanes(expert) {
 }
 
 /**
- * The packs a device's temperature chart draws: every pack it reports, a pack
- * with a temperature but no cell voltage too, the ones the history view
- * offers for it, and as many as it counts.
+ * The packs a measure with a line per pack draws: every pack the device
+ * reports, one with a temperature or a charge but no cell voltage too, the
+ * ones the history view offers for it, and as many as it counts.
  */
-export function temperaturePacks(device, offered) {
+export function shownPacks(device, offered) {
   const numbers = new Set([...(offered?.cells || []), ...(device?.cells || [])].map((entry) => entry.pack));
   const counted = Math.min(Number(device?.packs) || 0, MAX_PACK_NUMBER);
   for (let pack = 1; pack <= counted; pack += 1) numbers.add(pack);
   return [...numbers].filter((pack) => Number.isInteger(pack) && pack > 0 && pack <= MAX_PACK_NUMBER).sort((a, b) => a - b);
 }
 
-export function packTempId(pack) {
-  return `pack_temp:${pack}`;
+/** The series a measure with a line per pack reads for its packs, none for another measure. */
+export function packSeriesIds(measure, packs) {
+  const kind = BATTERY_MEASURES.find((entry) => entry.id === measure)?.perPack;
+  return kind ? packs.map((pack) => `${kind}:${pack}`) : [];
 }
 
-/** The pack a ``pack_temp:<n>`` series reads, or null for any other series. */
-export function packTempPack(id) {
-  const match = /^pack_temp:([1-9][0-9]*)$/.exec(String(id));
-  return match ? Number(match[1]) : null;
+const PER_PACK_KINDS = Object.freeze(BATTERY_MEASURES.filter((entry) => entry.perPack).map((entry) => entry.perPack));
+
+/** The pack a per-pack series (``pack_temp:<n>``, ``pack_soc:<n>``) reads, or null for any other series. */
+export function seriesPack(id) {
+  const match = /^([a-z_]+):([1-9][0-9]*)$/.exec(String(id));
+  return match && PER_PACK_KINDS.includes(match[1]) ? Number(match[2]) : null;
 }
 
 /**
- * The series the chart draws: every pack's temperature, one pack's cell
- * voltages, or the limits, then the overlays switched on that the measure
- * takes.
+ * The series the chart draws: every pack's temperature or charge, one pack's
+ * cell voltages, or the limits, then the overlays switched on that the
+ * measure takes.
  */
 export function batteryChartIds(measure, packs, pack, overlays, expert) {
-  const own = measure === "temperature" ? packs.map(packTempId) : measure === "cells" ? (pack === null ? [] : cellSeriesIds(pack)) : [...LIMIT_SERIES];
+  const perPack = packSeriesIds(measure, packs);
+  const own = perPack.length ? perPack : measure === "cells" ? (pack === null ? [] : cellSeriesIds(pack)) : measure === "limits" ? [...LIMIT_SERIES] : [];
   const allowed = new Set(batteryOverlays(expert, measure).map((overlay) => overlay.id));
   return own.length ? [...own, ...overlays.filter((id) => allowed.has(id))] : [];
 }
@@ -104,8 +111,8 @@ export function batteryRequest(chartIds, expert) {
 
 /** How a battery series is drawn and named; ``label`` is a string key, ``args`` its values. */
 export function batteryStyle(id) {
-  const pack = packTempPack(id);
-  if (pack !== null) return { label: "series.packTemp", args: { n: pack }, token: PACK_TOKENS[(pack - 1) % PACK_TOKENS.length], fill: false };
+  const pack = seriesPack(id);
+  if (pack !== null) return { label: "series.pack", args: { n: pack }, token: PACK_TOKENS[(pack - 1) % PACK_TOKENS.length], fill: false };
   if (id in PERCENT_SERIES) return { label: `series.${id}`, token: PERCENT_SERIES[id], unit: "%", ink: "--m-muted", fill: false, dash: [6, 4] };
   if (id === "device_temp") return { label: "series.device_temp", token: "--m-muted", fill: false, dash: [2, 3] };
   if (LIMIT_SERIES.includes(id)) return { label: `series.${id}`, token: { charge_avail: "--battery", discharge_avail: "--output", input_limit: "--grid" }[id], fill: false };
@@ -208,10 +215,10 @@ export function laneTicks(start, end, count = 5) {
   return Array.from({ length: count }, (_, index) => start + ((end - start) * index) / (count - 1));
 }
 
-/** The coldest or the warmest pack over the range, null without a reading. */
-export function packExtreme(data, packs, kind) {
-  const values = packs
-    .flatMap((pack) => data?.series?.[packTempId(pack)] || [])
+/** The lowest or the highest value any of the series reached over the range, null without a reading. */
+export function packExtreme(data, ids, kind) {
+  const values = ids
+    .flatMap((id) => data?.series?.[id] || [])
     .filter((value) => value !== null && value !== undefined && Number.isFinite(Number(value)))
     .map(Number);
   if (!values.length) return null;
