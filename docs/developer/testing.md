@@ -214,9 +214,9 @@ loadfile`), the four CPUs of a CI runner. Each test file stays in one worker,
 so a module's fixtures are set up once and never shared between processes; a
 file a test writes outside its `tmp_path` is shared, so two test files must not
 write the same one. `EMS_PYTEST_WORKERS=0` runs a group in one process,
-`EMS_PYTEST_WORKERS=2` on two. The full suite that runs after a merge stays one
-process on purpose: it is there to find the tests that only fail beside another
-one.
+`EMS_PYTEST_WORKERS=2` on two. The full suite that runs after a merge uses the
+same four workers and `--dist loadfile` across all groups at once, so a test file
+of one group can still meet a file of another on the same worker.
 
 In CI the Docker group runs as four shards, `--shard K/N` (`tests/shards.py`),
 each on a runner with a Docker daemon of its own. A shard takes whole test
@@ -237,8 +237,9 @@ weights name exists and that the job runs every shard it names.
 
 There is no nightly schedule. `.github/workflows/simulated-regression-tests.yml`
 and `.github/workflows/playwright-e2e.yml` run the full non-Docker suite on both
-supported Python versions, the strict deprecation check and the complete Chromium
-and Firefox Admin suites on the push to `main`, skipping them on pull requests.
+supported Python versions, the strict deprecation check (each on four workers, as
+jobs of their own) and the complete Chromium and Firefox Admin suites on the push
+to `main`, skipping them on pull requests.
 The Docker-first and System Build tiers run on every pull request already. The
 Admin upgrade/recovery journey belongs to
 `.github/workflows/admin-replacement-canary.yml`.

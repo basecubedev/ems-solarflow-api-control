@@ -152,17 +152,24 @@ for the user-facing summary of what is checked before release.
 
 ## What runs on a merge and not on a pull request
 
-There is no nightly schedule. A pull request answers in about fifteen minutes,
-and the work that cannot fit in fifteen minutes runs on the push to `main`
-instead — after the merge, where forty minutes costs nobody a wait. Both jobs
-carry `if: github.event_name == 'push'`, so a pull request skips them and the
-gate counts a skip as a pass.
+There is no nightly schedule. A pull request answers in about seven minutes,
+and the runs across the whole suite go to the push to `main` instead, where
+they take about ten. Both jobs carry `if: github.event_name == 'push'`, so a
+pull request skips them and the gate counts a skip as a pass.
 
 In `simulated-regression-tests.yml`:
 
-- `Repo full suite (<version>)` — the whole non-Docker collection in one
-  process on 3.11 and 3.14, plus the strict deprecation-warning run
-  (`PYTEST_DISABLE_PLUGIN_AUTOLOAD=1`, `-W error::DeprecationWarning`)
+- `Repo full suite (<version>, suite)` — the whole non-Docker collection on
+  3.11 and 3.14, on four workers (`-n auto --dist loadfile`, a file on one
+  worker, as in the groups)
+- `Repo full suite (<version>, deprecations)` — the same collection as the
+  strict deprecation-warning run (`PYTEST_DISABLE_PLUGIN_AUTOLOAD=1`, `-p
+  xdist`, `-W error::DeprecationWarning`), a job of its own beside it. The
+  filter reaches the workers through `PYTHONWARNINGS=error::DeprecationWarning`:
+  `-W` alone sets it in the controller only, and a deprecation inside a test
+  would pass. The variable also reaches every Python process a test starts, so
+  a deprecation makes such a child process fail, which a test that checks its
+  exit status or output sees
 
 In `playwright-e2e.yml`:
 
@@ -170,11 +177,14 @@ In `playwright-e2e.yml`:
   suites, the same projects the pull request runs `--grep`-narrowed
 
 The full suite is not extra coverage. The five pull-request groups are an exact
-partition of the same collection, so every test in it already ran. What one
-process adds is the only place an interaction *between* two tests can appear —
-the InfluxDB readiness timeout that failed in the full suite and passed in
-isolation is what that looks like. Running it before a merge would mean paying
-forty minutes for a class of failure that a merge is early enough to catch.
+partition of the same collection, each on four workers with a file kept on one
+worker, so every test in it already ran. What the full suite adds is test files
+of two groups meeting on one worker. Until 2026-11-27 it ran in one process,
+where every file met every other, and took about 25 minutes per run, two runs
+one after the other; on four workers it keeps part of that at a quarter of the
+time. Two files that land on two workers are not checked against each other;
+in the 60 merges before the change the full suite never failed where the
+groups had passed.
 
 The Docker-first and System Build tiers used to be duplicated on the nightly
 schedule. They are not duplicated anywhere now: `Repo docker-first setup e2e`
