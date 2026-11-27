@@ -16,8 +16,11 @@ never turn into "there are no releases".
 
 import io
 import json
+import os
 import sys
+import threading
 import urllib.error
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -140,6 +143,75 @@ def test_a_transport_failure_uses_a_fresh_cache_and_otherwise_none(tmp_path):
         cache_path=tmp_path / "absent.json",
         urlopen=_failing,
     ) is None
+
+
+def test_a_catalogue_from_the_cache_says_when_it_was_fetched(tmp_path):
+    cache = tmp_path / "cache.json"
+    load_release_catalogue(
+        "https://example.test/release-catalogue.json", cache_path=cache, urlopen=_serving(_document(_entry("v0.8.4")))
+    )
+    fetched = datetime.now(timezone.utc).timestamp() - 3600
+    os.utime(cache, (fetched, fetched))
+
+    cached = load_release_catalogue("https://example.test/release-catalogue.json", cache_path=cache, urlopen=_failing)
+
+    assert cached["cached_at"] == datetime.fromtimestamp(fetched, timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def test_a_listing_from_the_cached_catalogue_is_checked_as_of_its_fetch(tmp_path):
+    cache = tmp_path / "cache.json"
+    url = "https://example.test/release-catalogue.json"
+    load_release_catalogue(url, cache_path=cache, urlopen=_serving(_document(_entry("v0.8.4"))))
+    fetched = datetime.now(timezone.utc).timestamp() - 3600
+    os.utime(cache, (fetched, fetched))
+    manager = _manager(tmp_path, release_catalogue_source(url, cache_path=cache, urlopen=_failing))
+
+    manager.list_releases(for_upgrade=True)
+
+    assert manager._read_check()["checked_at"] == datetime.fromtimestamp(fetched, timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def test_a_listing_that_starts_while_another_records_its_check_leaves_that_check_its_time(tmp_path):
+    """Listing A has read the cached catalogue and waits in its running identity;
+    listing B starts and waits in its catalogue read; A then records its check."""
+
+    cache = tmp_path / "cache.json"
+    url = "https://example.test/release-catalogue.json"
+    load_release_catalogue(url, cache_path=cache, urlopen=_serving(_document(_entry("v0.8.4"))))
+    fetched = datetime.now(timezone.utc).timestamp() - 3600
+    os.utime(cache, (fetched, fetched))
+    cached = release_catalogue_source(url, cache_path=cache, urlopen=_failing)
+    b_reading, b_go, a_in_identity, a_go = (threading.Event() for _ in range(4))
+
+    def source():
+        if threading.current_thread().name == "B":
+            b_reading.set()
+            assert b_go.wait(10)
+        return cached()
+
+    manager = _manager(tmp_path, source)
+    running_identity = manager._running_identity
+
+    def identity():
+        if threading.current_thread().name == "A":
+            a_in_identity.set()
+            assert a_go.wait(10)
+        return running_identity()
+
+    manager._running_identity = identity
+    a = threading.Thread(target=manager.list_releases, kwargs={"for_upgrade": True}, name="A")
+    b = threading.Thread(target=manager.list_releases, kwargs={"for_upgrade": False}, name="B")
+    a.start()
+    assert a_in_identity.wait(10)
+    b.start()
+    assert b_reading.wait(10)
+    a_go.set()
+    a.join(10)
+    b_go.set()
+    b.join(10)
+
+    assert not a.is_alive() and not b.is_alive()
+    assert manager._read_check()["checked_at"] == datetime.fromtimestamp(fetched, timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def test_a_catalogue_that_names_no_release_is_trusted(tmp_path):
