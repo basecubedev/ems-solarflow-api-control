@@ -1632,6 +1632,7 @@ def _authority_hostname(authority):
 class AdminHandler(BaseHTTPRequestHandler):
     server_version = "AdminDiscovery/1.0"
     timeout = HANDSHAKE_TIMEOUT_SECONDS
+    _held_answers = None
 
     def _sanitize_external_mqtt_payload(self, payload):
         """Apply the installed-config-aware browser/export MQTT boundary."""
@@ -5410,7 +5411,7 @@ class AdminHandler(BaseHTTPRequestHandler):
         )
         if record is None:
             return
-        with claim:
+        with self._answer_after(claim):
             try:
                 result = preparer(
                     requested_tag=body.get("tag"),
@@ -5473,7 +5474,7 @@ class AdminHandler(BaseHTTPRequestHandler):
         )
         if record is None:
             return
-        with claim:
+        with self._answer_after(claim):
             try:
                 # Resolve first, then start the resolved pair, so the exact
                 # transition ownership can be persisted inside the pre-commit
@@ -5528,7 +5529,7 @@ class AdminHandler(BaseHTTPRequestHandler):
         )
         if record is None:
             return
-        with claim:
+        with self._answer_after(claim):
             try:
                 result = confirmer(
                     requested_tag=tag,
@@ -5562,6 +5563,37 @@ class AdminHandler(BaseHTTPRequestHandler):
                 return
             self._send_json(result)
 
+    @contextlib.contextmanager
+    def _answers_held(self):
+        """Keep every answer sent inside the block back until the block ends.
+
+        A client acts on an answer at once. One written while a Setup lifecycle
+        claim is still held lets the client's next Setup step meet
+        ``setup_operation_in_progress`` although this one is over, so a step
+        answers only once its claim is given up: a refusal as well as a result.
+        Inside an outer hold the answers wait for the outer one.
+        """
+        outer = self._held_answers
+        held = []
+        self._held_answers = held
+        try:
+            yield
+        finally:
+            self._held_answers = outer
+            for answer in held:
+                self._send_bytes(*answer)
+
+    @contextlib.contextmanager
+    def _answer_after(self, claim):
+        """Hold a Setup lifecycle claim for one step and answer once it is released.
+
+        A claim handed to a worker is not held this way: its request answers
+        while the worker still owns it.
+        """
+        with self._answers_held():
+            with claim:
+                yield
+
     def _setup_build_authority(self, body, *, operation):
         """Exact-workflow authority for one Setup System Build mutation.
 
@@ -5585,16 +5617,17 @@ class AdminHandler(BaseHTTPRequestHandler):
             self._send_workflow_rejection(exc)
             return None, None
         authorized = False
-        try:
-            if not self._setup_transition_ownership_proven(record):
-                return None, None
-            if not self._claim_setup_intent(record["workflow_id"]):
-                return None, None
-            authorized = True
-            return record, claim
-        finally:
-            if not authorized:
-                claim.release()
+        with self._answers_held():
+            try:
+                if not self._setup_transition_ownership_proven(record):
+                    return None, None
+                if not self._claim_setup_intent(record["workflow_id"]):
+                    return None, None
+                authorized = True
+                return record, claim
+            finally:
+                if not authorized:
+                    claim.release()
 
     def _setup_transition_ownership_proven(self, record):
         """Refuse to adopt a transition this workflow cannot prove it owns.
@@ -7307,13 +7340,14 @@ class AdminHandler(BaseHTTPRequestHandler):
         if setup_claim is None:
             return
         handed_over = False
-        try:
-            handed_over = bool(self._start_deployment_worker(setup_claim))
-        finally:
-            # A started worker owns the release through ``on_settled``; every
-            # other path must give the claim back here.
-            if not handed_over:
-                setup_claim.release()
+        with self._answers_held():
+            try:
+                handed_over = bool(self._start_deployment_worker(setup_claim))
+            finally:
+                # A started worker owns the release through ``on_settled``; every
+                # other path must give the claim back here.
+                if not handed_over:
+                    setup_claim.release()
 
     def _start_deployment_worker(self, setup_claim):
         """Drive the EMS start; returns True once the worker owns the claim."""
@@ -7556,7 +7590,7 @@ class AdminHandler(BaseHTTPRequestHandler):
         )
         if claim is None:
             return
-        with claim:
+        with self._answer_after(claim):
             self._resolve_setup_container_conflict(
                 claim, container_name=container_name, action=action
             )
@@ -8474,6 +8508,9 @@ class AdminHandler(BaseHTTPRequestHandler):
                 pass
 
     def _send_bytes(self, body, content_type, status=200, headers=None):
+        if self._held_answers is not None:
+            self._held_answers.append((body, content_type, status, headers))
+            return
         self.send_response(status)
         for key, value in SECURITY_HEADERS.items():
             self.send_header(key, value)

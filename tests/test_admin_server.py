@@ -3,6 +3,7 @@
 """Admin discovery HTTP server / API tests (no real network scans)."""
 
 import http.client
+import io
 import json
 import re
 import threading
@@ -26,10 +27,12 @@ from admin.system_alignment import (
     SystemAlignmentError,
     terminal_system_build_action_state,
 )
+from admin.setup_lifecycle import SetupLifecycleCoordinator
 from admin.system_build import SystemBuildError
 from admin.zendure_cloud_mqtt import FakeCloudMqttListener, ZendureCloudDiscovery
 from admin.server import (
     SECURITY_HEADERS,
+    AdminHandler,
     ScanRegistry,
     _result_view,
     create_admin_runtime,
@@ -4616,6 +4619,183 @@ def test_development_confirm_does_not_reauthorize_a_consumed_setup_intent(tmp_pa
     assert second_status == 409
     assert second["error"] == "setup_intent_consumed"
     assert len(alignment.confirm_calls) == 1
+
+
+def _record_answer_order(monkeypatch):
+    """Which request thread gave up a Setup claim and started an answer, in order."""
+
+    events = []
+    release = SetupLifecycleCoordinator._release
+    send_response = AdminHandler.send_response
+
+    def recorded_release(coordinator, token, *, failed=False):
+        release(coordinator, token, failed=failed)
+        events.append((threading.get_ident(), "released"))
+
+    def recorded_send_response(handler, code, message=None):
+        events.append((threading.get_ident(), ("answered", code)))
+        send_response(handler, code, message)
+
+    monkeypatch.setattr(SetupLifecycleCoordinator, "_release", recorded_release)
+    monkeypatch.setattr(AdminHandler, "send_response", recorded_send_response)
+    return events
+
+
+def _last_answer_order(events):
+    """The events of the request thread that answered last, in their order."""
+
+    answering = [thread for thread, event in events if event != "released"][-1]
+    return [event for thread, event in events if thread == answering]
+
+
+@pytest.mark.parametrize(
+    "route,stage,tag,answer",
+    [
+        ("/api/setup/system-build/confirm", "admin_aligned", _DEV_BUILD_TAG, 200),
+        ("/api/setup/releases/prepare", "resources_verified", "v0.8.0", 200),
+        ("/api/setup/system-build/update-admin", "admin_update_pending", "v0.8.0", 202),
+    ],
+)
+def test_a_setup_build_step_answers_only_once_its_claim_is_released(
+    tmp_path, monkeypatch, route, stage, tag, answer
+):
+    """A client acts on an answer at once, so the step it was told is done must
+    no longer hold the claim its next step needs: the request thread gives up
+    its claim, then writes its answer."""
+
+    alignment = _FakeSystemAlignment(stage=stage)
+    srv, base = _serve(release_manager=_TrackingReleaseManager(tmp_path))
+    _attach_system_alignment(srv, alignment)
+    try:
+        workflow_id, intent_id = _setup_build_authority(srv, base)
+        events = _record_answer_order(monkeypatch)
+        status, _, _ = _request(
+            f"{base}{route}",
+            method="POST",
+            body={"tag": tag, "setup_workflow_id": workflow_id},
+            extra_headers={"X-Setup-Intent-ID": intent_id},
+        )
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    assert status == answer
+    assert _last_answer_order(events)[-2:] == ["released", ("answered", answer)]
+
+
+def test_a_refused_setup_intent_answers_only_once_its_claim_is_released(
+    tmp_path, monkeypatch
+):
+    """The refusal of a spent intent comes after the mutation claim was taken:
+    the request thread gives that claim up, then refuses, so the client's next
+    step (an abandon, say) never meets it."""
+
+    alignment = _FakeSystemAlignment(stage="admin_aligned")
+    srv, base = _serve(release_manager=_TrackingReleaseManager(tmp_path))
+    _attach_system_alignment(srv, alignment)
+    try:
+        workflow_id, intent_id = _setup_build_authority(srv, base)
+        body = {"tag": _DEV_BUILD_TAG, "setup_workflow_id": workflow_id}
+        first, _, _ = _request(
+            f"{base}/api/setup/system-build/confirm",
+            method="POST",
+            body=body,
+            extra_headers={"X-Setup-Intent-ID": intent_id},
+        )
+        events = _record_answer_order(monkeypatch)
+        second, _, refused = _request(
+            f"{base}/api/setup/system-build/confirm",
+            method="POST",
+            body=body,
+            extra_headers={"X-Setup-Intent-ID": intent_id},
+        )
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    assert first == 200
+    assert (second, refused["error"]) == (409, "setup_intent_consumed")
+    assert _last_answer_order(events)[-2:] == ["released", ("answered", 409)]
+
+
+def test_a_container_conflict_answers_only_once_its_claim_is_released(monkeypatch):
+    """The request thread gives up its deployment claim, then writes its answer."""
+
+    srv, base = _serve(deployment=_FakeDeployment())
+    try:
+        body = _setup_body(
+            srv,
+            container_name="ems-solarflow-api-control",
+            action="remove_stopped_and_continue",
+        )
+        events = _record_answer_order(monkeypatch)
+        status, _, _ = _request(
+            f"{base}/api/setup/deployment/resolve-container-conflict",
+            method="POST",
+            body=body,
+        )
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    assert status == 200
+    assert _last_answer_order(events)[-2:] == ["released", ("answered", 200)]
+
+
+def test_answers_held_inside_an_outer_hold_wait_for_the_outer_one():
+    """An inner hold ends inside an outer one: its answer waits for the outer
+    hold to end, which a claim given up inside the outer block depends on."""
+
+    handler = object.__new__(AdminHandler)
+    handler.command = "POST"
+    handler.wfile = io.BytesIO()
+    sent = []
+    handler.send_response = lambda code, message=None: sent.append(code)
+    handler.send_header = lambda key, value: None
+    handler.end_headers = lambda: None
+
+    with handler._answers_held():
+        with handler._answers_held():
+            handler._send_json({"ok": True})
+        assert sent == []
+
+    assert sent == [200]
+    assert handler._held_answers is None
+
+
+class _RefusingStartDeployment(_FakeDeployment):
+    """Refuses the start the way the deployment service does: without taking
+    over the claim's release."""
+
+    def start(self, *, on_complete=None, workflow_id=None, on_settled=None):
+        self.start_calls += 1
+        return {
+            "ok": False,
+            "reason": "deployment_not_prepared",
+            "message": "Prepare deployment first.",
+            "status": 409,
+        }
+
+
+def test_a_refused_deployment_start_answers_only_once_its_claim_is_released(
+    monkeypatch,
+):
+    """A start no worker took over gives its claim back in the request thread
+    before the refusal is written, so a second start never meets it."""
+
+    srv, base = _serve(deployment=_RefusingStartDeployment())
+    try:
+        body = _setup_body(srv)
+        events = _record_answer_order(monkeypatch)
+        status, _, refused = _request(
+            f"{base}/api/setup/deployment/start", method="POST", body=body
+        )
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    assert (status, refused["reason"]) == (409, "deployment_not_prepared")
+    assert _last_answer_order(events)[-2:] == ["released", ("answered", 409)]
 
 
 def test_confirm_reports_a_different_active_transition_context(tmp_path):
