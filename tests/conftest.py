@@ -11,6 +11,7 @@ import pytest
 
 from ems import paths
 from tests.scratch_guard import scratch_shortfall
+from tests.shards import load_weights, parse_shard, select
 
 # Focused Zendure MQTT development-release gate: the fast, hardware-free subset
 # that must pass on every feature/development build without running the full
@@ -78,14 +79,33 @@ def pytest_collection_modifyitems(config, items):
             item.add_marker(marker)
 
 
+def pytest_addoption(parser):
+    parser.addoption(
+        "--shard",
+        default=None,
+        help="K/N: run only the test files of shard K of N, balanced by tests/shard_weights.json",
+    )
+
+
+@pytest.hookimpl(tryfirst=True)
 def pytest_collection_finish(session):
-    """Refuse a broad run that cannot fit its own scratch data.
+    """Keep this runner's shard, then refuse a run that cannot fit its own scratch data.
 
     This is the last hook before anything is written and the first one that
     sees the *final* selection: marker deselection happens inside
-    ``pytest_collection_modifyitems``, so counting there would refuse a targeted
-    tier for the size of the suite it was filtered out of.
+    ``pytest_collection_modifyitems``, so sharding or counting there would
+    split or refuse a targeted tier by the suite it was filtered out of.
     """
+
+    try:
+        shard = parse_shard(session.config.getoption("--shard"))
+    except ValueError as exc:
+        raise pytest.UsageError(str(exc)) from None
+    if shard is not None:
+        kept, left = select(session.items, shard, load_weights())
+        if left:
+            session.config.hook.pytest_deselected(items=left)
+        session.items[:] = kept
 
     temp_dir = tempfile.gettempdir()
     shortfall = scratch_shortfall(

@@ -13,6 +13,7 @@ import re
 from pathlib import Path
 
 import pytest
+import yaml
 
 pytestmark = [pytest.mark.unit, pytest.mark.simulation, pytest.mark.appliance]
 
@@ -151,19 +152,30 @@ def appliance_job():
 
 
 def test_every_project_the_job_runs_is_a_browser_it_installed():
-    """A project that was never downloaded fails at launch, not at assertion."""
+    """A project that was never downloaded fails at launch, not at assertion.
+
+    The job runs once per browser of its matrix; each run is checked with its
+    own browser put in.
+    """
 
     job = appliance_job()
     config = (ROOT / CONFIG).read_text(encoding="utf-8")
     declared = set(re.findall(r'name:\s*"(\w+)"', config))
+    matrix = yaml.safe_load((WORKFLOWS / "playwright-e2e.yml").read_text(encoding="utf-8"))["jobs"]["playwright-appliance"].get("strategy", {}).get("matrix", {})
     run = [line for line in job.splitlines() if "playwright test" in line][0]
     install = [line for line in job.splitlines() if line.strip().startswith("browsers:")][0]
 
-    selected = set(re.findall(r"--project=(\w+)", run)) or declared
-
     assert declared, "the appliance config declares no projects"
-    for project in selected:
-        assert project in install, f"the job runs {project} without installing it"
+    ran = set()
+    for browser in matrix.get("browser") or [None]:
+        resolved_run = run.replace("${{ matrix.browser }}", str(browser))
+        resolved_install = install.replace("${{ matrix.browser }}", str(browser))
+        assert "${{" not in resolved_run + resolved_install, "the job names a matrix value this test cannot resolve"
+        for project in set(re.findall(r"--project=(\w+)", resolved_run)) or declared:
+            assert project in declared, f"the job runs {project}, which the config does not declare"
+            assert project in resolved_install.split(), f"the job runs {project} without installing it"
+            ran.add(project)
+    assert ran == declared, f"the job never runs {sorted(declared - ran)}"
 
 
 def test_a_spec_that_writes_into_the_repository_is_not_collected_by_default():
