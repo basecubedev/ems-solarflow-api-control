@@ -84,6 +84,7 @@ CELL_MEASUREMENT = "battery_pack"
 BATTERY_TASK_SUFFIX = ":battery"
 BATTERY_DOWNSAMPLED = (
     ("battery_pack", "temp_c", "mean"),
+    ("battery_pack", "soc", "mean"),
     ("zendure_device", "heat_state", "max"),
     ("zendure_device", "low_temp", "max"),
     ("zendure_device", "error_flag", "max"),
@@ -291,7 +292,7 @@ from(bucket: "{source_bucket}")
 def build_battery_downsample_flux(influx_config, entry):
     """Render the Flux body of the task that carries one step's battery condition.
 
-    The pack temperatures and what the battery accepts keep the window's mean;
+    The pack temperatures and charges and what the battery accepts keep the window's mean;
     a state such as the heating keeps its maximum, so a window in which it was
     on at all shows it on; the winter target keeps its last value. One
     pipeline per reducer.

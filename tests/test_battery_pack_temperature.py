@@ -74,7 +74,8 @@ def test_influxdb_records_the_pack_temperature_and_downsamples_it_in_the_battery
     assert "temp_c" in PACK_RAW_FIELDS
     assert '"temp_c"' not in flux
     battery = schema.build_battery_downsample_flux(influx, step)
-    assert '(r._measurement == "battery_pack" and (r._field == "temp_c"))' in battery.split("fn: mean")[0].rsplit("from(bucket:", 1)[1]
+    mean = battery.split("fn: mean")[0].rsplit("from(bucket:", 1)[1]
+    assert '(r._measurement == "battery_pack" and (r._field == "temp_c"' in mean
 
 
 def test_a_pack_that_reports_only_its_temperature_is_still_recorded():

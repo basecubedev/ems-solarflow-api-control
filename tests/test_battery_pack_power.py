@@ -46,7 +46,7 @@ def test_the_pack_reports_the_drain_the_device_level_values_hide():
 
     assert (state.pack_in, state.pack_out) == (0, 0)
     assert state.battery_packs == (
-        PackCells(pack=1, cell_min_v=3.25, cell_max_v=3.26, power_w=4.0, state=2),
+        PackCells(pack=1, cell_min_v=3.25, cell_max_v=3.26, power_w=4.0, state=2, soc=41.0),
     )
 
 
@@ -83,7 +83,7 @@ def test_the_live_data_carries_each_pack_s_power_and_state():
     fields = _state_telemetry_fields(parse_device(IDLE_AT_MIN_SOC))
 
     assert fields["battery_packs"] == [
-        {"pack": 1, "cell_min_v": 3.25, "cell_max_v": 3.26, "power_w": 4.0, "state": 2, "temp_c": None}
+        {"pack": 1, "cell_min_v": 3.25, "cell_max_v": 3.26, "power_w": 4.0, "state": 2, "temp_c": None, "soc": 41.0}
     ]
 
 
@@ -96,7 +96,7 @@ def _lines(report):
 
 def test_influxdb_records_the_pack_power_and_state_beside_its_cells():
     assert _lines(IDLE_AT_MIN_SOC) == [
-        "battery_pack,device=Grill,pack=1,source=zendure cell_max_v=3.26,cell_min_v=3.25,power_w=4.0,state=2.0 1"
+        "battery_pack,device=Grill,pack=1,source=zendure cell_max_v=3.26,cell_min_v=3.25,power_w=4.0,soc=41.0,state=2.0 1"
     ]
 
 
@@ -125,12 +125,14 @@ def test_the_raw_pack_fields_stay_out_of_the_downsampling_tasks():
     step = {"source": "raw", "target": "1m", "window": "1m"}
     influx = {"bucket_prefix": "ems", "org": "ems", "downsampling": [step]}
 
-    flux = schema.build_cell_downsample_flux(influx, step) + schema.build_downsample_flux(influx, step)
+    cells = schema.build_cell_downsample_flux(influx, step)
+    main = schema.build_downsample_flux(influx, step)
 
     assert sorted(_PACK_FIELDS) == sorted([*PACK_CELL_REDUCERS, *PACK_RAW_FIELDS])
     assert set(PACK_RAW_FIELDS).isdisjoint(PACK_CELL_REDUCERS)
     for field_name in PACK_RAW_FIELDS:
-        assert f'"{field_name}"' not in flux
+        assert f'r._field == "{field_name}"' not in cells
+    assert '"battery_pack"' not in main, "the main task reads no pack, so a pack field named like a device one stays its own"
 
 
 def test_an_mqtt_report_reaches_the_same_pack_power_and_state():

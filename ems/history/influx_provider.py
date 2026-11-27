@@ -140,6 +140,7 @@ BATTERY_INFLUX_SERIES = {
 PACK_INFLUX_SERIES = {
     **PACK_CELL_INFLUX_SERIES,
     "temp_c": {"measurement": "battery_pack", "field": "temp_c", "device_scoped": True, "collapse": "mean"},
+    "soc": {"measurement": "battery_pack", "field": "soc", "device_scoped": True, "collapse": "mean"},
 }
 
 # One consumer's power, selected by its name in the ``device`` tag.

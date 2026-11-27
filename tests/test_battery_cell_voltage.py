@@ -39,7 +39,7 @@ pytestmark = [
 
 
 def _pack(serial, low, high, **extra):
-    return {"sn": serial, "packType": 300, "socLevel": 40, "minVol": low, "maxVol": high, **extra}
+    return {"sn": serial, "packType": 300, "minVol": low, "maxVol": high, **extra}
 
 
 def _report(*packs, pack_num=None):
@@ -244,7 +244,7 @@ def test_a_change_report_of_a_single_pack_keeps_its_cells():
     aggregator.observe(topic, '{"properties": {"packNum": 1}, "packData": [{"sn": "PACK-A", "minVol": 317, "maxVol": 318}]}')
     aggregator.observe(topic, '{"packData": [{"sn": "PACK-A", "socLevel": 41}]}')
 
-    assert _mqtt_state(aggregator).battery_packs == (PackCells(pack=1, cell_min_v=3.17, cell_max_v=3.18),)
+    assert _mqtt_state(aggregator).battery_packs == (PackCells(pack=1, cell_min_v=3.17, cell_max_v=3.18, soc=41.0),)
 
 
 def test_a_swapped_pack_is_forgotten_at_the_next_complete_report():
@@ -276,8 +276,8 @@ def test_the_live_data_names_each_pack_by_number_and_no_serial():
     fields = _state_telemetry_fields(state)
 
     assert fields["battery_packs"] == [
-        {"pack": 1, "cell_min_v": 3.2, "cell_max_v": 3.22, "power_w": None, "state": None, "temp_c": None},
-        {"pack": 2, "cell_min_v": 3.3, "cell_max_v": None, "power_w": None, "state": None, "temp_c": None},
+        {"pack": 1, "cell_min_v": 3.2, "cell_max_v": 3.22, "power_w": None, "state": None, "temp_c": None, "soc": None},
+        {"pack": 2, "cell_min_v": 3.3, "cell_max_v": None, "power_w": None, "state": None, "temp_c": None, "soc": None},
     ]
     assert "PACK-A" not in repr(fields)
     assert _state_telemetry_fields(zero_device_state())["battery_packs"] == []
@@ -496,7 +496,7 @@ def test_a_device_offline_or_out_of_date_publishes_no_cells():
     snapshot = _snapshot_of(states, {"Live": True, "Offline": False, "Stale": True}, fresh=lambda name: name != "Stale")
 
     assert snapshot["devices"]["Live"]["battery_packs"] == [
-        {"pack": 1, "cell_min_v": 3.17, "cell_max_v": 3.18, "power_w": None, "state": None, "temp_c": None}
+        {"pack": 1, "cell_min_v": 3.17, "cell_max_v": 3.18, "power_w": None, "state": None, "temp_c": None, "soc": None}
     ]
     assert snapshot["devices"]["Offline"]["battery_packs"] == []
     assert snapshot["devices"]["Stale"]["battery_packs"] == []

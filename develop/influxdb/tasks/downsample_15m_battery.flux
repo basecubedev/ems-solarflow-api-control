@@ -4,7 +4,7 @@ option task = {name: "zendure-downsample-15m:battery", every: 15m}
 
 from(bucket: "zendure_raw")
   |> range(start: -task.every)
-  |> filter(fn: (r) => (r._measurement == "battery_pack" and (r._field == "temp_c")) or (r._measurement == "zendure_device" and (r._field == "charge_avail_w" or r._field == "discharge_avail_w" or r._field == "input_limit_w")))
+  |> filter(fn: (r) => (r._measurement == "battery_pack" and (r._field == "temp_c" or r._field == "soc")) or (r._measurement == "zendure_device" and (r._field == "charge_avail_w" or r._field == "discharge_avail_w" or r._field == "input_limit_w")))
   |> aggregateWindow(every: 15m, fn: mean, createEmpty: false)
   |> to(bucket: "zendure_15m", org: "zendure-dev")
 

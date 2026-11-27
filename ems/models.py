@@ -72,8 +72,9 @@ class PackCells:
 
     Its lowest and highest cell voltage, the power and state (0 idle,
     1 charging, 2 discharging) the pack reports of itself, which the
-    device-level pack values do not show while the device stands idle, and
-    its temperature in °C.
+    device-level pack values do not show while the device stands idle, its
+    temperature in °C and its own state of charge in percent, where the
+    device's ``electricLevel`` gives one level for all its packs.
     """
 
     pack: int
@@ -82,6 +83,7 @@ class PackCells:
     power_w: float | None = None
     state: int | None = None
     temp_c: float | None = None
+    soc: float | None = None
 
 
 @dataclass

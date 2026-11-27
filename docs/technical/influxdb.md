@@ -868,7 +868,7 @@ running inside a container (it honors an `EMS_IN_CONTAINER` override).
 ### Battery cell voltages
 
 Each pack of a device the EMS controls that reports its cell voltages, its
-power, its state or its temperature writes one `battery_pack` point per cycle while the device's
+power, its state, its temperature or its charge writes one `battery_pack` point per cycle while the device's
 telemetry is current (a state held past its last read writes none), tagged
 `device` and `pack` (numbered from 1, see
 [the Devices page](../dashboard.md#devices-page)), with `cell_min_v` and
@@ -876,7 +876,9 @@ telemetry is current (a state held past its last read writes none), tagged
 watts, `state`, 0 idle, 1 charging, 2 discharging, and `temp_c`, the pack's
 `packData[].maxTemp` in °C, read like the device's `temp` (see [The device
 temperature up to v0.10.0](#the-device-temperature-up-to-v0100)); a value the
-pack does not report, or one outside -60 to 120 °C, is left out. The sign of `power_w` is not a direction (a 16-bit
+pack does not report, or one outside -60 to 120 °C, is left out; and `soc`, the
+pack's own `packData[].socLevel` in percent (0 to 100, anything else left out),
+beside the one level the device reports for all its packs as `soc`. The sign of `power_w` is not a direction (a 16-bit
 value Zendure sends as 32768–65535 is stored as the negative number it
 encodes); `state` names the direction, as the dashboard reads it.
 
@@ -884,7 +886,8 @@ encodes); `state` names the direction, as the dashboard reads it.
 default). A window's mean of a power without a direction means nothing once the
 direction changes inside it, and a field added to the cell task would leave the
 task every installation already has as `kept` until an operator syncs it by
-hand. `temp_c` goes on into the downsampled buckets through the battery task
+hand. `temp_c` and `soc` go on into the downsampled buckets through the battery task,
+each with its window's mean
 (see [A battery in the cold](#a-battery-in-the-cold)).
 
 Each downsampling step has a second task for them, `<prefix>-downsample-<target>:cells`
@@ -915,7 +918,7 @@ follows a charge the firmware started. A yes/no is written as 1 or 0, as the his
 booleans.
 
 A third task per step, `<prefix>-downsample-<target>:battery`, carries them and
-the pack temperature `temp_c` into the `1m`, `5m` and `1h` buckets: a state
+the pack temperature `temp_c` and the pack charge `soc` into the `1m`, `5m` and `1h` buckets: a state
 with each window's maximum, so a window in which the heating ran at all shows
 it on, and a chart that thins a long range keeps it the same way; the
 temperatures and what the battery accepts with their mean; the winter target
@@ -923,6 +926,11 @@ with its last value, one pipeline per reducer, so the task reads the source
 bucket three times rather than once per field. Like the cell task it reaches an installed
 system by itself, and their history in the downsampled buckets starts when it
 does.
+
+An installation that created the battery task from a build before the pack's
+`soc` joined it (development builds of 2026-11-27) keeps that task: the safe
+sync reports it `kept` and changes nothing, so `soc` stays in the raw bucket
+until `emsctl.py influx sync`, the full sync, updates the task.
 
 ### PV inputs
 

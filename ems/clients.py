@@ -245,6 +245,13 @@ def zendure_pack_state(value):
     return int(reading)
 
 
+def zendure_pack_soc(value):
+    """A pack's ``packData[].socLevel`` in whole percent, ``None`` when it reports none or one no pack can have."""
+
+    reading = _zendure_reading(value, offset=0, divisor=1, digits=0, plausible=(0.0, 100.0))
+    return None if reading is None else reading + 0.0
+
+
 def battery_pack_cells(data, props):
     """Each pack's lowest and highest cell voltage, the packs numbered from 1.
 
@@ -280,6 +287,7 @@ def _pack_cells(number, pack):
         power_w=zendure_pack_power_w(pack.get("power")),
         state=zendure_pack_state(pack.get("state")),
         temp_c=zendure_temperature_c(pack.get("maxTemp")),
+        soc=zendure_pack_soc(pack.get("socLevel")),
     )
 
 
