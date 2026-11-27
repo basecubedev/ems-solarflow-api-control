@@ -380,7 +380,7 @@ def test_a_live_first_start_leaves_the_setup_able_to_confirm_it(built_image, tmp
     resume failed while the EMS ran. The test above runs its EMS dry, and a dry
     start never moves anything, so it could not show this. Here the EMS starts
     live, so it moves the values, with every write gate off in its config, its
-    startup line confirming the local API and state gates and no MQTT broker
+    startup lines confirming the local API and state gates and no MQTT broker
     configured, and its devices on TEST-NET-1 addresses, reserved for
     documentation, where no device answers. The installed config then has to be
     the generated one without its operating values, and the deployment status

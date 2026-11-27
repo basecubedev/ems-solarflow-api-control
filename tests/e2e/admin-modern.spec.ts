@@ -1685,6 +1685,27 @@ test.describe("Modern Admin: the running build where the menu ends", { tag: ["@s
     await expect(page.locator(".fact").filter({ hasText: "Commit" })).toContainText(COMMIT.slice(0, 12));
   });
 
+  test("a build file that failed to load is read again by the next page that asks", async ({ page }) => {
+    let calls = 0;
+    let serving = false;
+    await page.route("**/build.json", (route: Route) => {
+      calls += 1;
+      return serving
+        ? route.fulfill({ json: { version: "v0.10.9", revision: COMMIT, build_id: `v0.10.9-${COMMIT.slice(0, 12)}-1-1`, build_serial: "812", channel: "stable" } })
+        : route.fulfill({ status: 503, body: "" });
+    });
+    await openModern(page);
+    await expect(page.locator(".app")).toBeVisible();
+    await expect.poll(() => calls).toBeGreaterThan(0);
+    await expect(page.getByTestId("nav-version")).toHaveCount(0);
+
+    const failed = calls;
+    serving = true;
+    await page.getByTestId("nav-about").click();
+    await expect(page.getByTestId("nav-version")).toHaveText("v0.10.9");
+    expect(calls).toBeGreaterThan(failed);
+  });
+
   test("a local build, which names no version, leaves the line out", async ({ page }) => {
     await page.route("**/build.json", (route: Route) => route.fulfill({ json: { version: "local", revision: "0".repeat(40), build_id: "local-0000000", build_serial: "0", channel: "development" } }));
     await openModern(page);

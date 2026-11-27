@@ -46,7 +46,7 @@ test("a local build points at the main branch rather than at a commit that does 
 });
 
 test("the menu names a release by its version and a latest build by its number and commit", () => {
-  const t = (key, values) => ({ "about.latest": "latest", "about.build": `build ${values?.serial}` })[key];
+  const t = (key, values) => ({ "about.latest": "latest", "about.dev": "dev", "about.build": `build ${values?.serial}` })[key];
   const commit = "9168b7a2b2896524c554039547e75e7b4d88fb8a";
   assert.equal(versionText(buildFacts({ version: "v0.10.9", revision: commit, build_serial: "812", channel: "stable" }), t), "v0.10.9");
   assert.equal(versionText(buildFacts({ version: "", revision: commit, build_serial: "812", channel: "latest" }), t), "latest · build 812 · 9168b7a");
@@ -54,6 +54,7 @@ test("the menu names a release by its version and a latest build by its number a
   assert.equal(versionText(buildFacts({ version: "latest", revision: commit, build_serial: "0", channel: "latest" }), t), "latest · 9168b7a");
   assert.equal(versionText(buildFacts({ version: "local", revision: "0".repeat(40), build_serial: "0", channel: "development" }), t), "");
   assert.equal(versionText(buildFacts(null), t), "");
+  assert.equal(versionText(buildFacts({ version: "dev-feat-x-0123456789-9168b7a-45915815385-1", revision: commit, build_serial: "77", channel: "development" }), t), "dev · 9168b7a");
   assert.equal(buildFacts({ version: "latest", build_serial: "0x10" }).serial, 0);
   assert.equal(buildFacts({ version: "latest", build_serial: "1e3" }).serial, 0);
   assert.equal(buildFacts({ version: "latest", build_serial: 812 }).serial, 812);

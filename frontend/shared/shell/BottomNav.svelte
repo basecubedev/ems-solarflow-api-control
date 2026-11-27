@@ -111,10 +111,12 @@
     if (session.leavesOnSignOut) closed();
   }
 
-  const version = $derived(versionText(build.facts, t));
+  /** version: the app's own name for what runs (the Appliance Manager's); without one, the image's build file names it. */
+  let { version: given = "" } = $props();
+  const version = $derived(given || versionText(build.facts, t));
 
   $effect(() => {
-    loadBuild();
+    if (!given) loadBuild();
   });
 </script>
 

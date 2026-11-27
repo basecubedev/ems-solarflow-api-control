@@ -191,10 +191,11 @@ pages — Overview, Updates, Settings and Services until you choose others — a
 The side menu ends with the version that runs, and so does **More** on a phone:
 a release by its version, `v0.10.9`; a `latest` build, which is always called
 latest, by its build number and short commit, `latest · build 812 · 9168b7a`,
-so you can tell which latest you have. The line is the Admin console's own
+so you can tell which latest you have; a feature build by its short commit,
+`dev · 9168b7a`. The line is the Admin console's own
 build; Admin console and EMS are updated as one pair, so outside an update it
-names the EMS as well. During a Guided Upgrade the console is replaced first, and
-**Updates** shows each of the two on its own.
+names the EMS as well. During a Guided Upgrade the console is replaced first;
+when the two differ, **Updates** shows the console's version beside the EMS's.
 
 The app can sit on a phone's or a tablet's home screen like an app of its
 own, with the EMS SolarFlow mark and without the browser's address bar: open
