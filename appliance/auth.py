@@ -828,14 +828,20 @@ def container_networks(path=DOCKER_DAEMON_CONFIG, *, proc="/proc/net"):
     return tuple(networks)
 
 
-_HOST_ADDRESSES = {"at": None, "addresses": frozenset()}
+_HOST_ADDRESSES = {"at": None, "proc": None, "addresses": frozenset()}
 
 
 def host_addresses(*, proc="/proc/net", now=None):
-    """This host's own addresses, read from the kernel at most once a minute."""
+    """This host's own addresses, read from the kernel at most once a minute.
+
+    The minute is kept for the source it was read from and counts forward
+    only: another ``proc``, or a moment before the one it was read at, reads
+    again rather than answering with what another source held.
+    """
 
     moment = time.monotonic() if now is None else now
-    if _HOST_ADDRESSES["at"] is not None and moment - _HOST_ADDRESSES["at"] < 60:
+    age = None if _HOST_ADDRESSES["at"] is None else moment - _HOST_ADDRESSES["at"]
+    if _HOST_ADDRESSES["proc"] == str(proc) and age is not None and 0 <= age < 60:
         return _HOST_ADDRESSES["addresses"]
     found = set()
     with contextlib.suppress(OSError):
@@ -849,7 +855,7 @@ def host_addresses(*, proc="/proc/net", now=None):
             raw = line.split()[0] if line.split() else ""
             with contextlib.suppress(ValueError):
                 found.add(ipaddress.IPv6Address(int(raw, 16)))
-    _HOST_ADDRESSES.update(at=moment, addresses=frozenset(found))
+    _HOST_ADDRESSES.update(at=moment, proc=str(proc), addresses=frozenset(found))
     return _HOST_ADDRESSES["addresses"]
 
 
