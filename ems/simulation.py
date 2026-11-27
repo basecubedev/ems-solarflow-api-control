@@ -479,7 +479,7 @@ def run_live_preflight(devices, shelly):
     return ok
 
 
-def self_test_ac_charge_direction(ok):
+def self_test_ac_charge_direction(ok, store):
     """Drive a surplus until the regulator charges, then take it away.
 
     The offline checks this file provides are what a developer runs after
@@ -525,7 +525,8 @@ def self_test_ac_charge_direction(ok):
             [device, refused],
             meter,
             sleep_enabled=False,
-            runtime_state=None
+            runtime_state=None,
+            battery_full_charge_store=store
         )
         # The full-charge assist claims a device it considers due, at
         # maintenance priority, which correctly takes it away from the surplus
@@ -598,7 +599,7 @@ def self_test_ac_charge_direction(ok):
         cfg.AC_CHARGE_CONTROL_CONFIG = previous
 
 
-def self_test_ac_charge_without_pv(ok):
+def self_test_ac_charge_without_pv(ok, store):
     """Charge a device that has no PV of its own and an empty pack.
 
     The case the feature exists for, and the one the first check cannot reach:
@@ -650,7 +651,8 @@ def self_test_ac_charge_without_pv(ok):
                 devices,
                 meter,
                 sleep_enabled=False,
-                runtime_state=None
+                runtime_state=None,
+                battery_full_charge_store=store
             )
             ems.battery_full_charge_store = None
 
@@ -675,8 +677,20 @@ def self_test_ac_charge_without_pv(ok):
 
 
 def run_self_tests():
-    """Run local helper checks without hardware access."""
+    """Run local helper checks without hardware access.
 
+    Every controller they build keeps its full-charge state in a scratch
+    folder of its own, as a simulation does, never in the installation's
+    state database.
+    """
+
+    with tempfile.TemporaryDirectory(prefix="ems-self-test-") as scratch:
+        return _run_self_tests(
+            BatteryFullChargeStateStore(os.path.join(scratch, "ems_state.sqlite"))
+        )
+
+
+def _run_self_tests(store):
     original_output_control = deepcopy(cfg.OUTPUT_CONTROL_CONFIG)
     cases = [
         (18, 15, 40, 3, 21),
@@ -712,7 +726,8 @@ def run_self_tests():
         [sim_device],
         SimulatedShellyClient(),
         sleep_enabled=False,
-        runtime_state=None
+        runtime_state=None,
+        battery_full_charge_store=store
     )
     idle_state = zero_device_state()
     idle_state.soc = 15
@@ -748,8 +763,8 @@ def run_self_tests():
             reason="positive_panel_power_not_detected"
         )
 
-    ok = self_test_ac_charge_direction(ok)
-    ok = self_test_ac_charge_without_pv(ok)
+    ok = self_test_ac_charge_direction(ok, store)
+    ok = self_test_ac_charge_without_pv(ok, store)
 
     sim_devices = [
         SimulatedZendureClient("WR1"),
@@ -759,7 +774,8 @@ def run_self_tests():
         sim_devices,
         SimulatedShellyClient(),
         sleep_enabled=False,
-        runtime_state=None
+        runtime_state=None,
+        battery_full_charge_store=store
     )
 
     idle_states = []

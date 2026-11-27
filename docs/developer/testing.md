@@ -60,6 +60,10 @@ Self-test:
 python3 -B ems-solarflow-api-control.py --self-test
 ```
 
+The self-test, like a simulation, keeps the state of the controllers it builds
+in a temporary folder and never opens the state database the configuration
+names.
+
 Simulation (no hardware or network):
 
 ```bash
