@@ -111,6 +111,7 @@ from admin.backup_restore import (
     CONFLICT_POLICIES,
     CREATE_SCOPES,
     RESTORE_SCOPES,
+    upload_failure,
 )
 from admin.gateway_probe import probe_gateway_candidates
 from admin.homewizard_pairing import (
@@ -5216,6 +5217,8 @@ class AdminHandler(BaseHTTPRequestHandler):
                     error = "the upload ended early"
             except BackupRestoreError as exc:
                 error = str(exc)
+            except OSError as exc:
+                error = upload_failure(exc)
         if error is not None:
             self._send_json({"ok": False, "error": error}, status=400)
             return
