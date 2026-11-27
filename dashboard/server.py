@@ -61,6 +61,7 @@ ANALYTICS_SCHEMA_UNPLANNED_HINT = (
     "Check influxdb.query_profiles against influxdb.downsampling in config.json."
 )
 MAX_JSON_BODY_BYTES = 16 * 1024
+BODY_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 SIGNPOST_OPEN_PATHS = frozenset({"/api/ui-config"})
 LOCAL_CLIENT = "local"
 SOCKET_MODE = 0o660
@@ -804,6 +805,31 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
     server_version = "EMSDashboard/1.0"
     timeout = HANDSHAKE_TIMEOUT_SECONDS
 
+    def finish(self):
+        """Read the body a request declared and no handler read, then close.
+
+        A request refused before its body is read, such as a refresh without a
+        valid session, would otherwise close with the body unread, and a client
+        still sending it -- the console forwarding over the socket -- meets a
+        broken pipe instead of the answer. The read is bounded by the body
+        limit and the connection's timeout.
+        """
+        try:
+            self._drain_request_body()
+        except (OSError, ValueError):
+            pass
+        super().finish()
+
+    def _drain_request_body(self):
+        if getattr(self, "_request_body_read", False) or getattr(self, "command", None) not in BODY_METHODS:
+            return
+        if getattr(self, "headers", None) is None:
+            return
+        length = self._json_body_length()
+        if length > 0:
+            self.rfile.read(length)
+        self._request_body_read = True
+
     def end_headers(self):
         if not getattr(self, "_security_headers_sent", False):
             self._send_security_headers()
@@ -1066,6 +1092,7 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
         if length <= 0:
             return {}
 
+        self._request_body_read = True
         try:
             raw = self.rfile.read(length)
             payload = json.loads(raw.decode("utf-8"))
