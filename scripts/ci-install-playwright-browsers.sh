@@ -20,6 +20,13 @@
 # older runner image does not grow, apt goes back to its own archive directory
 # for the rest of the job, and the directory is handed back to the calling user,
 # as apt writes it as root.
+#
+# --with-deps runs apt-get update over every source the runner image lists. On
+# 2026-11-27 packages.microsoft.com refused ubuntu-26.04's index with a 403, the
+# update failed and all three attempts with it, though the browsers' packages
+# come from the Ubuntu archive alone. A source naming one of the hosts in
+# PLAYWRIGHT_APT_UNNEEDED_HOSTS is therefore set aside before the install, and
+# stays aside for the rest of the job; no step after the install uses it.
 set -euo pipefail
 
 if [ "$#" -eq 0 ]; then
@@ -32,6 +39,8 @@ limit="${PLAYWRIGHT_INSTALL_TIMEOUT:-300}"
 backoff="${PLAYWRIGHT_INSTALL_BACKOFF:-10}"
 apt_conf_dir="${PLAYWRIGHT_APT_CONF_DIR:-/etc/apt/apt.conf.d}"
 apt_archives="${PLAYWRIGHT_APT_ARCHIVES:-}"
+apt_sources_dir="${PLAYWRIGHT_APT_SOURCES_DIR:-/etc/apt/sources.list.d}"
+unneeded_hosts="${PLAYWRIGHT_APT_UNNEEDED_HOSTS:-packages.microsoft.com}"
 
 as_root() {
   if [ "$(id -u)" -eq 0 ]; then
@@ -65,6 +74,20 @@ hand_back_archives() {
   fi
 }
 
+set_aside_unneeded_sources() {
+  local source host
+  for source in "$apt_sources_dir"/*.list "$apt_sources_dir"/*.sources; do
+    [ -f "$source" ] || continue
+    for host in $unneeded_hosts; do
+      if grep -qF "$host" "$source"; then
+        as_root mv "$source" "$source.playwright-unneeded" \
+          && echo "Set aside $source ($host) for the browser install." >&2
+        break
+      fi
+    done
+  done
+}
+
 release_apt() {
   as_root pkill -KILL -x apt-get || true
   as_root pkill -KILL -x apt || true
@@ -76,6 +99,7 @@ if [ -n "$apt_archives" ]; then
   mkdir -p "$apt_archives/partial"
 fi
 configure_apt "$apt_archives"
+set_aside_unneeded_sources
 for attempt in $(seq 1 "$attempts"); do
   if timeout --kill-after=30 "$limit" npx playwright install --with-deps "$@"; then
     hand_back_archives

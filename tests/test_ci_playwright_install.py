@@ -109,14 +109,18 @@ def _install(tmp_path, *browsers, failures, archives=None):
         path.chmod(0o755)
     apt_conf = tmp_path / "apt.conf.d"
     apt_conf.mkdir()
+    sources = tmp_path / "sources.list.d"
+    sources.mkdir(exist_ok=True)
     env = dict(
         os.environ,
         PATH=f"{stand_ins}{os.pathsep}{os.environ.get('PATH', '')}",
         PLAYWRIGHT_INSTALL_BACKOFF="0",
         PLAYWRIGHT_INSTALL_TIMEOUT="60",
         PLAYWRIGHT_APT_CONF_DIR=str(apt_conf),
+        PLAYWRIGHT_APT_SOURCES_DIR=str(sources),
     )
     env.pop("PLAYWRIGHT_APT_ARCHIVES", None)
+    env.pop("PLAYWRIGHT_APT_UNNEEDED_HOSTS", None)
     if archives is not None:
         env["PLAYWRIGHT_APT_ARCHIVES"] = str(archives)
     for name in bodies:
@@ -175,3 +179,28 @@ def test_without_an_archive_directory_apt_keeps_its_own(tmp_path):
     assert done.returncode == 0, done.stderr
     assert logged == ["npx playwright install --with-deps chromium"]
     assert "Dir::Cache::Archives" not in (apt_conf / "80-ci-playwright-install").read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    "name,text",
+    [
+        ("microsoft-prod.list", "deb [arch=amd64] https://packages.microsoft.com/ubuntu/26.04/prod resolute main\n"),
+        ("microsoft-prod.sources", "Types: deb\nURIs: https://packages.microsoft.com/ubuntu/26.04/prod\nSuites: resolute\n"),
+    ],
+)
+def test_a_source_the_browsers_do_not_need_is_set_aside_before_the_install(tmp_path, name, text):
+    """packages.microsoft.com refused ubuntu-26.04's index on 2026-11-27, and
+    the apt-get update --with-deps runs failed every attempt with it. A
+    one-line source and a deb822 one are both set aside."""
+
+    sources = tmp_path / "sources.list.d"
+    sources.mkdir()
+    (sources / name).write_text(text, encoding="utf-8")
+    (sources / "ubuntu.sources").write_text("Types: deb\nURIs: http://azure.archive.ubuntu.com/ubuntu/\n", encoding="utf-8")
+
+    done, logged, _apt_conf = _install(tmp_path, "firefox", failures=0)
+
+    assert done.returncode == 0, done.stderr
+    assert sorted(path.name for path in sources.iterdir()) == sorted([f"{name}.playwright-unneeded", "ubuntu.sources"])
+    assert f"Set aside {sources / name} (packages.microsoft.com) for the browser install." in done.stderr.splitlines()
+    assert logged == ["npx playwright install --with-deps firefox"]

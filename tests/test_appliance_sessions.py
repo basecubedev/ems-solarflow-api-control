@@ -191,6 +191,25 @@ def test_this_hosts_addresses_are_read_from_the_kernel(tmp_path):
     assert ipaddress.ip_address("192.168.1.255") not in found
 
 
+def test_the_kernel_addresses_another_source_held_are_not_answered_for_this_one(tmp_path):
+    import ipaddress
+
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    for folder, address in ((first, "10.1.1.146"), (second, "192.168.1.26")):
+        folder.mkdir()
+        (folder / "fib_trie").write_text(
+            f"Main:\n  +-- 0.0.0.0/0 3 0 5\n     |-- {address}\n        /32 host LOCAL\n", encoding="utf-8"
+        )
+
+    assert read_host_addresses(proc=first, now=1000.0) == {ipaddress.ip_address("10.1.1.146")}
+    assert read_host_addresses(proc=second, now=1001.0) == {ipaddress.ip_address("192.168.1.26")}
+    assert read_host_addresses(proc=second, now=500.0) == {ipaddress.ip_address("192.168.1.26")}
+    (second / "fib_trie").write_text("", encoding="utf-8")
+    assert read_host_addresses(proc=second, now=530.0) == {ipaddress.ip_address("192.168.1.26")}
+    assert read_host_addresses(proc=second, now=400.0) == frozenset()
+
+
 def test_a_session_presented_from_another_address_is_not_honoured():
     """The cookie is scoped to the host, not the port, so the browser hands it
     to EMS and the Admin on the same name; a container that reads it must not
