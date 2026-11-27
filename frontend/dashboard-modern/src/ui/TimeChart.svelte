@@ -30,7 +30,9 @@
    * one whole; the legend and the table keep each series' own value.
    * ``unit`` "V" reads the left axis in volts, close around the data, for
    * cell voltages; "°C" in degrees, always showing 0 °C, for temperatures;
-   * every other chart reads it in watts from zero. ``busy``
+   * "%" from 0 to 100 %, for charge levels, with a series in percent on that
+   * same axis rather than a second one; every other chart reads it in watts
+   * from zero. ``busy``
    * lays a Loading pill over the plot, or over its empty frame, while a page
    * reads new data for it, taking no room, so nothing around the chart moves.
    */
@@ -120,7 +122,7 @@
 
   function valueText(value, s) {
     if (value === null || value === undefined) return "—";
-    if (s?.unit === "%") return f.percent(value);
+    if (s?.unit === "%" || unit === "%") return f.percent(value);
     if (unit === "V") return f.voltage(value);
     if (unit === "°C" && s?.unit !== "%") return f.temperature(value);
     if (s?.id === "battery" && Number.isFinite(Number(value))) {
@@ -131,7 +133,7 @@
   }
 
   function onPercentScale(s) {
-    return s.unit === "%";
+    return unit !== "%" && s.unit === "%";
   }
 
   function drawGaps(u) {
@@ -388,7 +390,7 @@
             time: true,
             range: (u, min, max) => (zoomWindow ? atLeastAMinute(zoomWindow.min, zoomWindow.max) : xRange ? [xRange[0], xRange[1]] : atLeastAMinute(min, max)),
           },
-          y: { range: (u, min, max) => (unit === "V" ? voltRange(min, max) : unit === "°C" ? celsiusRange(min, max) : [Math.min(0, Math.floor((min || 0) / 500) * 500), Math.max(500, Math.ceil((max || 0) / 500) * 500)]) },
+          y: { range: (u, min, max) => (unit === "%" ? [0, 100] : unit === "V" ? voltRange(min, max) : unit === "°C" ? celsiusRange(min, max) : [Math.min(0, Math.floor((min || 0) / 500) * 500), Math.max(500, Math.ceil((max || 0) / 500) * 500)]) },
           ...(percent ? { pct: { range: [0, 100] } } : {}),
         },
         axes: [
@@ -398,7 +400,7 @@
             space: (u, axis, min, max) => tickSpace(min, max),
             values: (u, splits, axis, space, step) => tickLabels(splits, step, f),
           },
-          { ...axis, size: 66, values: (u, splits) => splits.map((value) => (unit === "V" ? f.voltage(value) : unit === "°C" ? celsiusTick(value, f) : axisPower(value, f))) },
+          { ...axis, size: 66, values: (u, splits) => splits.map((value) => (unit === "%" ? f.percent(value) : unit === "V" ? f.voltage(value) : unit === "°C" ? celsiusTick(value, f) : axisPower(value, f))) },
           ...(percent
             ? [{ ...axis, scale: "pct", side: 1, size: PERCENT_AXIS_PX, stroke: token(percent.ink || "--m-muted"), grid: { show: false }, values: (u, splits) => splits.map((value) => f.percent(value)) }]
             : []),

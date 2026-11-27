@@ -503,7 +503,7 @@ const LANE_POINTS = { heat_state: [0, 1], low_temp: [1, 1], ac_input: [0, 0], wi
 
 /**
  * Each requested cell series reads a voltage of its own: pack n's lowest cell 3.n0 V, its highest 3.n5 V, WR2's a volt above.
- * Pack n's temperature reads 2 + n °C, WR2's ten degrees above.
+ * Pack n's temperature reads 2 + n °C, WR2's ten degrees above; its charge 20·n %, WR2's five points above.
  */
 async function cellSeries(page, path) {
   await page.route(`**${path}**`, (route) => {
@@ -515,6 +515,8 @@ async function cellSeries(page, path) {
       const match = /^cell_(min|max):(\d+)$/.exec(id);
       const temp = /^pack_temp:(\d+)$/.exec(id);
       if (temp) return offset * 10 + 2 + Number(temp[1]);
+      const charge = /^pack_soc:(\d+)$/.exec(id);
+      if (charge) return 20 * Number(charge[1]) + offset * 5;
       if (!match) return 50;
       return offset + 3 + Number(match[2]) / 10 + (match[1] === "max" ? 0.05 : 0);
     };
@@ -525,7 +527,7 @@ async function cellSeries(page, path) {
 }
 
 const cellsRead = (path, check = () => true) => seriesRead(path, (params) => /cell_/.test(params.get("series") || "") && check(params));
-const batteryRead = (check = () => true) => seriesRead("/api/analytics/series", (params) => /pack_temp:|charge_avail/.test(params.get("series") || "") && check(params));
+const batteryRead = (check = () => true) => seriesRead("/api/analytics/series", (params) => /pack_temp:|pack_soc:|charge_avail/.test(params.get("series") || "") && check(params));
 
 test.describe("Modern dashboard views: cell voltage @smoke", () => {
   test("a device card names its cells' voltage, and each pack's when it has several", async ({ page }) => {
@@ -582,6 +584,24 @@ test.describe("Modern dashboard views: cell voltage @smoke", () => {
     await expect(packs.locator(".fact-value")).toHaveText(["3.20–3.22 V · 25.0 °C", "3.30–3.33 V · 13.4 °C"]);
   });
 
+  test("a device card names its packs' charge, the emptiest to the fullest, and each pack's own in the list", async ({ page }) => {
+    await shapeLive(page, (body) => {
+      withCells(body);
+      body.devices.WR1.battery_packs[0] = { ...body.devices.WR1.battery_packs[0], soc: 61 };
+      body.devices.WR2.battery_packs[0] = { ...body.devices.WR2.battery_packs[0], soc: 30 };
+      body.devices.WR2.battery_packs[1] = { ...body.devices.WR2.battery_packs[1], soc: 70 };
+    });
+    await openModern(page, "#/devices");
+    const one = deviceCard(page, "WR1");
+    await expect(one.locator(".fact").filter({ hasText: "Pack state of charge" })).toHaveCount(0);
+    const two = deviceCard(page, "WR2");
+    await expect(two.locator(".facts.main .fact").filter({ hasText: "Pack state of charge" }).locator(".fact-value")).toHaveText("30–70%");
+    const packs = two.getByTestId("device-cells");
+    await packs.locator("summary").click();
+    await expect(packs.locator(".fact-label")).toHaveText(["Pack 1 · 30%", "Pack 2 · 70%"]);
+    await expect(packs.locator(".fact-value")).toHaveText(["3.20–3.22 V", "3.30–3.33 V"]);
+  });
+
   test("a device without cell readings shows no cell voltage and no cell chart", async ({ page }) => {
     await openModern(page, "#/devices");
     await expect(page.getByTestId("device-card")).not.toHaveCount(0);
@@ -633,7 +653,7 @@ test.describe("Modern dashboard views: cell voltage @smoke", () => {
     await expect(temps.locator(".kpi-label")).toHaveText(["Coldest pack · 24 h", "Warmest pack · 24 h"]);
     await expect(temps.locator(".kpi-value")).toHaveText(["3.0 °C", "3.0 °C"]);
     const measures = page.getByRole("group", { name: "Measure" });
-    await expect(measures.getByRole("button")).toHaveText(["Temperature", "Cell voltage"]);
+    await expect(measures.getByRole("button")).toHaveText(["Temperature", "Pack state of charge", "Cell voltage"]);
     const [both] = await Promise.all([
       page.waitForRequest(batteryRead((params) => params.get("devices") === "WR2")),
       page.getByRole("combobox", { name: "Device" }).selectOption("WR2"),
@@ -671,6 +691,40 @@ test.describe("Modern dashboard views: cell voltage @smoke", () => {
     await expect(page.getByTestId("analytics-cell-kpi").locator(".kpi-value")).toHaveText(["4.20 V", "4.25 V"]);
   });
 
+  test("the batteries view draws each pack's own state of charge on one percent axis with the emptiest and the fullest pack", async ({ page }) => {
+    await shapeLive(page, withCells);
+    await cellSeries(page, "/api/analytics/series");
+    await openModern(page, "#/analytics");
+    await expect(page.locator(".chart .u-over")).toBeVisible();
+    await Promise.all([
+      page.waitForRequest(batteryRead()),
+      page.getByTestId("analytics-view-block").locator(".seg").first().getByRole("button", { name: "Batteries", exact: true }).click(),
+    ]);
+    const [both] = await Promise.all([
+      page.waitForRequest(batteryRead((params) => params.get("devices") === "WR2" && (params.get("series") || "").startsWith("pack_temp:"))),
+      page.getByRole("combobox", { name: "Device" }).selectOption("WR2"),
+    ]);
+    expect(new URL(both.url()).searchParams.get("series")).toBe("pack_temp:1,pack_temp:2,heat_state,low_temp");
+    const [charge] = await Promise.all([
+      page.waitForRequest(batteryRead((params) => (params.get("series") || "").startsWith("pack_soc:"))),
+      page.getByRole("group", { name: "Measure" }).getByRole("button", { name: "Pack state of charge", exact: true }).click(),
+    ]);
+    expect(new URL(charge.url()).searchParams.get("series")).toBe("pack_soc:1,pack_soc:2,heat_state,low_temp");
+    const chart = page.getByRole("region", { name: "Batteries", exact: true });
+    await expect(chart.locator(".legend-item")).toHaveText(["Pack 125%", "Pack 245%"]);
+    const kpis = page.getByTestId("analytics-charge-kpi");
+    await expect(kpis.locator(".kpi-label")).toHaveText(["Emptiest pack · 24 h", "Fullest pack · 24 h"]);
+    await expect(kpis.locator(".kpi-value")).toHaveText(["25%", "45%"]);
+    const overlays = page.getByRole("group", { name: "Overlays" });
+    await expect(overlays.getByRole("button")).toHaveText(["State of charge"]);
+    await Promise.all([
+      page.waitForRequest(batteryRead((params) => params.get("series") === "pack_soc:1,pack_soc:2,soc,heat_state,low_temp")),
+      overlays.getByRole("button", { name: "State of charge" }).click(),
+    ]);
+    await expect(chart.locator(".legend-item")).toHaveText(["Pack 125%", "Pack 245%", "State of charge50%"]);
+    await expect(chart.locator(".u-axis"), "the overlay reads on the packs' own percent axis, not a second one").toHaveCount(2);
+  });
+
   test("the batteries view's states stay folded with a summary; Expert adds the limits, the winter overlays and what the EMS decided", async ({ page }) => {
     await shapeLive(page, withCells);
     await cellSeries(page, "/api/analytics/series");
@@ -698,7 +752,7 @@ test.describe("Modern dashboard views: cell voltage @smoke", () => {
     await expect(lanes).toHaveText([/1 min on$/, /2 min on$/, /^AC charging role.*never on$/, /^Export hold.*never on$/, /^Derating.*never on$/, /^Error flag.*not reported$/]);
     await expect(page.getByRole("group", { name: "Overlays" }).getByRole("button")).toHaveText(["State of charge", "Minimum SoC", "Winter target", "Inverter"]);
     const measures = page.getByRole("group", { name: "Measure" });
-    await expect(measures.getByRole("button")).toHaveText(["Temperature", "Cell voltage", "Limits"]);
+    await expect(measures.getByRole("button")).toHaveText(["Temperature", "Pack state of charge", "Cell voltage", "Limits"]);
     const [limits] = await Promise.all([
       page.waitForRequest(batteryRead((params) => (params.get("series") || "").startsWith("charge_avail"))),
       measures.getByRole("button", { name: "Limits", exact: true }).click(),
@@ -718,7 +772,7 @@ test.describe("Modern dashboard views: cell voltage @smoke", () => {
       })(),
     ]);
     expect(new URL(basic.url()).searchParams.get("devices")).toBe("WR1");
-    await expect(page.getByRole("group", { name: "Measure" }).getByRole("button")).toHaveText(["Temperature", "Cell voltage"]);
+    await expect(page.getByRole("group", { name: "Measure" }).getByRole("button")).toHaveText(["Temperature", "Pack state of charge", "Cell voltage"]);
   });
 });
 
@@ -1056,6 +1110,27 @@ test.describe("Modern dashboard views: labels fit @smoke", () => {
       await inLanguage(page, "#/devices", lang);
       const lines = page.locator('[data-testid="energy-flow"] :is(.node-label, .soc-value)');
       await expect(lines.filter({ hasText: "—" })).toHaveCount(1);
+      for (const width of WIDTHS) {
+        await page.setViewportSize({ width, height: 900 });
+        expect(await broken(lines), `${lang} at ${width} px`).toEqual([]);
+      }
+    }
+  });
+
+  test("a device card with several packs keeps every pack figure whole", async ({ page }) => {
+    test.slow();
+    await shapeLive(page, (body) => {
+      body.devices.WR1.battery_packs = [{ pack: 1, soc: 61, cell_min_v: 3.17, cell_max_v: 3.18, power_w: 30, state: 1, temp_c: 13 }];
+      body.devices.WR2.battery_packs = [
+        { pack: 1, soc: 30, cell_min_v: 3.2, cell_max_v: 3.22, power_w: 30, state: 1, temp_c: -1.5 },
+        { pack: 2, soc: 70, cell_min_v: 3.3, cell_max_v: 3.33, power_w: 10, state: 2, temp_c: 25 },
+      ];
+    });
+    for (const lang of LANGUAGES) {
+      await inLanguage(page, "#/devices", lang);
+      await expect(page.getByTestId("device-cells")).toHaveCount(1);
+      await page.locator('[data-testid="device-card"] details').evaluateAll((blocks) => blocks.forEach((block) => { block.open = true; }));
+      const lines = page.locator('[data-testid="device-card"] :is(.fact-label .ellipsis, .fact-value)');
       for (const width of WIDTHS) {
         await page.setViewportSize({ width, height: 900 });
         expect(await broken(lines), `${lang} at ${width} px`).toEqual([]);

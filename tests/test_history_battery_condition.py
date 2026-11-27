@@ -126,6 +126,7 @@ def test_each_condition_keeps_its_own_reducer_in_the_downsampled_buckets():
 
     assert kept == {
         ("battery_pack", "temp_c"): "mean",
+        ("battery_pack", "soc"): "mean",
         **{("zendure_device", state): "max" for state in STATE_SERIES},
         ("zendure_device", "charge_avail_w"): "mean",
         ("zendure_device", "discharge_avail_w"): "mean",

@@ -210,7 +210,7 @@ gives you the accumulated one.
 
 ### Batteries
 
-![Analytics, Batteries view: WR1's two packs' temperature over a cold night on a scale through 0 °C, the measure Temperature or Cell voltage, Basic or Expert, the state of charge overlay, the coldest and the warmest pack as KPI cards, and the States card opened with the lanes Heating and Too cold](../../assets/screenshots/dashboard/dashboard-analytics-batteries.png)
+![Analytics, Batteries view: WR1's two packs' temperature over a cold night on a scale through 0 °C, the measure Temperature, Pack state of charge or Cell voltage, Basic or Expert, the state of charge overlay, the coldest and the warmest pack as KPI cards, and the States card opened with the lanes Heating and Too cold](../../assets/screenshots/dashboard/dashboard-analytics-batteries.png)
 
 **Batteries** shows the batteries of one device at a time: its device choice
 lists every device with a battery the EMS controls, also one that is offline
@@ -223,6 +223,11 @@ the EMS decided for it.
     in °C, each pack's warmest reading as the device reports it. The scale
     always shows 0 °C, the line a battery has to be above before it charges.
     **Coldest pack** and **Warmest pack** of the period are the KPI cards.
+  - **Pack state of charge** draws every pack's own state of charge, **Pack
+    1**, **Pack 2**, …, from 0 to 100 %. The device's **State of charge**, the
+    overlay on the same axis, is one level for all of them, so two packs
+    drifting apart show here first. **Emptiest pack** and **Fullest pack** of
+    the period are the KPI cards.
   - **Cell voltage** draws the lowest and the highest cell of one pack on a
     volt scale, with **Lowest cell** and **Highest cell** of the period as KPI
     cards; **Pack 1**, **Pack 2**, … choose the pack on a device with several.

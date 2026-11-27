@@ -103,7 +103,9 @@ labels instead of raw numbers:
   `Calibration running`.
 
 The battery pack count and the AC input limit are main facts of the card when
-the device reports them, and so is **Cell voltage**, the lowest to the highest
+the device reports them, and so is **Pack state of charge** on a device with
+several packs, the emptiest to the fullest pack's own state of charge
+(`packData[].socLevel`; the device reports one level for all of them), then **Cell voltage**, the lowest to the highest
 cell over the device's packs, with a folded section per pack when it has more
 than one, and **Pack power**, what the packs report flowing in or out of
 themselves, positive while charging and negative while discharging. It shows a
@@ -114,12 +116,12 @@ power without it is left out rather than shown as charging. **Inverter
 temperature** and **Pack temperature**, the coolest to the warmest pack, are
 main facts too when the device reports them, over the local API and MQTT alike;
 one it does not report is left out, never shown as 0 °C. The folded **Packs**
-section lists every pack that reports its cells, such a power or its
-temperature.
+section lists every pack that reports its charge, its cells, such a power or
+its temperature, its charge beside its number (*Pack 1 · 30 %*).
 The live snapshot carries the inverter's as `devices.<name>.temperature_c` and
 the packs per device as `devices.<name>.battery_packs`, a
 list of `{"pack": 1, "cell_min_v": 3.17, "cell_max_v": 3.18, "power_w": 4,
-"state": 2, "temp_c": 13.0}`: Zendure's `packData[].minVol` and `maxVol`, hundredths of a volt,
+"state": 2, "temp_c": 13.0, "soc": 41.0}`: Zendure's `packData[].minVol` and `maxVol`, hundredths of a volt,
 in volts, `null` where a pack reports none or a value no cell can have (outside
 1.5–5.0 V, or a lowest cell above the highest); `packData[].power` in whole
 watts, whose sign is not a direction (`state` names it), a 16-bit value of 32768–65535 read as the
@@ -127,7 +129,8 @@ negative number it encodes (as `batcur` 65535 is −1), `null` outside ±10 kW; 
 `packData[].state`, 0 idle, 1 charging, 2 discharging, `null` for any other
 value; and `packData[].maxTemp`, tenths of a kelvin like the inverter's
 `hyperTmp`, in °C, `null` where a pack reports none or a value outside -60 to
-120 °C. The card takes the
+120 °C; and `packData[].socLevel`, the pack's own state of charge in whole
+percent, `null` where a pack reports none or a value outside 0–100. The card takes the
 direction from `state`; the EMS's control does not read either. The packs are numbered from 1 in the order of their
 serial numbers, which are not published; adding or removing a pack renumbers
 the ones after it, so from then on a number's history goes on with another
@@ -871,7 +874,8 @@ and highest value rather than its mean, so a short dip still shows in a long
 range. SQLite reads them from the snapshot's `battery_packs` and thins a long
 range to at most 2,000 snapshots like every other series, so it can miss a dip
 shorter than the gap between two of them. `pack_temp:<pack>` reads one pack's
-temperature in °C the same way, the mean across devices. With `devices`,
+temperature in °C the same way, the mean across devices, and `pack_soc:<pack>`
+its own state of charge in percent. With `devices`,
 `device_temp`, `min_soc`, `winter_target`, `heat_state`, `low_temp`,
 `error_flag`, `derate`, `winter_hold`, `ac_input`, `charge_avail`,
 `discharge_avail` and `input_limit` read the battery's condition (see [A
@@ -941,7 +945,9 @@ energy KPI cards (no extra chart pages):
 - **Battery** — Battery; KPIs Battery charged, Battery discharged.
 - **Solar** — Solar and Output; KPIs Solar, Solar peak, Output.
 - **Batteries** — one device's batteries, one measure at a time: every pack's
-  `pack_temp:<n>` (KPIs Coldest pack, Warmest pack), one pack's
+  `pack_temp:<n>` (KPIs Coldest pack, Warmest pack), every pack's
+  `pack_soc:<n>` on a 0–100 % axis (KPIs Emptiest pack, Fullest pack), one
+  pack's
   `cell_min:<n>`/`cell_max:<n>` (KPIs Lowest cell, Highest cell), or, in
   Expert, `charge_avail`, `discharge_avail` and `input_limit`. Its overlays are
   `soc`, and in Expert `min_soc`, `winter_target` and, on the temperature,

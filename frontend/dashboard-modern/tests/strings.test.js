@@ -135,6 +135,7 @@ const SAME_NAME = {
   batteryDischarged: ["channel.battery_discharge", "analytics.kpi.discharge"],
   acCharging: ["series.ac_charge", "energy.acCharge", "analytics.kpi.acCharge", "assist.acCharge", "code.ac_charge", "runtime.acChargeTitle", "schedule.group.ac_charging"],
   stateOfCharge: ["flow.soc", "series.soc"],
+  packStateOfCharge: ["device.packCharge", "battery.measure.charge"],
   gridImportToday: ["today.gridImport", "flow.importedToday"],
   energyFlowsSince: ["energy.measuredSince", "energy.context.channelsSince"],
 };

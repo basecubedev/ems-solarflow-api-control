@@ -100,14 +100,15 @@ MAX_CONSUMER_NAME = 256
 # and a downsampling step: a short dip of the lowest cell is what it is read for.
 PACK_CELL_SERIES = {"cell_min": "cell_min_v", "cell_max": "cell_max_v"}
 PACK_CELL_REDUCERS = {"cell_min_v": "min", "cell_max_v": "max"}
-PACK_SERIES = {**PACK_CELL_SERIES, "pack_temp": "temp_c"}
-PACK_SERIES_REDUCERS = {**PACK_CELL_REDUCERS, "temp_c": "mean"}
-# A pack's own power, state and temperature stay out of the cell task. power_w
-# carries no direction -- state does -- so a window's mean across a change of
-# direction means nothing, and a field added to the cell task would leave every
-# installation's existing task "kept" until an operator synced by hand. The
-# temperature has a task of its own (ems.history.schema BATTERY_DOWNSAMPLED).
-PACK_RAW_FIELDS = ("power_w", "state", "temp_c")
+PACK_SERIES = {**PACK_CELL_SERIES, "pack_temp": "temp_c", "pack_soc": "soc"}
+PACK_SERIES_REDUCERS = {**PACK_CELL_REDUCERS, "temp_c": "mean", "soc": "mean"}
+# A pack's own power, state, temperature and state of charge stay out of the
+# cell task. power_w carries no direction -- state does -- so a window's mean
+# across a change of direction means nothing, and a field added to the cell
+# task would leave every installation's existing task "kept" until an operator
+# synced by hand. The temperature and the state of charge are carried by the
+# battery task (ems.history.schema BATTERY_DOWNSAMPLED).
+PACK_RAW_FIELDS = ("power_w", "state", "temp_c", "soc")
 _REDUCE = {"min": min, "max": max, "mean": lambda values: sum(values) / len(values)}
 
 # Per-device snapshot fields (under payload["devices"][name]) used when the
@@ -257,7 +258,7 @@ def consumer_of_series(series_name):
 
 
 def pack_cells_of_series(series_name):
-    """``(field, pack)`` a ``cell_min:<n>``, ``cell_max:<n>`` or ``pack_temp:<n>`` series reads, or ``None``."""
+    """``(field, pack)`` a ``cell_min:<n>``, ``cell_max:<n>``, ``pack_temp:<n>`` or ``pack_soc:<n>`` series reads, or ``None``."""
 
     if not isinstance(series_name, str):
         return None
@@ -486,7 +487,7 @@ def _pack_series_value(payload, field_name, pack, device_names):
     """One pack's cell voltage or temperature in a snapshot, over the selected devices or all.
 
     The reducer ``PACK_SERIES_REDUCERS`` names for the field: a cell voltage's
-    extreme, a temperature's mean. Without a choice the devices the EMS
+    extreme, a temperature's or a charge's mean. Without a choice the devices the EMS
     controls count, the ones InfluxDB records packs for.
     """
 
