@@ -13,11 +13,13 @@ export async function fetchSeries({ source = "history", range, start, end, serie
     params.range = range || "24h";
   }
   const payload = await getJson(`${path}${query(params)}`, { signal });
+  const span = [payload?.start, payload?.end].map((value) => Date.parse(value) / 1000);
   return {
     available: payload?.available !== false,
     reason: payload?.reason || null,
     hint: payload?.hint || null,
     time: Array.isArray(payload?.time) ? payload.time.map(Number) : [],
+    span: span.every(Number.isFinite) && span[1] > span[0] ? span : null,
     series: payload?.series || {},
     meta: payload?.meta || {},
     devices: payload?.devices || [],

@@ -3,7 +3,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createFormat } from "../../shared/lib/format.js";
-import { chargeText, packChargeRange, packCells, packFlows, packFlowTotal, packReadings, packTemperatures, temperatureRange, temperatureText, cellRange, cellText, cellSeriesIds, cellKind, cellStyle, cellDevices, historyCellDevices, analyticsCellDevices, packsSeen, reportedCells, seriesExtreme, shownPack, voltRange } from "../src/lib/cells.js";
+import { chargeText, packChargeRange, packCells, packFlows, packFlowTotal, packReadings, packTemperatures, temperatureRange, temperatureText, cellRange, cellText, cellSeriesIds, cellKind, cellStyle, cellDevices, historyCellDevices, analyticsCellDevices, packsSeen, reportedCells, shownPack, voltRange } from "../src/lib/cells.js";
 import { normalizeDevice } from "../src/lib/devices.js";
 import { ANALYTICS_VIEWS, requestedSeries, seriesStyle, viewById } from "../src/lib/analytics.js";
 
@@ -196,14 +196,6 @@ test("the volt axis hugs the data on 50 mV steps", () => {
   assert.deepEqual(voltRange(null, undefined), [3.0, 3.5]);
 });
 
-test("the lowest and highest value of a series in an answer", () => {
-  const data = { series: { "cell_min:1": [3.2, null, 3.17], "cell_max:1": [3.22, 3.25, null] } };
-  assert.equal(seriesExtreme(data, "cell_min:1", "min"), 3.17);
-  assert.equal(seriesExtreme(data, "cell_max:1", "max"), 3.25);
-  assert.equal(seriesExtreme(data, "cell_min:2", "min"), null);
-  assert.equal(seriesExtreme(null, "cell_min:1", "min"), null);
-});
-
 test("the batteries view leaves its series to battery.js, and a battery overlay stays out of the power views", () => {
   const view = viewById("cells");
   assert.ok(view.cells && view.modernOnly);
@@ -214,7 +206,6 @@ test("the batteries view leaves its series to battery.js, and a battery overlay 
   assert.deepEqual(seriesStyle(view, "soc").dash, [6, 4]);
   assert.ok(ANALYTICS_VIEWS.filter((item) => item.modernOnly).every((item) => item.consumers || item.cells));
 });
-
 
 test("a device's packs give their own charge, and the card names the emptiest and the fullest", () => {
   const packs = packCells([{ pack: 2, soc: 70, cell_min_v: 3.31 }, { pack: 1, soc: 30 }, { pack: 3 }]);

@@ -10,12 +10,12 @@
   import { t, fmt } from "../i18n/i18n.svelte.js";
   import { getJson } from "../../../shared/lib/api.js";
   import { fetchSeries } from "../lib/historyApi.js";
-  import { escapeLeavesZoom, zoomSpan } from "../lib/history.js";
+  import { escapeLeavesZoom, shownSpan, zoomSpan } from "../lib/history.js";
   import { ANALYTICS_RANGES, ANALYTICS_VIEWS, ANALYTICS_OVERLAYS, viewById, requestedSeries, seriesStyle, seriesKwh, computeKpi, runtimeRole, KPIS } from "../lib/analytics.js";
-  import { analyticsCellDevices, cellStyle, seriesExtreme, shownPack } from "../lib/cells.js";
+  import { analyticsCellDevices, cellStyle, shownPack } from "../lib/cells.js";
   import CellPicker from "../ui/CellPicker.svelte";
   import StateLanes from "../ui/StateLanes.svelte";
-  import { batteryChartIds, batteryMeasures, batteryOverlays, batteryRequest, batteryStyle, laneSummary, lanesCoarse, laneTotals, packExtreme, packSeriesIds, shownMeasure, shownPacks, stateLanes } from "../lib/battery.js";
+  import { batteryChartIds, batteryMeasures, batteryOverlays, batteryKpi, batteryKpiText, batteryRequest, batteryStyle, cardSeriesIds, laneSummary, lanesCoarse, laneTotals, packSeriesIds, shownMeasure, shownPacks, stateLanes } from "../lib/battery.js";
   import { analyticsDetail, setAnalyticsDetail } from "../state/prefs.svelte.js";
   import { chartConsumers, chartTokens, consumerPalette, consumerSeriesId, restOfHouse, OTHER_TOKEN } from "../lib/consumers.js";
   import { devices } from "../state/derived.svelte.js";
@@ -46,6 +46,7 @@
   let failedKey = "";
   let zoomEpoch = $state(0);
   let liveExtent = $state.raw(null);
+  let liveSpan = $state.raw(null);
   let controller = null;
   let zoomTimer = null;
 
@@ -72,7 +73,7 @@
   const consumerKey = $derived(JSON.stringify(chartTokens(chosen.shown, palette)));
   const consumers = $derived(JSON.parse(consumerKey));
   const rest = $derived(chosen.rest);
-  const seriesIds = $derived(view.cells ? batteryRequest(batteryIds, expert) : requestedSeries(view, overlays, consumers.map((item) => item.key), pack));
+  const seriesIds = $derived(view.cells ? batteryRequest(batteryIds, expert, cardSeriesIds(measure.id, pack)) : requestedSeries(view, overlays, consumers.map((item) => item.key), pack));
   const chartIds = $derived(view.cells ? batteryIds : seriesIds);
   const seriesKey = $derived(seriesIds.join(","));
   const chartSeries = $derived(
@@ -188,6 +189,7 @@
         dataSelection = selection;
         failedKey = "";
         if (!asked && main.time.length > 1) liveExtent = [main.time[0], main.time[main.time.length - 1]];
+        if (!asked) liveSpan = shownSpan(main.span, Date.now() / 1000, main.time[main.time.length - 1]);
       }
       error = false;
     } catch (err) {
@@ -217,6 +219,7 @@
       zoom = null;
       zoomEpoch += 1;
       liveExtent = null;
+      liveSpan = null;
       load();
     });
   });
@@ -286,8 +289,7 @@
   });
   const role = $derived(runtimeRole(live.snapshot, shownDevice));
   const zoomScope = $derived(`${view.id}|${measure.id}|${range}|${shownDevice}|${pack ?? ""}|${applied ? `${applied.start}-${applied.end}` : ""}|${zoomEpoch}`);
-  const cellLow = $derived(view.cells && measure.id === "cells" && chartIds[0] ? seriesExtreme(data, chartIds[0], "min") : null);
-  const cellHigh = $derived(view.cells && measure.id === "cells" && chartIds[1] ? seriesExtreme(data, chartIds[1], "max") : null);
+  const kpiIds = $derived(measure.perPack ? perPackIds : chartIds.filter((id) => cellStyle(id)));
 </script>
 
 {#snippet retrying()}
@@ -334,7 +336,7 @@
     {#if !view.consumers}
       <div class="controls overlays" role="group" aria-label={t("analytics.overlays")}>
         <span class="row-label">{t("analytics.overlays")}</span>
-        {#each view.cells ? batteryOverlays(expert, measure.id).map((entry) => entry.id) : ANALYTICS_OVERLAYS as id (id)}
+        {#each view.cells ? batteryOverlays(expert).map((entry) => entry.id) : ANALYTICS_OVERLAYS as id (id)}
           <button type="button" class="chip" aria-pressed={overlays.includes(id) ? "true" : "false"} onclick={() => toggleOverlay(id)}>{t(`series.${id}`)}</button>
         {/each}
       </div>
@@ -368,7 +370,7 @@
     {:else if view.cells && !withCells.length}
       <Empty text={t("cells.none")} icon="battery-medium" />
     {:else}
-      <TimeChart series={chartSeries} unit={view.cells ? measure.unit : "W"} stacked={Boolean(view.consumers)} time={data?.time || []} values={chartData?.series || {}} {showTable} label={t(`analytics.view.${view.id}`)} scope={zoomScope} bounds={liveExtent} {onzoom} busy={loading && data !== null} emptyText={data ? "" : t("chart.loading")} />
+      <TimeChart series={chartSeries} unit={view.cells ? measure.unit : "W"} stacked={Boolean(view.consumers)} time={data?.time || []} values={chartData?.series || {}} {showTable} label={t(`analytics.view.${view.id}`)} scope={zoomScope} xRange={liveSpan} bounds={liveExtent} {onzoom} busy={loading && data !== null} emptyText={data ? "" : t("chart.loading")} />
       {#if error && data}<p class="note" role="status"><Icon name="circle-alert" />{t("chart.stale")}</p>{/if}
     {/if}
   </Card>
@@ -390,34 +392,12 @@
         <div class="kpi-value num">{f.energy(seriesKwh(chartData, item.id))}</div>
       </div>
     {/each}
-    {#if view.cells && measure.id === "temperature"}
-      <div class="card kpi c-bat" data-testid="analytics-temp-kpi">
-        <div class="kpi-label">{t("battery.coldest")} · {rangeLabel}</div>
-        <div class="kpi-value num">{f.temperature(packExtreme(data, perPackIds, "min"))}</div>
+    {#each view.cells ? measure.kpis : [] as kpi (kpi.label)}
+      <div class="card kpi c-bat" data-testid={`analytics-${measure.id}-kpi`}>
+        <div class="kpi-label">{t(kpi.label)} · {rangeLabel}</div>
+        <div class="kpi-value num">{batteryKpiText(batteryKpi(data, kpi.series ? [`${kpi.series}:${pack}`] : kpiIds, kpi.reach), kpi.format, f)}</div>
       </div>
-      <div class="card kpi c-bat" data-testid="analytics-temp-kpi">
-        <div class="kpi-label">{t("battery.warmest")} · {rangeLabel}</div>
-        <div class="kpi-value num">{f.temperature(packExtreme(data, perPackIds, "max"))}</div>
-      </div>
-    {:else if view.cells && measure.id === "charge"}
-      <div class="card kpi c-bat" data-testid="analytics-charge-kpi">
-        <div class="kpi-label">{t("battery.lowestCharge")} · {rangeLabel}</div>
-        <div class="kpi-value num">{f.percent(packExtreme(data, perPackIds, "min"))}</div>
-      </div>
-      <div class="card kpi c-bat" data-testid="analytics-charge-kpi">
-        <div class="kpi-label">{t("battery.highestCharge")} · {rangeLabel}</div>
-        <div class="kpi-value num">{f.percent(packExtreme(data, perPackIds, "max"))}</div>
-      </div>
-    {:else if view.cells && measure.id === "cells"}
-      <div class="card kpi c-bat" data-testid="analytics-cell-kpi">
-        <div class="kpi-label">{t("series.cellMin")} · {rangeLabel}</div>
-        <div class="kpi-value num">{f.voltage(cellLow)}</div>
-      </div>
-      <div class="card kpi c-bat" data-testid="analytics-cell-kpi">
-        <div class="kpi-label">{t("series.cellMax")} · {rangeLabel}</div>
-        <div class="kpi-value num">{f.voltage(cellHigh)}</div>
-      </div>
-    {/if}
+    {/each}
     {#each view.kpis as id (id)}
       {@const value = computeKpi(id, data)}
       <div class="card kpi" style:--c={`var(${KPIS[id].token})`}>

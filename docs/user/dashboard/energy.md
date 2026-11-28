@@ -210,19 +210,21 @@ gives you the accumulated one.
 
 ### Batteries
 
-![Analytics, Batteries view: WR1's two packs' temperature over a cold night on a scale through 0 °C, the measure Temperature, Pack state of charge or Cell voltage, Basic or Expert, the state of charge overlay, the coldest and the warmest pack as KPI cards, and the States card opened with the lanes Heating and Too cold](../../assets/screenshots/dashboard/dashboard-analytics-batteries.png)
+![Analytics, Batteries view: WR1's two packs' temperature over a cold night beside the inverter's, on a scale through 0 °C, the measure Temperature, Pack state of charge, Cell voltage or Pack power, Basic or Expert, the state of charge overlay, the coldest and the warmest pack as KPI cards, and the States card opened with the lanes Heating and Too cold](../../assets/screenshots/dashboard/dashboard-analytics-batteries.png)
 
 **Batteries** shows the batteries of one device at a time: its device choice
 lists every device with a battery the EMS controls, also one that is offline
 now, without *All devices*. It answers what a battery did in the cold: how warm
-its packs were, whether it heated, whether it was too cold to charge, and what
-the EMS decided for it.
+its packs were, whether it heated, whether it was too cold to charge, how its
+packs shared the work, and what the EMS decided for it.
 
 - **Measure** — one quantity at a time, each on its own scale:
   - **Temperature** draws every pack of the device, **Pack 1**, **Pack 2**, …,
-    in °C, each pack's warmest reading as the device reports it. The scale
-    always shows 0 °C, the line a battery has to be above before it charges.
-    **Coldest pack** and **Warmest pack** of the period are the KPI cards.
+    in °C, each pack's warmest reading as the device reports it, and the
+    **Inverter**, the device's own temperature, as a line of its own colour.
+    The scale always shows 0 °C, the line a battery has to be above before it
+    charges. **Coldest pack** and **Warmest pack** of the period are the KPI
+    cards.
   - **Pack state of charge** draws every pack's own state of charge, **Pack
     1**, **Pack 2**, …, from 0 to 100 %. The device's **State of charge**, the
     overlay on the same axis, is one level for all of them, so two packs
@@ -232,17 +234,30 @@ the EMS decided for it.
     volt scale, with **Lowest cell** and **Highest cell** of the period as KPI
     cards; **Pack 1**, **Pack 2**, … choose the pack on a device with several.
     A dip of the lowest cell still shows in a long range, because each point
-    keeps the lowest and the highest value of its interval.
+    keeps the lowest and the highest value of its interval. **Widest cell
+    spread** is the largest gap between the two in any one reading, in mV:
+    cells that drift apart are what a battery's balancing has to catch up
+    with. A long range keeps it too, rather than mixing the lowest and the
+    highest cell of different times.
+  - **Pack power** draws every pack's power in watts, below zero while it
+    charges and above while it discharges, as the **Battery** view draws the
+    device's, so packs that do not share the work evenly show. **Strongest
+    discharge** and **Strongest charge** of the period are the KPI cards.
+  - **Voltage**, in Expert, draws every pack's voltage across all its cells
+    and the **Device**'s battery voltage, with **Lowest pack voltage** and
+    **Highest pack voltage** of the period as KPI cards.
+  - **Current**, in Expert, draws every pack's current in amps, below zero
+    while it charges like its power, on a scale that always shows 0 A.
   - **Limits**, in Expert, draws in watts what the battery accepts now,
     **Charge accepted** and **Discharge accepted**, as its battery management
     reports them, and the **AC charge limit** the device is set to.
-- **Basic** and **Expert** — Basic shows what a battery in the cold needs;
-  Expert adds **Limits**, the winter overlays and the states the EMS keeps.
+- **Basic** and **Expert** — Basic shows what a battery in the cold needs and
+  how its packs share the work; Expert adds **Voltage**, **Current**,
+  **Limits**, the winter overlays and the states the EMS keeps.
   This browser remembers the choice.
 - **Overlays** — **State of charge**; Expert adds **Minimum SoC** and **Winter
   target**, the minimum state of charge [winter mode](../../winter-mode.md)
-  plans while it is on, both on the percent scale on the right, and on **Temperature** the
-  **Inverter**, the device's own temperature, as a dotted line.
+  plans while it is on, both on the percent scale on the right.
 - **States** — folded under the chart, so it stays out of the way until it is
   wanted. Folded, it names the states that were on and for how long, for
   example *Heating 40 min · Too cold 6.5 h*. Opened, each state is a lane on
@@ -291,6 +306,7 @@ data. Zooming in on Analytics asks for the finer resolution again.
 | Cause | What you see | Is it a bug? |
 | --- | --- | --- |
 | The EMS was stopped | A hatched gap in the chart | No |
+| A value recorded only since a recent update, or the EMS started within the range | Analytics hatches the stretch before the first point | No |
 | Device silent past `telemetry_max_age_seconds` | Every figure pauses, the period is marked `◦` | No |
 | Analytics not configured | Analytics shows its empty state | No |
 | InfluxDB configured but unreachable | *InfluxDB analytics is not reachable* | Check the InfluxDB service |

@@ -5,29 +5,45 @@
  * range, as InfluxDB records it (ems.history.schema BATTERY_DOWNSAMPLED).
  *
  * One measure is drawn at a time, each on its own unit: the packs'
- * temperatures, the packs' states of charge, one pack's cell voltages, or
- * what the battery accepts. The
+ * temperatures beside the inverter's, the packs' states of charge, one
+ * pack's cell voltages, the packs' power, their voltages beside the
+ * device's, their currents, or what the battery accepts. A pack's power and
+ * current are kept positive while it charges, as the battery is, and drawn
+ * below zero while it charges, as the battery is (history.shownValue). The
  * states the device and the EMS report (heating, too cold, charging role,
  * winter hold) are no lines but lanes under the chart. Basic shows what a
- * battery in the cold needs; Expert adds the rest.
+ * battery in the cold needs and how its packs share the work; Expert adds
+ * the rest.
  */
 
-import { MINUS } from "../../../shared/lib/format.js";
+import { MISSING } from "../../../shared/lib/format.js";
+import { ampText } from "./batteryAxes.js";
 import { cellSeriesIds, MAX_PACK_NUMBER } from "./cells.js";
 import { gapLimit, sampleSpacing, zoomSpan } from "./history.js";
 
+const LOW_HIGH = (low, high, format) => [{ label: low, reach: "min", format }, { label: high, reach: "max", format }];
+const BOTH_WAYS = (format) => [{ label: "battery.strongestDischarge", reach: "discharge", format }, { label: "battery.strongestCharge", reach: "charge", format }];
+
+/**
+ * What the batteries view can draw. ``perPack`` names the series a measure
+ * reads once per pack, ``device`` the device's own line beside them, and
+ * ``kpis`` what the cards under the chart show over the range, a card with a
+ * ``series`` reading that series of the pack shown rather than the chart's.
+ */
 export const BATTERY_MEASURES = Object.freeze([
-  { id: "temperature", unit: "°C", perPack: "pack_temp" },
-  { id: "charge", unit: "%", perPack: "pack_soc" },
-  { id: "cells", unit: "V" },
-  { id: "limits", unit: "W", expert: true },
+  { id: "temperature", unit: "°C", perPack: "pack_temp", device: "device_temp", kpis: LOW_HIGH("battery.coldest", "battery.warmest", "temperature") },
+  { id: "charge", unit: "%", perPack: "pack_soc", kpis: LOW_HIGH("battery.lowestCharge", "battery.highestCharge", "percent") },
+  { id: "cells", unit: "V", kpis: [...LOW_HIGH("series.cellMin", "series.cellMax", "voltage"), { label: "battery.cellSpread", reach: "max", format: "millivolt", series: "cell_spread" }] },
+  { id: "power", unit: "W", perPack: "pack_power", kpis: BOTH_WAYS("power") },
+  { id: "voltage", unit: "V", perPack: "pack_voltage", device: "device_voltage", expert: true, kpis: LOW_HIGH("battery.lowestVoltage", "battery.highestVoltage", "voltage") },
+  { id: "current", unit: "A", perPack: "pack_current", expert: true, kpis: BOTH_WAYS("current") },
+  { id: "limits", unit: "W", expert: true, kpis: [] },
 ]);
 
 export const BATTERY_OVERLAYS = Object.freeze([
   { id: "soc" },
   { id: "min_soc", expert: true },
   { id: "winter_target", expert: true },
-  { id: "device_temp", expert: true, measure: "temperature" },
 ]);
 
 export const STATE_LANES = Object.freeze([
@@ -57,9 +73,9 @@ export function shownMeasure(wanted, expert) {
   return batteryMeasures(expert).find((measure) => measure.id === wanted) || BATTERY_MEASURES[0];
 }
 
-/** The overlays a measure takes at a detail level. */
-export function batteryOverlays(expert, measure) {
-  return offered(BATTERY_OVERLAYS, expert).filter((overlay) => !overlay.measure || overlay.measure === measure);
+/** The overlays a detail level offers, each measure taking all of them. */
+export function batteryOverlays(expert) {
+  return offered(BATTERY_OVERLAYS, expert);
 }
 
 export function stateLanes(expert) {
@@ -93,20 +109,27 @@ export function seriesPack(id) {
 }
 
 /**
- * The series the chart draws: every pack's temperature or charge, one pack's
- * cell voltages, or the limits, then the overlays switched on that the
- * measure takes.
+ * The series the chart draws: a line per pack and the device's own line
+ * beside them, one pack's cell voltages, or the limits, then the overlays
+ * switched on that the measure takes.
  */
 export function batteryChartIds(measure, packs, pack, overlays, expert) {
   const perPack = packSeriesIds(measure, packs);
-  const own = perPack.length ? perPack : measure === "cells" ? (pack === null ? [] : cellSeriesIds(pack)) : measure === "limits" ? [...LIMIT_SERIES] : [];
-  const allowed = new Set(batteryOverlays(expert, measure).map((overlay) => overlay.id));
+  const device = BATTERY_MEASURES.find((entry) => entry.id === measure)?.device;
+  const own = perPack.length ? [...perPack, ...(device ? [device] : [])] : measure === "cells" ? (pack === null ? [] : cellSeriesIds(pack)) : measure === "limits" ? [...LIMIT_SERIES] : [];
+  const allowed = new Set(batteryOverlays(expert).map((overlay) => overlay.id));
   return own.length ? [...own, ...overlays.filter((id) => allowed.has(id))] : [];
 }
 
 /** What one request asks for: the chart's series and the lanes. */
-export function batteryRequest(chartIds, expert) {
-  return chartIds.length ? [...chartIds, ...stateLanes(expert).map((lane) => lane.id)] : [];
+export function batteryRequest(chartIds, expert, cards = []) {
+  return chartIds.length ? [...chartIds, ...cards, ...stateLanes(expert).map((lane) => lane.id)] : [];
+}
+
+/** The series a measure's cards read beside its chart, for the pack shown. */
+export function cardSeriesIds(measure, pack) {
+  const kpis = BATTERY_MEASURES.find((entry) => entry.id === measure)?.kpis || [];
+  return pack === null ? [] : kpis.filter((kpi) => kpi.series).map((kpi) => `${kpi.series}:${pack}`);
 }
 
 /** How a battery series is drawn and named; ``label`` is a string key, ``args`` its values. */
@@ -114,21 +137,9 @@ export function batteryStyle(id) {
   const pack = seriesPack(id);
   if (pack !== null) return { label: "series.pack", args: { n: pack }, token: PACK_TOKENS[(pack - 1) % PACK_TOKENS.length], fill: false };
   if (id in PERCENT_SERIES) return { label: `series.${id}`, token: PERCENT_SERIES[id], unit: "%", ink: "--m-muted", fill: false, dash: [6, 4] };
-  if (id === "device_temp") return { label: "series.device_temp", token: "--m-muted", fill: false, dash: [2, 3] };
+  if (id === "device_temp" || id === "device_voltage") return { label: `series.${id}`, token: "--inverter", fill: false };
   if (LIMIT_SERIES.includes(id)) return { label: `series.${id}`, token: { charge_avail: "--battery", discharge_avail: "--output", input_limit: "--grid" }[id], fill: false };
   return null;
-}
-
-/** A temperature axis in steps of five degrees that always shows 0 °C, the line a battery heats from. */
-export function celsiusRange(min, max) {
-  const low = Number.isFinite(min) ? min : 0;
-  const high = Number.isFinite(max) ? max : 10;
-  return [Math.min(-5, Math.floor(low / 5) * 5), Math.max(10, Math.ceil(high / 5) * 5)];
-}
-
-/** A temperature axis label: a whole degree without a decimal, any other tick as a temperature. */
-export function celsiusTick(value, f) {
-  return Number.isInteger(value) ? `${value < 0 ? MINUS : ""}${f.number(Math.abs(value), 0)}\u00a0°C` : f.temperature(value);
 }
 
 /**
@@ -213,6 +224,26 @@ export function laneSummary(rows, t, f, coarse = false) {
 export function laneTicks(start, end, count = 5) {
   if (!(end > start) || count < 2) return [];
   return Array.from({ length: count }, (_, index) => start + ((end - start) * index) / (count - 1));
+}
+
+/**
+ * What one card under the chart shows: the lowest or highest reading over
+ * the range, or the strongest charge or discharge, each as a size, from
+ * values kept positive while charging; null without a reading.
+ */
+export function batteryKpi(data, ids, reach) {
+  if (reach === "charge" || reach === "discharge") {
+    const value = packExtreme(data, ids, reach === "charge" ? "max" : "min");
+    return value === null ? null : Math.max(0, reach === "charge" ? value : -value);
+  }
+  return packExtreme(data, ids, reach);
+}
+
+/** A card's value in its measure's unit. */
+export function batteryKpiText(value, format, f) {
+  if (format === "current") return ampText(value, f);
+  if (format === "millivolt") return Number.isFinite(value) ? `${f.number(value * 1000, 0)}\u00a0mV` : MISSING;
+  return f[format](value);
 }
 
 /** The lowest or the highest value any of the series reached over the range, null without a reading. */

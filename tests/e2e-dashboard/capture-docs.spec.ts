@@ -264,7 +264,7 @@ test.describe("EMS Dashboard documentation captures @docs", () => {
     await open(page, baseURL, "#/analytics", { scenario: "ac-charging" });
     await waitForChart(page);
     await page.getByTestId("analytics-view-block").getByRole("button", { name: "Batteries", exact: true }).click();
-    await expect(page.getByRole("region", { name: "Batteries", exact: true }).locator(".legend-item")).toHaveCount(2);
+    await expect(page.getByRole("region", { name: "Batteries", exact: true }).locator(".legend-item")).toHaveCount(3);
     await waitForChart(page);
     const states = page.getByTestId("battery-states");
     await states.getByRole("button", { name: "States" }).click();

@@ -175,13 +175,6 @@ export function analyticsCellDevices(devices, seen = {}) {
   return historyCellDevices(devices.filter((device) => !device.readOnly), seen);
 }
 
-/** The lowest or the highest value a series reached in a history answer, null without one. */
-export function seriesExtreme(data, id, kind) {
-  const values = (data?.series?.[id] || []).map(finite).filter((value) => value !== null);
-  if (!values.length) return null;
-  return kind === "min" ? Math.min(...values) : Math.max(...values);
-}
-
 /** The pack a chart shows: the one asked for while the device has it, else its first. */
 export function shownPack(packs, wanted) {
   return packs.some((pack) => pack.pack === wanted) ? wanted : packs[0]?.pack ?? null;
