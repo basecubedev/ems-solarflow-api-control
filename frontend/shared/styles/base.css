@@ -241,6 +241,70 @@ textarea.input { height: auto; padding: 8px 10px; }
 .input[aria-invalid="true"] { border-color: var(--m-fault); }
 .check { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; }
 .check input { width: 16px; height: 16px; accent-color: var(--m-accent); }
+
+.switch { position: relative; display: inline-flex; flex: none; width: 42px; height: 24px; }
+.switch input { position: absolute; inset: 0; z-index: 1; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; }
+.switch input:disabled { cursor: not-allowed; }
+.switch-track { position: absolute; inset: 0; border-radius: var(--m-radius-pill); background: var(--m-well); box-shadow: inset 0 0 0 1px var(--m-line-strong), inset 0 1px 3px color-mix(in srgb, var(--m-black) 45%, transparent); transition: background 0.2s ease, box-shadow 0.2s ease; }
+.switch-track::after { content: ""; position: absolute; top: 3px; left: 3px; width: 18px; height: 18px; border-radius: 50%; background: linear-gradient(to bottom, var(--m-muted), var(--m-muted-2)); box-shadow: 0 1px 3px color-mix(in srgb, var(--m-black) 50%, transparent); transition: transform 0.22s cubic-bezier(0.34, 1.4, 0.64, 1), background 0.2s ease, box-shadow 0.2s ease; }
+.switch input:checked + .switch-track { background: linear-gradient(135deg, color-mix(in srgb, var(--m-choice) 50%, var(--m-bg)), var(--m-choice)); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--m-choice) 70%, transparent), 0 0 12px color-mix(in srgb, var(--m-choice) 32%, transparent); }
+.switch input:checked + .switch-track::after { transform: translateX(18px); background: linear-gradient(to bottom, var(--m-white), color-mix(in srgb, var(--m-white) 80%, var(--m-choice))); box-shadow: 0 1px 4px color-mix(in srgb, var(--m-black) 45%, transparent); }
+.switch input:hover:not(:disabled) + .switch-track::after { box-shadow: 0 1px 4px color-mix(in srgb, var(--m-black) 45%, transparent), 0 0 0 4px color-mix(in srgb, var(--m-choice) 16%, transparent); }
+.switch input:focus-visible + .switch-track { outline: 2px solid var(--m-accent); outline-offset: 2px; }
+.switch input:disabled + .switch-track { opacity: 0.5; }
+
+.stepper-wrap { --stepper-button: 36px; --track-inset: 12px; position: relative; width: 100%; max-width: 20rem; min-width: 0; }
+.stepper { display: flex; align-items: stretch; width: 100%; min-width: 0; height: 36px; border: 1px solid var(--m-line-strong); border-radius: var(--m-radius-control); background: var(--m-well); overflow: hidden; }
+.stepper:focus-within { outline: 2px solid var(--m-accent); outline-offset: 0; border-color: transparent; }
+.stepper:has(input[aria-invalid="true"]) { border-color: var(--m-fault); }
+.stepper button { flex: none; display: grid; place-items: center; width: var(--stepper-button); padding: 0; border: 0; background: transparent; color: var(--m-muted); cursor: pointer; }
+.stepper button:first-child { border-right: 1px solid var(--m-line); }
+.stepper button:last-child { border-left: 1px solid var(--m-line); }
+.stepper button:hover:not(:disabled) { color: var(--m-text); background: var(--m-surface-2); }
+.stepper button:disabled { color: var(--m-muted-2); opacity: 0.45; cursor: default; }
+.stepper-field { position: relative; flex: 1; display: flex; align-items: center; justify-content: center; gap: 3px; min-width: 0; padding: 0 8px; cursor: text; }
+.stepper-field.meter { --meter: var(--m-choice); padding-bottom: 7px; }
+.stepper-field.meter.standard { --meter: color-mix(in srgb, var(--m-choice) 45%, var(--m-muted-2)); }
+.stepper-field.meter::before, .stepper-field.meter::after { content: ""; position: absolute; bottom: 6px; height: 4px; border-radius: var(--m-radius-pill); pointer-events: none; }
+.stepper-field.meter::before { left: var(--track-inset); right: var(--track-inset); background: color-mix(in srgb, var(--meter) 12%, var(--m-well)); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--meter) 22%, transparent); }
+.stepper-field.meter::after { left: calc(var(--track-inset) + (100% - 2 * var(--track-inset)) * var(--from)); width: calc((100% - 2 * var(--track-inset)) * (var(--to) - var(--from))); background: linear-gradient(to right, color-mix(in srgb, var(--meter) 35%, var(--m-well)), var(--meter)); box-shadow: 0 0 8px color-mix(in srgb, var(--meter) 45%, transparent); }
+.stepper-field.meter.reverse::after { background: linear-gradient(to left, color-mix(in srgb, var(--meter) 35%, var(--m-well)), var(--meter)); }
+.stepper-field.meter.standard::after { box-shadow: none; }
+.stepper-mark { position: absolute; bottom: 3px; left: calc(var(--track-inset) + (100% - 2 * var(--track-inset)) * var(--mark)); width: 2px; height: 10px; margin-left: -1px; border-radius: 1px; background: var(--m-muted); box-shadow: 0 0 0 1px var(--m-well); pointer-events: none; }
+.stepper-tip { position: absolute; bottom: calc(100% + 7px); left: 50%; z-index: 5; padding: 3px 8px; border: 1px solid var(--m-line-strong); border-radius: 6px; background: var(--m-surface-3); box-shadow: 0 4px 12px color-mix(in srgb, var(--m-black) 40%, transparent); color: var(--m-text); font-size: 12px; font-weight: 500; white-space: nowrap; transform: translateX(-50%); opacity: 0; pointer-events: none; transition: opacity 0.12s ease; }
+.stepper-tip.placed { left: calc(1px + var(--stepper-button) + var(--track-inset) + (100% - 2px - 2 * var(--stepper-button) - 2 * var(--track-inset)) * var(--mark)); }
+.stepper-tip::after { content: ""; position: absolute; top: 100%; left: 50%; margin-left: -4px; border: 4px solid transparent; border-top-color: var(--m-surface-3); }
+.stepper-wrap:hover .stepper-tip, .stepper-wrap:focus-within .stepper-tip { opacity: 1; }
+.stepper:hover .stepper-field.meter:not(.standard)::after, .stepper:focus-within .stepper-field.meter:not(.standard)::after { box-shadow: 0 0 10px color-mix(in srgb, var(--meter) 65%, transparent); }
+.stepper input { position: relative; flex: none; width: calc(var(--chars, 3) * 1ch); min-width: 1ch; max-width: 100%; padding: 0; border: 0; background: transparent; color: var(--m-text); font: inherit; font-size: 15px; font-weight: 600; letter-spacing: -0.01em; text-align: center; appearance: textfield; -moz-appearance: textfield; }
+@supports (field-sizing: content) { .stepper input { width: auto; field-sizing: content; } }
+.stepper input::-webkit-outer-spin-button, .stepper input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.stepper input:focus { outline: none; }
+.stepper input::placeholder { color: var(--m-muted-2); font-weight: 500; }
+.stepper input:disabled { cursor: not-allowed; }
+.stepper-unit { position: relative; flex: none; padding-top: 1px; color: var(--m-muted); font-size: 12px; font-weight: 500; }
+.stepper-note { flex: none; margin-left: 3px; padding-top: 1px; color: var(--m-muted-2); font-size: 11.5px; }
+.stepper.disabled { opacity: 0.6; }
+
+.month-picker { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.month-chips { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 4px; }
+.month-chips button { min-height: 32px; padding: 0 4px; border: 1px solid var(--m-line); border-radius: 8px; background: var(--m-well); color: var(--m-muted); font: inherit; font-size: 12.5px; font-weight: 560; cursor: pointer; }
+.month-chips button:hover:not(:disabled) { color: var(--m-text); border-color: var(--m-line-strong); }
+:is(.month-chips button, .seg.choice button)[aria-pressed="true"] { background: color-mix(in srgb, var(--m-choice) 22%, var(--m-surface-2)); color: var(--m-text); border-color: transparent; box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--m-choice) 60%, transparent); }
+.month-chips button[aria-disabled="true"] { cursor: default; }
+.month-chips button:disabled { opacity: 0.6; cursor: not-allowed; }
+.month-season { display: flex; flex-wrap: wrap; gap: var(--s2); align-items: baseline; margin: 0; color: var(--m-muted); font-size: 12.5px; }
+.month-season strong { color: var(--m-text); font-weight: 560; }
+.seg button:disabled { opacity: 0.6; cursor: not-allowed; }
+
+@media (pointer: coarse) {
+  .switch { width: 52px; height: 30px; }
+  .switch-track::after { width: 24px; height: 24px; }
+  .switch input:checked + .switch-track::after { transform: translateX(22px); }
+  .stepper-wrap { --stepper-button: 44px; max-width: none; }
+  .stepper { height: 44px; }
+  .month-chips button { min-height: 44px; }
+}
 .form-error { color: var(--m-fault); font-size: 12.5px; }
 .form-ok { color: var(--m-ok); font-size: 12.5px; }
 

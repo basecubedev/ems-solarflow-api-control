@@ -129,6 +129,7 @@ built stylesheet.
 | `--m-text`, `--m-muted`, `--m-muted-2` | three levels of ink |
 | `--m-accent`, `--m-accent-ink` | the one interactive colour: focus ring, selected navigation, primary button (a destructive one wears `--m-fault`, the start of a checked update `--m-ok`) |
 | `--m-selected-bg`, `--m-selected-ink` | the chosen segment of a segmented control, and a badge's fill and ink |
+| `--m-choice` | what is chosen in a setting: a pressed month chip, the pressed option of a setting's `ui/Segmented` (`choice`), a stepper's bar; a calm blue that marks the choice without drawing the eye |
 | `--m-quiet-bg` | the fill of a badge that brings its own ink (a warning, the Admin's operating value): grey in Graphite, deep navy in Midnight |
 | `--m-ok`, `--m-warn`, `--m-fault` | status, always with an icon and a word; `--m-fault` and `--m-ok` also fill the two primary buttons above |
 
@@ -209,6 +210,9 @@ the product name ("Admin console") is what tells the two apart.
 | --- | --- |
 | `ui/Card` | every panel; a title, an optional subtitle, an optional mark (`icon` and `tone`: an icon tile in a tone class beside the title, so no page reads black and white) and actions on the right; `fold` makes the title the button that folds a panel a page needs only now and then, with a `summary` line that says how it stands while folded |
 | `ui/Segmented` | a choice between two to seven options that applies at once; an option may carry an icon or a dot, in a tone |
+| `ui/Switch` | an on/off setting: a native checkbox in the role of a switch, over its track, so a label and the keyboard work as on a checkbox and a screen reader says on or off. On, the track is a gradient into `--m-choice` with a soft glow and a light thumb; off, an inset track with a grey thumb. In a field it stands right before its label; in a card's head at the right end, with the fold chevron at the left and no pill beside it that repeats its state |
+| `ui/Stepper` | a compact number field, at most 20 rem wide: the number in the middle with its unit after it, **−**/**+** beside it (the arrow keys too), which move it by a step within min and max; it stays a number input to type any value into. `bar`, a [low, high] range, draws a narrow outlined track under the number, filled out of zero where the range holds it with a gradient that grows into `--m-choice` and glows at the value; a value beyond the range only fills it. An empty field shows the default as its placeholder, `note` (*(default)*) after it, and the default's fill in a paler `--m-choice`. `mark` ticks the default on the track and `markText` names it in a tip over the tick while the pointer rests on the stepper or the input has the focus; the input is described by it, so the Admin's settings field drops its **Default: …** badge there. No slider: a slider is imprecise on a phone and cannot reach a value off its step |
+| `ui/MonthPicker` | months as twelve chips to press on and off, the chosen ones in `--m-choice`, read back as a season and a count (*Oct – Mar*, *6 months*); the last chosen month stays |
 | `ui/Fact` | a label and a value in a row |
 | `ui/Status` | a state pill: a tone class, a word and, where it helps, an icon; the word carries the meaning |
 | `ui/Bar` | a share of a whole, e.g. SoC |
@@ -222,6 +226,20 @@ the product name ("Admin console") is what tells the two apart.
 A page is a twelve-column grid of cards (`.content`, with `span-12`,
 `span-8`, `span-6` and `span-4`). A card that only
 groups things does not paint a fill of its own.
+
+The Admin console edits every catalogue setting through one field,
+`widgets/SettingField`, which picks the control from the field's type
+(`controlFor` in `src/lib/settings.js`): a switch for a boolean,
+`ui/Segmented` for two or three choices of a list or a number (a text field
+with choices stays a list), a list beyond that, `ui/MonthPicker` for a month
+list, `ui/Stepper` for a number with a unit or a bar, else a plain input, as
+for a port, an address part or a factor of any sign. The catalogue names no
+step, so `stepFor` takes it from the unit, the values and the bar. The bar's
+range is the catalogue's `scale` (`STEPPER_BAR_RANGES` in
+`ems/config_catalog.py`): generous, never a limit. Every number is decided
+there, a bar or `STEPPER_WITHOUT_BAR` (a port, an address part, a version, a
+factor of any sign, a power where 0 means no limit), and a test holds every
+range inside the bounds the field enforces.
 
 ## Writing to the EMS
 

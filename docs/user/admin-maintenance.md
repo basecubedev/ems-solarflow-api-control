@@ -369,8 +369,9 @@ This page edits an existing installation.
   its serial number, is taken out of control at once; one you switch back on
   is controlled again. Saving still never moves `data/` history,
   `docker-compose.yml`, or databases. A field whose value differs from its default shows
-  **Default: …**, for information only, except values that describe the
-  installation, such as power limits and battery size. An emptied field names
+  **Default: …**, for information only (a number with a bar ticks it on the
+  bar and names it while you point at it or edit it), except values that
+  describe the installation, such as power limits and battery size. An emptied field names
   in grey the value it falls back to, and saving makes that the value the EMS
   runs; a device's emptied power limit takes the system's per-device limit.
 

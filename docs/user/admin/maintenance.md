@@ -229,10 +229,12 @@ saved settings: unsaved changes join it once they are saved, and the tab says
 so while some wait.
 
 **What you enter:** the change you want. Each field names its unit, says what
-it does and, when it is empty, which default applies (*35 (default)*); saving
-an emptied field writes that default. A value that differs from its default
-shows **Default: …** beside it, for information only; a choice list marks its
-default option *(default)*. Values that describe your installation, such as
+it does and, when it is empty, which default applies (*35 W (default)*);
+saving an emptied field writes that default. A number with a bar marks its
+default with a fine tick on the bar, and **Default: …** shows while the
+pointer rests on it or you edit it; another field whose value differs from
+its default shows **Default: …** beside it. Both are for information only; a
+choice list marks its default option *(default)*. Values that describe your installation, such as
 power limits and battery size, get no such note: their default is only the
 template's example. Emptied, such a value names in grey what the EMS falls
 back to, and saving keeps it at that; a device's power limit falls back to the
@@ -255,7 +257,12 @@ reload; **Discard** drops them.
 
 **How your answers are read.** The guided setup and Settings & devices read a
 field the same way: leading and trailing spaces are removed; **emptying a
-field removes the setting**, so EMS falls back to its own default; list fields
+field removes the setting**, so EMS falls back to its own default; a number
+with a unit or a usual range has **−** and **+** beside it, which move it by a
+step that fits its range (one watt for a deadband, ten for a power limit, one
+percent) within its limits, and you can still type any value, while a port or
+an address part is a plain number field; the **winter
+months** are chips you press on and off, and one always stays chosen; list fields
 (such as Shelly channels) take a comma-separated entry; leaving a **password**
 box blank *keeps* the stored secret, and **Clear the stored password** removes
 it; changing a grid meter's type removes fields the new type cannot use, while
@@ -277,8 +284,8 @@ grouped:
 | **Hold EMS back** | blocked — dry run and simulation mode suppress every hardware write, whatever the group above allows |
 | **Output limits** | the physical envelope EMS must stay inside |
 
-Read the group heading before the checkbox: both groups are checkboxes, but a
-tick means the opposite thing in each.
+Read the group heading before the switch: both groups are switches, but
+**On** means the opposite thing in each.
 
 **These switches are on by default.** A fresh installation controls your
 inverters without you switching anything on; the switches exist to *stop* it,

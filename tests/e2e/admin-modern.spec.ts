@@ -662,7 +662,7 @@ test.describe("Modern Admin: settings", { tag: ["@smoke"] }, () => {
   test("a feature is switched on, checked and saved, and the saved settings say so", async ({ page, seedAdminScenario }) => {
     await seededAt(page, seedAdminScenario, "#/settings");
     const winter = page.locator('[data-section="winter"]');
-    const toggle = winter.getByRole("checkbox", { name: "Winter mode on or off" });
+    const toggle = winter.getByRole("switch", { name: "Winter mode on or off" });
     const before = await toggle.isChecked();
     await toggle.click();
     await expect(page.getByTestId("change-count")).toHaveText("1 unsaved change");
@@ -676,13 +676,13 @@ test.describe("Modern Admin: settings", { tag: ["@smoke"] }, () => {
     await expect(page.getByTestId("settings-applied")).toContainText("Saved, with a backup of the previous settings:");
 
     await page.reload();
-    await expect(page.locator('[data-section="winter"]').getByRole("checkbox", { name: "Winter mode on or off" })).toBeChecked({ checked: !before });
+    await expect(page.locator('[data-section="winter"]').getByRole("switch", { name: "Winter mode on or off" })).toBeChecked({ checked: !before });
     await expect(page.getByTestId("settings-changes")).toHaveCount(0);
   });
 
   test("Saved shows only once the saved settings have been read back", async ({ page, seedAdminScenario }) => {
     await seededAt(page, seedAdminScenario, "#/settings");
-    await page.locator('[data-section="winter"]').getByRole("checkbox", { name: "Winter mode on or off" }).click();
+    await page.locator('[data-section="winter"]').getByRole("switch", { name: "Winter mode on or off" }).click();
     await page.getByTestId("review").click();
     await expect(page.getByTestId("settings-review")).toContainText("Settings are valid");
     let release;
@@ -721,7 +721,7 @@ test.describe("Modern Admin: settings", { tag: ["@smoke"] }, () => {
     await expect(care).toBeVisible();
     const sections = await page.locator("[data-section]").evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-section")));
     expect(sections.indexOf("battery_care")).toBe(sections.indexOf("winter") + 1);
-    await expect(care.getByRole("checkbox", { name: "Battery care on or off" })).toBeVisible();
+    await expect(care.getByRole("switch", { name: "Battery care on or off" })).toBeVisible();
     await expect(care.locator(".summary .name")).toHaveText("Battery care");
     await expect(care.locator(".summary .icon-tile use")).toHaveAttribute("href", "#i-battery-low");
 
@@ -739,15 +739,18 @@ test.describe("Modern Admin: settings", { tag: ["@smoke"] }, () => {
     const minimum = page.locator('[data-path="system.min_output_limit"]');
     const input = minimum.locator("input");
     await input.fill("40");
-    await expect(minimum.locator(".badge.default")).toHaveText("Default: 35");
+    await expect(minimum.getByRole("tooltip")).toHaveText("Default: 35 W");
+    await expect(minimum.getByRole("tooltip")).toHaveCSS("opacity", "1");
+    await expect(input).toHaveAccessibleDescription("Default: 35 W");
     await input.pressSequentially("e");
     await expect(minimum.locator(".form-error")).toHaveText("Not a number");
-    await expect(minimum.locator(".badge.default")).toHaveText("Default: 35");
+    await expect(minimum.getByRole("tooltip")).toHaveText("Default: 35 W");
     await page.getByTestId("review").click();
     await expect(page.getByTestId("unreadable-number")).toBeVisible();
     await expect(page.getByTestId("settings-review")).toHaveCount(0);
     await input.fill("");
-    await expect(input).toHaveAttribute("placeholder", "35 (default)");
+    await expect(input).toHaveAttribute("placeholder", "35");
+    await expect(minimum.getByText("(default)", { exact: true })).toBeVisible();
     await expect(minimum.locator(".badge.default")).toHaveCount(0);
     await input.fill("35");
     await expect(minimum.locator(".badge.default")).toHaveCount(0);
@@ -788,13 +791,16 @@ test.describe("Modern Admin: settings", { tag: ["@smoke"] }, () => {
     await expect(soc).toHaveValue("20");
     await expect(ceiling).toHaveValue("700");
     await soc.fill("");
-    await expect(soc).toHaveAttribute("placeholder", "15 (default)");
+    await expect(soc).toHaveAttribute("placeholder", "15");
+    await expect(inverter.locator('[data-path="devices[].min_soc"]').getByText("(default)", { exact: true })).toBeVisible();
     await ceiling.fill("");
-    await expect(ceiling).toHaveAttribute("placeholder", "800 (default)");
+    await expect(ceiling).toHaveAttribute("placeholder", "800");
+    await expect(inverter.locator('[data-path="devices[].max_power"]').getByText("(default)", { exact: true })).toBeVisible();
     await page.goto("/#/settings/safety");
-    await expect(minimum.locator(".badge.default")).toHaveText("Default: 35");
+    await expect(minimum.getByRole("tooltip")).toHaveText("Default: 35 W");
     await minimum.locator("input").fill("");
-    await expect(minimum.locator("input")).toHaveAttribute("placeholder", "35 (default)");
+    await expect(minimum.locator("input")).toHaveAttribute("placeholder", "35");
+    await expect(minimum.getByText("(default)", { exact: true })).toBeVisible();
     await save();
 
     await expect(minimum.locator("input")).toHaveValue("35");

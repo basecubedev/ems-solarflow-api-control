@@ -1,5 +1,6 @@
 // SPDX-FileCopyrightText: 2026 basecubedev
 // SPDX-License-Identifier: AGPL-3.0-or-later
+import { barFor } from "../../../shared/lib/controls.js";
 import { TUNED_KINDS, commonDefaults, deviceFallbacks, deviceFields, deviceKind, fieldKey, held, mqttDefaultPort, mqttUsesTls, sentDevices } from "./devices.js";
 /**
  * The saved settings as the Maintenance config view describes them
@@ -233,6 +234,27 @@ export function bridgePasswordField(field, passwords) {
   };
 }
 
+export { barFor, stepFor } from "../../../shared/lib/controls.js";
+
+const SEGMENTED_TYPES = new Set(["select", "number", "integer"]);
+/**
+ * The control a field is edited with: a switch for on and off, buttons side by
+ * side for two or three choices of a list or a number, a list beyond that,
+ * month chips for months, a stepper for a number with a unit or a bar, else a
+ * plain input, as for a port, an address part or a factor of any sign. ``type``
+ * is the input type a caller asks for, such as a password.
+ */
+export function controlFor(field, value, type = "") {
+  if (field?.type === "boolean") return "switch";
+  if (field?.options?.length) {
+    const count = choices(field, value).length;
+    return SEGMENTED_TYPES.has(field.type) && count >= 2 && count <= 3 ? "segmented" : "select";
+  }
+  if (field?.type === "month_list") return "months";
+  if (NUMBER_TYPES.has(field?.type) && !type) return field.unit || barFor(field) ? "stepper" : "input";
+  return "input";
+}
+
 /** A field's choices: the catalogue's options, with the saved value kept when it is none of them. */
 export function choices(field, value) {
   const options = (field?.options || []).map(String);
@@ -263,6 +285,7 @@ export function fieldIndex(config) {
 export function sameAsSaved(field, value, saved) {
   const values = mapping(saved);
   if (Object.hasOwn(values, field.path)) {
+    if (field.type === "month_list" && Array.isArray(value)) return comparable(field, value) === comparable(field, values[field.path]);
     return same(value, values[field.path]) || (typeof value === "string" && value === shownValue(field, values[field.path]));
   }
   return field.type === "boolean" ? value === Boolean(field.default) : value === "" || value === null || value === undefined;

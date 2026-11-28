@@ -3,6 +3,7 @@
 <script>
   import Icon from "../../../shared/ui/Icon.svelte";
   import Status from "../../../shared/ui/Status.svelte";
+  import Switch from "../../../shared/ui/Switch.svelte";
   import SettingField from "./SettingField.svelte";
   import CatalogText from "./CatalogText.svelte";
   import { t, catalogText } from "../i18n/i18n.svelte.js";
@@ -41,28 +42,20 @@
 
 <section class="section inner" class:off={on === false} data-section={section.id}>
   <div class="head">
-    {#if switchField}
-      <input
-        class="switch"
-        type="checkbox"
-        checked={on}
-        onchange={(event) => set(switchField, event.currentTarget.checked)}
-        aria-label={t("settings.edit.switch", { name: named ? t(`feature.${section.id}`) : section.title || section.id })}
-      />
-    {/if}
     <button class="summary" type="button" aria-expanded={expanded ? "true" : "false"} aria-controls={bodyId} onclick={() => (toggled = !open)}>
+      <span class="fold" aria-hidden="true"><Icon name="chevron-right" size="sm" /></span>
       <span class="icon-tile sm {on === false ? 'c-idle' : look.tone}" aria-hidden="true"><Icon name={look.icon} /></span>
       <span class="words">
         <span class="name">{#if named}{t(`feature.${section.id}`)}{:else}<CatalogText text={section.title || section.id} />{/if}</span>
         <span class="muted small">{#if named}{t(`feature.${section.id}.sub`)}{:else}<CatalogText text={section.summary || section.description || ""} />{/if}</span>
       </span>
-      {#if on !== null}
-        <Status tone={on ? "c-ok" : "c-idle"} text={on ? t("common.on") : t("common.off")} />
-      {:else if AUTOMATIC_FEATURES.includes(section.id)}
+      {#if on === null && AUTOMATIC_FEATURES.includes(section.id)}
         <span title={t("settings.featureAutoHint")}><Status tone="c-acc" text={t("settings.featureAuto")} /></span>
       {/if}
-      <Icon name={expanded ? "chevron-up" : "chevron-down"} size="sm" />
     </button>
+    {#if switchField}
+      <Switch checked={on} onchange={(checked) => set(switchField, checked)} label={t("settings.edit.switch", { name: named ? t(`feature.${section.id}`) : section.title || section.id })} />
+    {/if}
   </div>
   <div class="body" id={bodyId} hidden={!expanded}>
       {#if shown.normal.length}{@render fields(shown.normal)}{/if}
@@ -82,10 +75,12 @@
   .section { display: flex; flex-direction: column; gap: var(--s3); }
   .section.off .summary .name { color: var(--m-muted); }
   .head { display: flex; align-items: center; gap: var(--s3); }
-  .switch { width: 18px; height: 18px; accent-color: var(--m-accent); flex: none; }
   .summary { all: unset; cursor: pointer; display: flex; align-items: center; gap: var(--s3); flex: 1; min-width: 0; }
   .summary:focus-visible { outline: 2px solid var(--m-accent); outline-offset: 4px; border-radius: 6px; }
   .words { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+  .fold { display: grid; place-items: center; flex: none; color: var(--m-muted); transition: transform 0.15s ease; }
+  .summary[aria-expanded="true"] .fold { transform: rotate(90deg); }
+  .summary:hover .fold { color: var(--m-text); }
   .name { font-weight: 600; }
   .small { font-size: 12.5px; }
   .body { display: flex; flex-direction: column; gap: var(--s3); }

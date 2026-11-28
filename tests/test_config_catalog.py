@@ -15,6 +15,8 @@ from ems.config import (
 from ems.config_catalog import (
     GRID_METER_KNOWN_MQTT_KEYS,
     GRID_METER_KNOWN_TOP_KEYS,
+    STEPPER_BAR_RANGES,
+    STEPPER_WITHOUT_BAR,
     build_default_template,
     get_config_catalog,
     get_config_feature_field_index,
@@ -456,3 +458,40 @@ def test_diagnose_reads_the_assist_defaults_the_ems_charges_with():
     from ems import diagnostics
 
     assert diagnostics.BATTERY_FULL_CHARGE_ASSIST_DEFAULTS is BATTERY_FULL_CHARGE_ASSIST_DEFAULTS
+
+
+def _number_fields(value):
+    if isinstance(value, dict):
+        if value.get("type") in ("number", "integer") and value.get("path") and not value.get("options"):
+            yield value
+        for item in value.values():
+            yield from _number_fields(item)
+    elif isinstance(value, list):
+        for item in value:
+            yield from _number_fields(item)
+
+
+def test_every_number_is_decided_a_bar_or_none():
+    fields = {field["path"]: field for field in _number_fields(get_config_catalog())}
+    bars = set(STEPPER_BAR_RANGES)
+    assert sorted(set(fields) - bars - STEPPER_WITHOUT_BAR) == []
+    assert sorted((bars | STEPPER_WITHOUT_BAR) - set(fields)) == []
+    assert sorted(bars & STEPPER_WITHOUT_BAR) == []
+
+
+def test_a_bar_lies_within_the_bounds_the_field_enforces():
+    for field in _number_fields(get_config_catalog()):
+        if field["path"] not in STEPPER_BAR_RANGES:
+            assert "scale" not in field, field["path"]
+            continue
+        low, high = field["scale"]
+        assert low < high, field["path"]
+        assert field.get("min") is None or low >= field["min"], field["path"]
+        assert field.get("max") is None or high <= field["max"], field["path"]
+        assert field.get("default") is None or low <= field["default"] <= high, field["path"]
+
+
+def test_a_count_of_devices_is_a_whole_number():
+    fields = {field["path"]: field for field in _number_fields(get_config_catalog())}
+
+    assert fields["ac_charge_control.surplus_export_devices"]["type"] == "integer"

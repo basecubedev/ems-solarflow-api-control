@@ -7,6 +7,7 @@ import {
   changeCount,
   changeGroups,
   choices,
+  controlFor,
   defaultHint,
   departedDefault,
   departureMatches,
@@ -18,11 +19,13 @@ import {
   fieldMatches,
   levelled,
   liveEdits,
+  barFor,
   installedDevices,
   withFreshOperating,
   operatingValue,
   restartNeeded,
   sameAsSaved,
+  stepFor,
   safetyBlocks,
   sectionTab,
   sharedRisk,
@@ -558,4 +561,66 @@ test("stored device edits show what the EMS runs now and keep what was changed h
   ]);
   assert.deepEqual(withFreshOperating([{ name: "New" }], loaded), [{ name: "New" }]);
   assert.equal(withFreshOperating(null, loaded), null);
+});
+
+test("a field is edited with the control its type and its choices call for", () => {
+  assert.equal(controlFor({ type: "boolean" }), "switch");
+  assert.equal(controlFor({ type: "select", options: ["normal", "reduced", "off"] }), "segmented");
+  assert.equal(controlFor({ type: "number", options: [0, 1] }), "segmented");
+  assert.equal(controlFor({ type: "select", options: ["debug", "info", "warning", "error"] }), "select");
+  assert.equal(controlFor({ type: "select", options: ["a", "b", "c"] }, "legacy"), "select");
+  assert.equal(controlFor({ type: "select", options: ["only"] }), "select");
+  assert.equal(controlFor({ type: "text", options: ["one", "two"] }), "select");
+  assert.equal(controlFor({ type: "month_list" }), "months");
+  assert.equal(controlFor({ type: "number", unit: "W" }), "stepper");
+  assert.equal(controlFor({ type: "integer", scale: [1, 10] }), "stepper");
+  assert.equal(controlFor({ type: "number" }), "input");
+  assert.equal(controlFor({ type: "integer", min: 1, max: 65535 }), "input");
+  assert.equal(controlFor({ type: "number" }, "", "password"), "input");
+  assert.equal(controlFor({ type: "text" }), "input");
+  assert.equal(controlFor({ type: "string_list" }), "input");
+});
+
+test("a stepper's press moves by the unit's natural step", () => {
+  assert.equal(stepFor({ type: "integer", unit: "W" }), 1);
+  assert.equal(stepFor({ type: "number", unit: "W", min: 0, default: 30 }), 10);
+  assert.equal(stepFor({ type: "number", unit: "W/cycle", min: 0 }), 10);
+  assert.equal(stepFor({ type: "number", unit: "%", min: 0, max: 100, default: 15 }), 1);
+  assert.equal(stepFor({ type: "number", unit: "kWh", min: 0, default: 2 }), 0.1);
+  assert.equal(stepFor({ type: "number", unit: "currency/kWh", min: 0, default: 0 }), 0.01);
+  assert.equal(stepFor({ type: "number", min: 0, default: 0.7 }), 0.1);
+  assert.equal(stepFor({ type: "number", min: 0.01, max: 100, default: 1 }), 0.1);
+  assert.equal(stepFor({ type: "number", min: 0, max: 1, default: 1 }), 0.1);
+  assert.equal(stepFor({ type: "number", unit: "s", min: 1, default: 2 }), 1);
+});
+
+test("months the operator picked again in another order are no change", () => {
+  const months = { path: "winter.months", type: "month_list" };
+  const saved = { "winter.months": [10, 11, 12, 1, 2, 3] };
+  assert.ok(sameAsSaved(months, [1, 2, 3, 10, 11, 12], saved));
+  assert.ok(sameAsSaved(months, [10, 11, 12, 1, 2, 3], saved));
+  assert.ok(!sameAsSaved(months, [10, 11, 12, 1, 2], saved));
+  assert.ok(sameAsSaved(months, "10, 11, 12, 1, 2, 3", saved));
+});
+
+test("a number is drawn as a bar over the range the catalogue gives it, and only then", () => {
+  assert.deepEqual(barFor({ type: "number", unit: "%", min: 0, max: 100, scale: [0, 100] }), [0, 100]);
+  assert.deepEqual(barFor({ type: "integer", scale: [1, 3] }), [1, 3]);
+  assert.equal(barFor({ type: "number", unit: "%", min: 0, max: 100 }), null);
+  assert.equal(barFor({ type: "integer", min: 1, max: 65535 }), null);
+  assert.equal(barFor({ type: "number", scale: [5, 5] }), null);
+  assert.equal(barFor({ type: "text", scale: [0, 100] }), null);
+});
+
+test("a wide bar is stepped in round hundredths of it", () => {
+  assert.equal(stepFor({ type: "number", unit: "s", min: 0, scale: [0, 7200] }), 100);
+  assert.equal(stepFor({ type: "number", unit: "s", min: 0, scale: [0, 86400] }), 1000);
+  assert.equal(stepFor({ type: "number", unit: "W", min: 0, scale: [0, 2400] }), 10);
+  assert.equal(stepFor({ type: "number", unit: "W", min: 0, scale: [0, 200] }), 1);
+  assert.equal(stepFor({ type: "number", unit: "W", min: 0, scale: [0, 50], default: 2 }), 1);
+  assert.equal(stepFor({ type: "number", min: 0, scale: [0, 2], default: 1 }), 0.1);
+  assert.equal(stepFor({ type: "number", unit: "%", min: 1, max: 3, scale: [1, 3] }), 1);
+  assert.equal(stepFor({ type: "number", unit: "%", min: 0, max: 100, scale: [0, 100] }), 1);
+  assert.equal(stepFor({ type: "number", unit: "days", min: 0, scale: [0, 3650] }), 50);
+  assert.equal(stepFor({ type: "number", min: 0, scale: [0, 1], default: 0.5 }), 0.1);
 });
