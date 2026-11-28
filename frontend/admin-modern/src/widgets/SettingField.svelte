@@ -59,7 +59,7 @@
   const months = $derived(monthsOf(value).length ? value : fallback);
   const start = $derived(hint !== "" && Number.isFinite(Number(hint)) ? Number(hint) : null);
   const marked = $derived(control === "stepper" && barFor(field) !== null && standard !== undefined && Number.isFinite(Number(standard)));
-  const markText = $derived(marked ? t("settings.edit.defaultBadge", { value: unit ? `${standard} ${unit.text}` : String(standard) }) : "");
+  const markText = $derived(marked ? t("common.defaultIs", { value: unit ? `${standard} ${unit.text}` : String(standard) }) : "");
   const typed = (event) => {
     unreadable = event.currentTarget.validity?.badInput === true;
     if (!unreadable) onchange(event.currentTarget.value);
@@ -90,7 +90,7 @@
     {#if control === "select"}
       <select {id} class="input" value={shown} {disabled} onchange={(event) => onchange(event.currentTarget.value)}>
         {#if !shown}<option value="">{hint ? t("common.defaultValue", { value: hintText }) : "—"}</option>{/if}
-        {#each choices(field, value) as option (option)}<option value={option}>{optionWords(option)}{shown && standard !== undefined && option === String(standard) ? ` ${t("settings.edit.defaultOption")}` : ""}</option>{/each}
+        {#each choices(field, value) as option (option)}<option value={option}>{optionWords(option)}{shown && standard !== undefined && option === String(standard) ? ` ${t("common.defaultNote")}` : ""}</option>{/each}
       </select>
     {:else if control === "stepper"}
       <Stepper
@@ -103,7 +103,7 @@
         {unit}
         bar={barFor(field)}
         placeholder={placeholder || hint}
-        note={!placeholder && hint ? t("settings.edit.defaultOption") : ""}
+        note={!placeholder && hint ? t("common.defaultNote") : ""}
         mark={marked ? Number(standard) : null}
         {markText}
         {disabled}
@@ -138,7 +138,7 @@
     <p class="badges">
       {#if risk}<span class="badge warn" title={t(`settings.risk.${risk}.hint`)}>{t(`settings.risk.${risk}`)}</span>{/if}
       {#if operating}<span class="badge operating num" title={operating.hint} data-testid="operating-value">{operating.text}</span>{/if}
-      {#if departedText && !marked}<span class="badge default">{t("settings.edit.defaultBadge", { value: departedText })}</span>{/if}
+      {#if departedText && !marked}<span class="badge default">{t("common.defaultIs", { value: departedText })}</span>{/if}
     </p>
   {/if}
 </div>
@@ -154,6 +154,5 @@
   .desc { margin: 0; color: var(--m-muted); font-size: 12.5px; overflow-wrap: anywhere; }
   .badges { display: flex; flex-wrap: wrap; gap: var(--s2); margin: 0; }
   .badge.default { color: var(--m-muted); background: transparent; box-shadow: inset 0 0 0 1px var(--m-line-strong); }
-  .badge.operating { color: var(--m-text); background: var(--m-quiet-bg); }
   .live { color: var(--m-accent); }
 </style>

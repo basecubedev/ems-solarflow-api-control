@@ -10,21 +10,27 @@
    * by step, held within min and max; the arrow keys do the same. It stays a
    * number input to type into, without the step as a rule, so any value the
    * server accepts can be typed. start is the value an empty field steps from,
-   * the default its placeholder names. oninput hands over the input event of
+   * the default its placeholder names; label names the input where no
+   * visible label does. A placeholder in words, such as "device maximum",
+   * stands without the unit. oninput hands over the input event of
    * typing, onstep the text of a stepped number. bar, a [low, high] range,
    * fills the field as a bar over it, out of zero where it holds zero; a
    * value beyond it only fills the bar. note, such as "(default)", stands
    * after an empty field's placeholder. mark, a number such as the default,
    * is ticked on the bar, and markText names it in a tip that shows while the
    * pointer is over the stepper or the input has the focus; the input is
-   * described by it. The number stands
+   * described by it. fill, a number on the bar such as its top for a field
+   * whose empty value means a device's maximum, is where an empty field's
+   * paler fill ends in place of start. The number stands
    * in the middle with its unit after it, and a press anywhere in the field
    * lands in the input.
    */
-  let { id = undefined, value = "", step = 1, min = undefined, max = undefined, start = null, unit = null, placeholder = "", disabled = false, invalid = false, bar = null, note = "", mark = null, markText = "", oninput, onstep } = $props();
+  let { id = undefined, name = undefined, label = "", value = "", step = 1, min = undefined, max = undefined, start = null, unit = null, placeholder = "", disabled = false, invalid = false, bar = null, fill = null, note = "", mark = null, markText = "", oninput, onstep } = $props();
 
   const bounds = $derived({ step, min: min ?? null, max: max ?? null, start });
-  const span = $derived(barSpan(value, bar, start));
+  const span = $derived(barSpan(value, bar, fill ?? start));
+  const empty = $derived(String(value ?? "").trim() === "");
+  const worded = $derived(empty && String(placeholder || "").trim() !== "" && !Number.isFinite(Number(placeholder)));
   const markAt = $derived(span !== null && mark !== null && mark !== undefined ? (barSpan(String(mark), bar)?.at ?? null) : null);
   const uid = $props.id();
   const tipId = `${uid}-tip`;
@@ -66,6 +72,7 @@
     <input
       bind:this={input}
       {id}
+      {name}
       class="num"
       type="number"
       inputmode="decimal"
@@ -75,13 +82,14 @@
       {disabled}
       {value}
       {placeholder}
+      aria-label={label || undefined}
       aria-invalid={invalid || undefined}
       aria-describedby={markText ? tipId : undefined}
       style:--chars={chars}
       onkeydown={key}
       {oninput}
     />
-    {#if unit}<span class="stepper-unit" lang={unit.lang}>{unit.text}</span>{/if}
+    {#if unit && !worded}<span class="stepper-unit" lang={unit.lang}>{unit.text}</span>{/if}
     {#if note && String(value ?? "").trim() === ""}<span class="stepper-note">{note}</span>{/if}
     {#if markAt !== null}<span class="stepper-mark" aria-hidden="true"></span>{/if}
   </label>

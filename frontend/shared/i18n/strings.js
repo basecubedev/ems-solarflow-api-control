@@ -156,6 +156,8 @@ export const SHARED_STRINGS = {
   "common.on": s("On", "An", "Aan", "Activé"),
   "common.off": s("Off", "Aus", "Uit", "Désactivé"),
   "common.defaultValue": s("{value} (default)", "{value} (Standard)", "{value} (standaard)", "{value} (par défaut)"),
+  "common.defaultNote": s("(default)", "(Standard)", "(standaard)", "(par défaut)"),
+  "common.defaultIs": s("Default: {value}", "Standard: {value}", "Standaard: {value}", "Par défaut : {value}"),
   "common.unreadableNumber": s("Not a number", "Keine Zahl", "Geen getal", "Pas un nombre"),
   "common.stepDown": s("Less", "Weniger", "Minder", "Moins"),
   "common.stepUp": s("More", "Mehr", "Meer", "Plus"),

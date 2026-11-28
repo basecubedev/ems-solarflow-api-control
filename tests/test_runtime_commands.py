@@ -394,8 +394,8 @@ def test_the_writer_accepts_exactly_the_offgrid_modes_the_ems_can_write():
 def test_the_limits_carry_each_runtime_field_as_the_writer_checks_it():
     fields = runtime_commands.effective_limits()["fields"]
 
-    assert fields["system"]["loop_interval"] == {"type": "int", "min": 1, "max": 3600}
-    assert fields["devices"]["pv_priority_factor"] == {"type": "float", "min": 0.01, "max": 100.0}
+    assert fields["system"]["loop_interval"] == {"type": "int", "min": 1, "max": 3600, "scale": [1, 30]}
+    assert fields["devices"]["pv_priority_factor"] == {"type": "float", "min": 0.01, "max": 100.0, "scale": [0.01, 3]}
     assert fields["devices"]["runtime_role"]["options"] == ["ac_output", "ac_input"]
     assert set(fields["sections"]) == set(runtime_commands.SECTION_FIELDS)
 
@@ -580,3 +580,32 @@ def test_the_ems_hands_the_live_context_itself_to_every_reader():
         if isinstance(keyword.value, ast.Name) and keyword.value.id == "runtime_validation"
     ]
     assert sorted(handed) == ["power_limits", "runtime_validation", "validation_context", "validation_context"]
+
+
+def test_every_runtime_number_carries_its_decided_bar():
+    from ems.config_catalog import STEPPER_BAR_RANGES, STEPPER_WITHOUT_BAR
+
+    bars = {**STEPPER_BAR_RANGES, **runtime_commands.RUNTIME_BAR_RANGES}
+    specs = runtime_commands.field_specs()
+    numbers = [(f"system.{key}", spec) for key, spec in specs["system"].items()]
+    numbers += [(f"devices[].{key}", spec) for key, spec in specs["devices"].items()]
+    numbers += [(f"{section}.{key}", spec) for section, fields in specs["sections"].items() for key, spec in fields.items()]
+    numbers = [(path, spec) for path, spec in numbers if spec["type"] in ("int", "float", "int_or_max")]
+    assert "devices[].ac_charge_power_w" in dict(numbers)
+    for path, spec in numbers:
+        assert path in bars or path in STEPPER_WITHOUT_BAR, path
+        assert spec.get("scale") == (list(bars[path]) if path in bars else None), path
+
+
+def test_a_runtime_only_bar_names_a_runtime_number_no_catalogue_field_describes():
+    from ems.config_catalog import STEPPER_BAR_RANGES, STEPPER_WITHOUT_BAR
+
+    rules = {f"devices[].{key}": rule for key, rule in {**runtime_commands.DEVICE_FIELDS, **runtime_commands.DEVICE_AC_FIELDS}.items()}
+    rules.update({f"system.{key}": rule for key, rule in runtime_commands.SYSTEM_FIELDS.items()})
+    rules.update({f"{section}.{key}": rule for section, fields in runtime_commands.SECTION_FIELDS.items() for key, rule in fields.items()})
+    assert runtime_commands.RUNTIME_BAR_RANGES
+    for path, (low, high) in runtime_commands.RUNTIME_BAR_RANGES.items():
+        assert path not in STEPPER_BAR_RANGES and path not in STEPPER_WITHOUT_BAR, path
+        value_type, (minimum, maximum) = rules[path]
+        assert value_type in ("int", "float", "int_or_max"), path
+        assert minimum <= low < high <= maximum, path

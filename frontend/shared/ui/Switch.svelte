@@ -6,10 +6,10 @@
    * its track, so a label, a form and the keyboard treat it as a checkbox and
    * a screen reader says on or off. label names it where no visible label does.
    */
-  let { checked = false, disabled = false, id = undefined, label = "", onchange } = $props();
+  let { checked = false, disabled = false, id = undefined, name = undefined, label = "", onchange } = $props();
 </script>
 
 <span class="switch">
-  <input {id} type="checkbox" role="switch" {checked} {disabled} aria-label={label || undefined} onchange={(event) => onchange?.(event.currentTarget.checked)} />
+  <input {id} {name} type="checkbox" role="switch" {checked} {disabled} aria-label={label || undefined} onchange={(event) => onchange?.(event.currentTarget.checked)} />
   <span class="switch-track" aria-hidden="true"></span>
 </span>

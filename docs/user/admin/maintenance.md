@@ -325,9 +325,10 @@ Safety, each device's **Device output limit** on Devices, and **Fallback
 device limit** for a device without its own. Below it, **Operating value: …**
 names the power EMS runs, set on the Dashboard and never above the limit;
 lowering the limit below it lowers it at once, raising the limit leaves it. A
-device's **Enabled** is whether EMS reads and shows it at all; **Control off
-on the Dashboard** beside it means EMS reads and shows it but does not write
-to it until its control is switched on there again.
+device's switch, at the right end of its card's head, is whether EMS reads
+and shows it at all; **Control off on the Dashboard** in its card means EMS
+reads and shows it but does not write to it until its control is switched on
+there again.
 
 ### 6 — Look at the system's files
 

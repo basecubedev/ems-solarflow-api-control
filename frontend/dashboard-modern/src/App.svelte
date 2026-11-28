@@ -12,7 +12,6 @@
   import Devices from "./pages/Devices.svelte";
   import Consumers from "./pages/Consumers.svelte";
   import Energy from "./pages/Energy.svelte";
-  import Control from "./pages/Control.svelte";
   import Diagnose from "./pages/Diagnose.svelte";
   import Logs from "./pages/Logs.svelte";
   import Maintenance from "./pages/Maintenance.svelte";
@@ -28,14 +27,15 @@
   import { consoleAddress } from "./state/console.svelte.js";
   import { INSTALL_CONSOLE, consoleTarget } from "./lib/console.js";
 
-  const COMPONENTS = { overview: Overview, devices: Devices, consumers: Consumers, energy: Energy, control: Control, schedule: Schedule, diagnose: Diagnose, logs: Logs, maintenance: Maintenance, about: About };
+  const COMPONENTS = { overview: Overview, devices: Devices, consumers: Consumers, energy: Energy, schedule: Schedule, diagnose: Diagnose, logs: Logs, maintenance: Maintenance, about: About };
 
   /**
-   * Analytics, the largest page and one only InfluxDB fills, loads when it is
-   * first opened, as the console loads its pages, so the dashboard's own file
-   * stays within what the repository tracks unasked.
+   * Analytics, the largest page and one only InfluxDB fills, and Control, whose
+   * runtime cards carry the settings controls, load when first opened, as the
+   * console loads its pages, so the dashboard's own file stays within what the
+   * repository tracks unasked.
    */
-  const LAZY = { analytics: () => import("./pages/Analytics.svelte") };
+  const LAZY = { analytics: () => import("./pages/Analytics.svelte"), control: () => import("./pages/Control.svelte") };
   const loaded = $state({});
   let unloadable = $state("");
   const Page = $derived(COMPONENTS[router.page] || loaded[router.page] || (LAZY[router.page] ? null : Overview));

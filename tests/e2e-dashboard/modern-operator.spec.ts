@@ -127,19 +127,19 @@ test.describe("Modern dashboard operator: runtime settings @smoke", () => {
     await expect(discharge.getByRole("spinbutton", { name: "Watts" })).toHaveAttribute("max", "200");
     await expect(meaning("grid_target_charge_w")).toHaveText("The meter aims for 0 W.");
     await expect(system.getByText("Whether a charge starts or ends is judged on the surplus itself. A charge target with more export than the stop threshold starts a charge only once the surplus exceeds that export by the charge hysteresis.")).toBeVisible();
-    await expect(charge.getByRole("combobox", { name: "Direction" })).toHaveValue("export");
+    await expect(charge.getByRole("group", { name: "Direction" }).getByRole("button", { name: "Export to the grid" })).toHaveAttribute("aria-pressed", "true");
     await charge.getByRole("spinbutton", { name: "Watts" }).fill("10");
     await expect(meaning("grid_target_charge_w")).toHaveText("While charging, the meter settles on 10 W of export: a margin so the battery does not charge from the grid.");
     await discharge.getByRole("spinbutton", { name: "Watts" }).fill("15");
     await expect(meaning("grid_target_discharge_w")).toHaveText("While discharging, the meter settles on 15 W of import: a margin so the battery does not feed the grid.");
-    await discharge.getByRole("combobox", { name: "Direction" }).selectOption("export");
+    await discharge.getByRole("group", { name: "Direction" }).getByRole("button", { name: "Export to the grid" }).click();
     await expect(meaning("grid_target_discharge_w")).toHaveText("While discharging, the meter settles on 15 W of export: the battery feeds that much into the grid.");
     await save(page, system);
     await expect.poll(() => writes).toEqual([
       { target: "system", method: "PATCH", body: { grid_target_discharge_w: -15, grid_target_charge_w: -10 }, csrf: CSRF },
     ]);
     await expect(system.getByRole("status")).toHaveText("Saved");
-    await expect(discharge.getByRole("combobox", { name: "Direction" })).toHaveValue("export");
+    await expect(discharge.getByRole("group", { name: "Direction" }).getByRole("button", { name: "Export to the grid" })).toHaveAttribute("aria-pressed", "true");
     await expect(discharge.getByRole("spinbutton", { name: "Watts" })).toHaveValue("15");
   });
 
@@ -164,15 +164,16 @@ test.describe("Modern dashboard operator: runtime settings @smoke", () => {
     const system = form(page, "/api/runtime/system");
     const minimum = system.locator('input[name="min_output_limit"]');
     await minimum.fill("");
-    await expect(minimum).toHaveAttribute("placeholder", "35 (default)");
-    await expect(system.locator('input[name="loop_interval"]')).toHaveAttribute("placeholder", "5 (default)");
+    await expect(minimum).toHaveAttribute("placeholder", "35");
+    await expect(minimum.locator("xpath=..")).toContainText("(default)");
+    await expect(system.locator('input[name="loop_interval"]')).toHaveAttribute("placeholder", "5");
     await save(page, system);
     await expect.poll(() => writes).toEqual([{ target: "system", method: "PATCH", body: { min_output_limit: 35 }, csrf: CSRF }]);
     await expect(minimum).toHaveValue("35");
 
     const device = form(page, "/api/runtime/device/WR1");
     await expect(device.locator('input[name="max_power"]')).toHaveAttribute("placeholder", "");
-    await expect(device.locator('input[name="pv_priority_factor"]')).toHaveAttribute("placeholder", "1 (default)");
+    await expect(device.locator('input[name="pv_priority_factor"]')).toHaveAttribute("placeholder", "1");
   });
 
   test("a device's AC charging, max power and AC charge power go out as one write, and AC charging is forbidden again", async ({ page }) => {
@@ -182,6 +183,9 @@ test.describe("Modern dashboard operator: runtime settings @smoke", () => {
     await device.locator('input[name="ac_charge_enabled"]').check();
     await device.locator('input[name="max_power"]').fill("600");
     await device.locator('input[name="ac_charge_power_w"]').fill("400");
+    const powerField = device.locator('label:has(> input[name="ac_charge_power_w"])');
+    await expect(powerField).toHaveClass(/\bmeter\b/);
+    await expect(powerField).toHaveAttribute("style", /--to:\s*0\.1666/);
     await save(page, device);
     await expect.poll(() => writes.length).toBe(1);
     await expect(page.locator("dialog[open]")).toHaveCount(0);
@@ -225,14 +229,15 @@ test.describe("Modern dashboard operator: runtime settings @smoke", () => {
     await openSignedIn(page, "#/control");
     const device = form(page, "/api/runtime/device/WR1");
     const dialog = page.locator("dialog[open]");
-    await device.locator('select[name="runtime_role"]').selectOption("ac_input");
+    const role = device.getByRole("group", { name: "AC role" });
+    await role.getByRole("button", { name: "AC charging (input)" }).click();
     await save(page, device);
     await expect(dialog).toContainText("Switch WR1 to AC charging?");
     await dialog.getByTestId("confirm").click();
     await expect.poll(() => writes.length).toBe(1);
-    await expect(device.locator('select[name="runtime_role"]')).toHaveValue("ac_input");
+    await expect(role.getByRole("button", { name: "AC charging (input)" })).toHaveAttribute("aria-pressed", "true");
 
-    await device.locator('select[name="runtime_role"]').selectOption("ac_output");
+    await role.getByRole("button", { name: "Output (EMS regulates)" }).click();
     await save(page, device);
     await expect.poll(() => writes.length).toBe(2);
     await expect(dialog).toHaveCount(0);
@@ -247,10 +252,10 @@ test.describe("Modern dashboard operator: runtime settings @smoke", () => {
     await openSignedIn(page, "#/control");
     const device = form(page, "/api/runtime/device/WR1");
     const dialog = page.locator("dialog[open]");
-    await device.locator('select[name="light"]').selectOption("off");
+    await device.getByRole("group", { name: "Light" }).getByRole("button", { name: "Off" }).click();
     await device.locator('select[name="fan"]').selectOption("2");
-    await device.locator('select[name="buzzer"]').selectOption("on");
-    await device.locator('select[name="auto_heat"]').selectOption("off");
+    await device.getByRole("group", { name: "Buzzer" }).getByRole("button", { name: "On" }).click();
+    await device.getByRole("group", { name: "Battery heating" }).getByRole("button", { name: "Off" }).click();
     await save(page, device);
     await expect(dialog).toContainText("Change Light, Fan, Buzzer, Battery heating of WR1?");
     await expect(dialog).toContainText("The EMS writes Light, Fan, Buzzer, Battery heating to the inverter and keeps them there.");
@@ -260,7 +265,7 @@ test.describe("Modern dashboard operator: runtime settings @smoke", () => {
     expect(writes[0]).toEqual({ target: "device/WR1", method: "PATCH", body: { light: "off", fan: "2", buzzer: "on", auto_heat: "off" }, csrf: CSRF });
     await expect(device.locator('select[name="fan"]')).toHaveValue("2");
 
-    await device.locator('select[name="light"]').selectOption({ label: "Device decides" });
+    await device.getByRole("group", { name: "Light" }).getByRole("button", { name: "Device decides" }).click();
     await save(page, device);
     await expect(dialog).toContainText("Change Light of WR1?");
     await expect(dialog).toContainText("The EMS writes nothing for Light from now on");
@@ -307,6 +312,9 @@ test.describe("Modern dashboard operator: runtime settings @smoke", () => {
     await expect(dialog).toHaveCount(0);
 
     await power.fill("");
+    const powerField = device.locator('label:has(> input[name="ac_charge_power_w"])');
+    await expect(powerField).toHaveClass(/\bstandard\b/);
+    await expect(powerField).toHaveAttribute("style", /--to:\s*1(?![\d.])/);
     await save(page, device);
     await expect(dialog).toContainText("Charge WR1 at its maximum?");
     await dialog.getByTestId("confirm").click();

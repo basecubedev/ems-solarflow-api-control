@@ -1164,7 +1164,7 @@ test.describe("Modern dashboard writes @smoke", () => {
     await openModern(page, "#/control");
     const form = page.locator('form[data-endpoint="/api/runtime/device/WR1"]');
     await expect(form).toBeVisible();
-    await form.locator('select[name="offgrid_socket_mode"]').selectOption("eco");
+    await form.getByRole("group", { name: "Off-grid socket" }).getByRole("button", { name: "Eco" }).click();
     await form.getByRole("button", { name: "Save" }).click();
     await expect(page.locator("dialog[open]")).toContainText("Change the off-grid socket of WR1?");
     await expect(page.getByRole("dialog", { name: "WR1" })).toBeVisible();

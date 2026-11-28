@@ -851,7 +851,10 @@ def test_the_editors_offer_the_runtime_bounds():
 
     root = Path(__file__).resolve().parents[1]
     modern = (root / "frontend/dashboard-modern/src/widgets/RuntimeEditor.svelte").read_text(encoding="utf-8")
-    specs = effective_limits()["fields"]["sections"]["battery_care"]
+    specs = {
+        name: {key: spec[key] for key in ("type", "min", "max") if key in spec}
+        for name, spec in effective_limits()["fields"]["sections"]["battery_care"].items()
+    }
 
     for name in ("summer_full_points", "winter_full_points", "pv_only_points", "min_discharge_w", "pv_margin_percent", "pv_margin_min_w"):
         assert f'...accepted("battery_care", "{name}")' in modern

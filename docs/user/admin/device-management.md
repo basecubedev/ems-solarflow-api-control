@@ -40,8 +40,9 @@ a device** tile and **Open the devices** lead straight here.
 - **Devices** — one card per device: the **Grid meter**, the **Zendure MQTT
   broker**, and each inverter (*Inverter 1*, *Inverter 2*, …) with its model,
   EMS name, address, serial and power, its connection (**Local connection**,
-  *Zendure via your own MQTT broker*, *Zendure via the Zendure cloud*) and
-  **Enabled** or **Disabled**. Under them **Add an inverter**, **Add an
+  *Zendure via your own MQTT broker*, *Zendure via the Zendure cloud*), a
+  **Remove** button and, at the right end, its switch: on, the device is
+  enabled; off, its name and icon grey out. Under them **Add an inverter**, **Add an
   inverter over MQTT**, **Add an E3/DC (read only)** and **Add an OpenDTU
   inverter (read only)**.
 
@@ -84,11 +85,11 @@ finds; your changes stay.
 
 ### 3 — Edit a device
 
-![Inverter 1 opened: Enabled, device name INV_1, device IP address, serial number, device output limit, minimum and maximum SoC, and Advanced settings folded away](../../assets/screenshots/admin/admin-settings-device.png)
+![Inverter 1 opened with its switch on in the card's head, the note that it is included in the EMS settings, device name INV_1, device IP address, serial number, device output limit, minimum and maximum SoC, and Advanced settings folded away](../../assets/screenshots/admin/admin-settings-device.png)
 
 **What you select:** a device's card, to open it.
 
-**What you can change:** the **Enabled** switch, the **Device name**, the
+**What you can change:** the switch in the card's head, the **Device name**, the
 address, the **Serial number**, the **Device output limit**, the **Minimum
 SoC** and **Maximum SoC**; under **Advanced settings** smart mode, the PV
 size, the winter policy, PV priority, the battery size, AC discharge, AC
@@ -105,8 +106,8 @@ stored secret; **Clear the stored password** removes one.
 
 | Action | Effect | Reversible |
 | --- | --- | --- |
-| Untick **Enabled** | EMS stops regulating this device. It stays in the settings | Yes — tick it again |
-| Tick **Enabled** | EMS regulates it again | Yes |
+| Switch the device off (the switch in its card's head) | EMS stops regulating this device. It stays in the settings | Yes — switch it on again |
+| Switch it on | EMS regulates it again | Yes |
 | **Remove** | The device leaves the settings | Only by adding it again |
 
 > **Enabled belongs to the device, not to its connection.** Switching an
@@ -118,7 +119,7 @@ A device added through the guided setup or here is **enabled** from the start.
 
 **An E3/DC shown read only.** **Add an E3/DC (read only)** creates a card for
 an E3/DC storage system: name, host or IP, Modbus port (502) and unit ID (1),
-and **Enabled** — no serial and no control values, because EMS only reads it
+and its switch in the card's head — no serial and no control values, because EMS only reads it
 and shows its PV, battery, inverter and grid on the dashboard. The guided setup
 adds it on its own when the E3/DC is the grid meter. It counts as a read-only
 device, not as an inverter, and at least one Zendure inverter is still needed.
@@ -130,7 +131,7 @@ read-only device**); one set to another unit ID is added by hand.
 creates a card for one inverter an OpenDTU reaches, read over the OpenDTU's
 web API without an MQTT broker: name, the OpenDTU's address, the inverter's
 serial number as the OpenDTU shows it (left empty when the OpenDTU reads only
-this one inverter), port (80), maximum age (60 seconds) and **Enabled**. EMS
+this one inverter), port (80), maximum age (60 seconds) and its switch. EMS
 only reads it and never sets its limit; like an E3/DC it counts as a read-only
 device, not as an inverter. The search finds an OpenDTU whose read-only access
 is on and offers each inverter it reads as **Add as read-only device**, which
