@@ -21,13 +21,14 @@ from dashboard.telemetry import _state_telemetry_fields
 from ems.clients import parse_device, zendure_pack_soc
 from ems.config import normalize_influxdb_config
 from ems.history import schema
-from ems.history.influx_provider import PACK_INFLUX_SERIES, InfluxHistoryProvider
+from ems.history.influx_provider import BATTERY_INFLUX_SERIES, PACK_INFLUX_SERIES, InfluxHistoryProvider
 from ems.history.influx_writer import build_telemetry_lines
 from ems.history.provider import (
     PACK_CELL_REDUCERS,
     PACK_RAW_FIELDS,
     PACK_SERIES,
     PACK_SERIES_REDUCERS,
+    SERIES_CATALOG,
     _pack_series_value,
     normalize_series,
     pack_cells_of_series,
@@ -87,8 +88,8 @@ def test_influxdb_records_each_pack_s_charge_and_downsamples_it_with_its_mean():
     lines = build_telemetry_lines([SimpleNamespace(name="Shed")], [parse_device(TWO_PACKS)], {"Shed": True}, 0, timestamp_ns=1)
 
     assert [line for line in lines if line.startswith("battery_pack")] == [
-        "battery_pack,device=Shed,pack=1,source=zendure cell_max_v=3.22,cell_min_v=3.2,soc=30.0 1",
-        "battery_pack,device=Shed,pack=2,source=zendure cell_max_v=3.33,cell_min_v=3.31,soc=70.0 1",
+        "battery_pack,device=Shed,pack=1,source=zendure cell_max_v=3.22,cell_min_v=3.2,cell_spread_v=0.02,soc=30.0 1",
+        "battery_pack,device=Shed,pack=2,source=zendure cell_max_v=3.33,cell_min_v=3.31,cell_spread_v=0.02,soc=70.0 1",
     ]
     assert ("battery_pack", "soc", "mean") in schema.BATTERY_DOWNSAMPLED
 
@@ -147,7 +148,8 @@ ROOT = Path(__file__).resolve().parents[1]
 def test_every_pack_series_is_written_read_kept_and_drawn_by_the_same_name():
     """The pack series live in five lists that must agree: a field written but
     not downsampled empties a long range, one served but not queried answers
-    nothing, and a measure the dashboard draws must name a series the history
+    nothing, and a measure the dashboard draws or reads for a card, and the
+    device's own line beside its packs, must name a series the history
     serves."""
 
     downsampled = {field: reducer for measurement, field, reducer in schema.BATTERY_DOWNSAMPLED if measurement == "battery_pack"}
@@ -160,8 +162,10 @@ def test_every_pack_series_is_written_read_kept_and_drawn_by_the_same_name():
             assert field in PACK_RAW_FIELDS and downsampled.get(field) == reducer, kind
 
     battery_js = (ROOT / "frontend" / "dashboard-modern" / "src" / "lib" / "battery.js").read_text(encoding="utf-8")
-    drawn = set(re.findall(r'perPack: "(\w+)"', battery_js))
-    assert drawn and drawn <= set(PACK_SERIES)
+    drawn = set(re.findall(r'(?:perPack|series): "(\w+)"', battery_js))
+    assert {"pack_temp", "cell_spread"} <= drawn <= set(PACK_SERIES)
+    beside = set(re.findall(r'device: "(\w+)"', battery_js))
+    assert beside and beside <= set(BATTERY_INFLUX_SERIES) & set(SERIES_CATALOG)
 
     preview = (ROOT / "scripts" / "dashboard_preview_data.py").read_text(encoding="utf-8")
     listed = re.search(r"_PREVIEW_PACK_SERIES = \(([^)]*)\)", preview).group(1)

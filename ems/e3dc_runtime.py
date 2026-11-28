@@ -325,7 +325,7 @@ def e3dc_device_state(reading):
         pack_in=max(0.0, -battery_w),
         pack_out=max(0.0, battery_w),
         temp=None,
-        voltage=0,
+        voltage=None,
         rssi=0,
         remain_minutes=0,
         solar1=solar[0],

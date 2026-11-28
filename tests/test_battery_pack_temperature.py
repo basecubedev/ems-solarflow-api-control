@@ -65,8 +65,8 @@ def _pack_lines(report):
 
 def test_influxdb_records_the_pack_temperature_and_downsamples_it_in_the_battery_task():
     assert _pack_lines(TWO_PACKS) == [
-        "battery_pack,device=Shed,pack=1,source=zendure cell_max_v=3.26,cell_min_v=3.25,temp_c=13.0 1",
-        "battery_pack,device=Shed,pack=2,source=zendure cell_max_v=3.31,cell_min_v=3.3,temp_c=25.0 1",
+        "battery_pack,device=Shed,pack=1,source=zendure cell_max_v=3.26,cell_min_v=3.25,cell_spread_v=0.01,temp_c=13.0 1",
+        "battery_pack,device=Shed,pack=2,source=zendure cell_max_v=3.31,cell_min_v=3.3,cell_spread_v=0.01,temp_c=25.0 1",
     ]
     step = {"source": "raw", "target": "1m", "window": "1m"}
     influx = {"bucket_prefix": "ems", "org": "ems", "downsampling": [step]}

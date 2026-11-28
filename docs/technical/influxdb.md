@@ -868,7 +868,7 @@ running inside a container (it honors an `EMS_IN_CONTAINER` override).
 ### Battery cell voltages
 
 Each pack of a device the EMS controls that reports its cell voltages, its
-power, its state, its temperature or its charge writes one `battery_pack` point per cycle while the device's
+power, its state, its temperature, its charge, its voltage or its current writes one `battery_pack` point per cycle while the device's
 telemetry is current (a state held past its last read writes none), tagged
 `device` and `pack` (numbered from 1, see
 [the Devices page](../dashboard.md#devices-page)), with `cell_min_v` and
@@ -878,16 +878,31 @@ watts, `state`, 0 idle, 1 charging, 2 discharging, and `temp_c`, the pack's
 temperature up to v0.10.0](#the-device-temperature-up-to-v0100)); a value the
 pack does not report, or one outside -60 to 120 °C, is left out; and `soc`, the
 pack's own `packData[].socLevel` in percent (0 to 100, anything else left out),
-beside the one level the device reports for all its packs as `soc`. The sign of `power_w` is not a direction (a 16-bit
-value Zendure sends as 32768–65535 is stored as the negative number it
-encodes); `state` names the direction, as the dashboard reads it.
+beside the one level the device reports for all its packs as `soc`; and
+`voltage_v`, the pack's `packData[].totalVol`, its voltage across all its
+cells, in volts (5 to 120 V, anything else left out). The sign of `power_w` is
+not a direction (a 16-bit value Zendure sends as 32768–65535 is stored as the
+negative number it encodes); `state` names the direction, as the dashboard
+reads it. `flow_w` and `current_a` carry it: the size of `power_w` and of
+`packData[].batcur` (tenths of an amp, in amps), positive while the pack
+charges and negative while it discharges, as the history keeps the battery's
+power; 0 for an idle pack reporting 0, left out where `state` names no
+direction. `cell_spread_v` is `cell_max_v` less `cell_min_v` of the same
+reading: a window's lowest and highest cell come from different times, so
+their gap would count a charge that lifts every cell as cells drifting apart.
+Over MQTT it is left out while the two come from different change reports.
+
+The device's own battery voltage, `BatVolt`, is `voltage` on `zendure_device`,
+left out where the device reports none rather than written as 0 V; an E3/DC or
+OpenDTU device writes none.
 
 `power_w` and `state` stay in the raw bucket (`retention.raw_days`, 14 days by
 default). A window's mean of a power without a direction means nothing once the
 direction changes inside it, and a field added to the cell task would leave the
 task every installation already has as `kept` until an operator syncs it by
-hand. `temp_c` and `soc` go on into the downsampled buckets through the battery task,
-each with its window's mean
+hand. `temp_c`, `soc`, `voltage_v`, `current_a` and `flow_w` go on into the
+downsampled buckets through the battery task, each with its window's mean, and
+`cell_spread_v` with its window's maximum
 (see [A battery in the cold](#a-battery-in-the-cold)).
 
 Each downsampling step has a second task for them, `<prefix>-downsample-<target>:cells`
@@ -918,19 +933,23 @@ follows a charge the firmware started. A yes/no is written as 1 or 0, as the his
 booleans.
 
 A third task per step, `<prefix>-downsample-<target>:battery`, carries them and
-the pack temperature `temp_c` and the pack charge `soc` into the `1m`, `5m` and `1h` buckets: a state
+the pack temperature `temp_c`, the pack charge `soc` and the pack's
+`voltage_v`, `current_a`, `flow_w` and `cell_spread_v` into the `1m`, `5m` and `1h` buckets: a state
 with each window's maximum, so a window in which the heating ran at all shows
-it on, and a chart that thins a long range keeps it the same way; the
-temperatures and what the battery accepts with their mean; the winter target
+it on, and a chart that thins a long range keeps it the same way, and so the
+widest cell spread; the
+temperatures, the packs' voltages, currents and power and what the battery
+accepts with their mean; the winter target
 with its last value, one pipeline per reducer, so the task reads the source
 bucket three times rather than once per field. Like the cell task it reaches an installed
 system by itself, and their history in the downsampled buckets starts when it
 does.
 
 An installation that created the battery task from a build before the pack's
-`soc` joined it (development builds of 2026-11-27) keeps that task: the safe
-sync reports it `kept` and changes nothing, so `soc` stays in the raw bucket
-until `emsctl.py influx sync`, the full sync, updates the task.
+`soc`, `voltage_v`, `current_a`, `flow_w` and `cell_spread_v` joined it (a
+development build) keeps that task: the safe sync reports it `kept`
+and changes nothing, so those fields stay in the raw bucket until
+`emsctl.py influx sync`, the full sync, updates the task.
 
 ### PV inputs
 

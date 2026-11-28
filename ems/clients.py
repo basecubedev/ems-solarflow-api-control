@@ -24,7 +24,7 @@ from ems.charge_record import (
 from ems.grid_reading import GridReading
 from ems.health import CommHealth, redact_error, redact_url_credentials
 from ems.logging_utils import log_event
-from ems.models import DEVICE_STATE_PROPERTIES, MAX_PACK_NUMBER, DeviceState, PackCells, parse_pack_count
+from ems.models import DEVICE_STATE_PROPERTIES, MAX_PACK_NUMBER, PACK_CELLS_APART, DeviceState, PackCells, parse_pack_count
 from ems.power_direction import AC_MODE_INPUT, DEFAULT_SAFETY_PREEMPT_MARGIN_W
 from ems.zendure_mqtt.payloads import extract_packs
 from ems.zendure_mqtt.snapshot import observable_metrics
@@ -165,6 +165,10 @@ PLAUSIBLE_DEVICE_TEMPERATURE_C = (-60.0, 120.0)
 ZENDURE_CELL_VOLTAGE_HUNDREDTHS = 100
 PLAUSIBLE_CELL_VOLTAGE_V = (1.5, 5.0)
 PLAUSIBLE_PACK_POWER_W = (-10000.0, 10000.0)
+ZENDURE_BATTERY_VOLTAGE_HUNDREDTHS = 100
+PLAUSIBLE_BATTERY_VOLTAGE_V = (5.0, 120.0)
+ZENDURE_PACK_CURRENT_TENTHS = 10
+PLAUSIBLE_PACK_CURRENT_A = (-500.0, 500.0)
 INT16_NEGATIVE_FIRST = 32768
 UINT16_MAX = 65535
 ZENDURE_PACK_STATES = (0, 1, 2)
@@ -229,11 +233,69 @@ def zendure_pack_power_w(value):
     pack can have is no reading.
     """
 
-    reading = _zendure_reading(value, offset=0, divisor=1, digits=0, plausible=(-65536.0, 65536.0))
-    if reading is not None and INT16_NEGATIVE_FIRST <= reading <= UINT16_MAX:
-        reading -= UINT16_MAX + 1
+    reading = _signed_int16(value, divisor=1, digits=0)
     low, high = PLAUSIBLE_PACK_POWER_W
     return reading if reading is not None and low <= reading <= high else None
+
+
+def _signed_int16(value, *, divisor, digits):
+    """A signed 16-bit Zendure reading the device sends as unsigned, scaled."""
+
+    reading = _zendure_reading(value, offset=0, divisor=1, digits=0, plausible=(-65536.0, 65536.0))
+    if reading is None:
+        return None
+    if INT16_NEGATIVE_FIRST <= reading <= UINT16_MAX:
+        reading -= UINT16_MAX + 1
+    return round(reading / divisor, digits)
+
+
+def zendure_battery_voltage_v(value):
+    """A battery's voltage in volts, ``None`` when it reports none.
+
+    The device's ``BatVolt`` and each pack's ``packData[].totalVol`` come in
+    hundredths of a volt: the voltage across all the cells in series, about
+    48 V, where ``minVol``/``maxVol`` name a single cell's. A missing value
+    would otherwise read as 0 V; a reading no battery can have is no reading.
+    """
+
+    return _zendure_reading(
+        value,
+        offset=0,
+        divisor=ZENDURE_BATTERY_VOLTAGE_HUNDREDTHS,
+        digits=2,
+        plausible=PLAUSIBLE_BATTERY_VOLTAGE_V,
+    )
+
+
+def zendure_pack_current_a(value):
+    """The size of a pack's ``packData[].batcur`` in amps, ``None`` when it reports none.
+
+    Zendure reports tenths of an amp as a signed 16-bit value sent unsigned
+    (65535 beside a 4 W drain is -0.1 A). Only the size is kept: the
+    direction is the pack's ``state``, as for its power.
+    """
+
+    reading = _signed_int16(value, divisor=ZENDURE_PACK_CURRENT_TENTHS, digits=1)
+    low, high = PLAUSIBLE_PACK_CURRENT_A
+    return abs(reading) + 0.0 if reading is not None and low <= reading <= high else None
+
+
+def pack_flow(size, state):
+    """A pack reading signed by the direction its state names, as the history keeps the battery.
+
+    Positive while the pack charges (state 1), negative while it discharges
+    (state 2), 0 for an idle pack that reports none; ``None`` when the state
+    names no direction or an idle pack reports some, rather than a guess.
+    A chart draws it below zero while charging, as it draws the battery.
+    """
+
+    if size is None:
+        return None
+    if state == 1:
+        return abs(size) + 0.0
+    if state == 2:
+        return -abs(size) + 0.0
+    return 0.0 if state == 0 and size == 0 else None
 
 
 def zendure_pack_state(value):
@@ -280,14 +342,20 @@ def _pack_cells(number, pack):
     high = zendure_cell_voltage_v(pack.get("maxVol"))
     if low is not None and high is not None and low > high:
         low = high = None
+    power = zendure_pack_power_w(pack.get("power"))
+    state = zendure_pack_state(pack.get("state"))
     return PackCells(
         pack=number,
         cell_min_v=low,
         cell_max_v=high,
-        power_w=zendure_pack_power_w(pack.get("power")),
-        state=zendure_pack_state(pack.get("state")),
+        power_w=power,
+        state=state,
         temp_c=zendure_temperature_c(pack.get("maxTemp")),
         soc=zendure_pack_soc(pack.get("socLevel")),
+        voltage_v=zendure_battery_voltage_v(pack.get("totalVol")),
+        current_a=pack_flow(zendure_pack_current_a(pack.get("batcur")), state),
+        flow_w=pack_flow(power, state),
+        cells_paired=not pack.get(PACK_CELLS_APART),
     )
 
 
@@ -309,7 +377,7 @@ def parse_device(data):
         pack_out=props.get("outputPackPower") or 0,
 
         temp=zendure_temperature_c(props.get("hyperTmp")),
-        voltage=round(((props.get("BatVolt") or 0) / 100), 2),
+        voltage=zendure_battery_voltage_v(props.get("BatVolt")),
         rssi=props.get("rssi") or 0,
 
         remain_minutes=round((props.get("remainOutTime") or 0), 1),
@@ -392,7 +460,7 @@ def zero_device_state():
         pack_in=0,
         pack_out=0,
         temp=None,
-        voltage=0,
+        voltage=None,
         rssi=0,
         remain_minutes=0,
         solar1=0,

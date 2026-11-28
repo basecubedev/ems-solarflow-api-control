@@ -154,7 +154,7 @@ def opendtu_device_state(reading):
         pack_in=0,
         pack_out=0,
         temp=None,
-        voltage=0,
+        voltage=None,
         rssi=0,
         remain_minutes=0,
         solar1=slots[0],

@@ -127,6 +127,10 @@ def test_each_condition_keeps_its_own_reducer_in_the_downsampled_buckets():
     assert kept == {
         ("battery_pack", "temp_c"): "mean",
         ("battery_pack", "soc"): "mean",
+        ("battery_pack", "cell_spread_v"): "max",
+        ("battery_pack", "voltage_v"): "mean",
+        ("battery_pack", "current_a"): "mean",
+        ("battery_pack", "flow_w"): "mean",
         **{("zendure_device", state): "max" for state in STATE_SERIES},
         ("zendure_device", "charge_avail_w"): "mean",
         ("zendure_device", "discharge_avail_w"): "mean",
@@ -159,13 +163,13 @@ def test_an_installed_system_gets_the_battery_task_by_itself():
     }
 
 
-def test_every_battery_series_is_catalogued_and_reads_a_field_the_battery_task_keeps():
+def test_every_battery_series_is_catalogued_and_reads_a_field_a_downsampling_task_keeps():
     kept = {(measurement, field) for measurement, field, _reducer in schema.BATTERY_DOWNSAMPLED}
 
     for name, spec in BATTERY_INFLUX_SERIES.items():
         assert name in SERIES_CATALOG, name
         assert normalize_series([name]) == [name]
-        assert (spec["measurement"], spec["field"]) in kept or spec["field"] in ("temp", "min_soc"), name
+        assert (spec["measurement"], spec["field"]) in kept or spec["field"] in schema.NUMERIC_FIELDS, name
 
 
 @pytest.mark.parametrize(

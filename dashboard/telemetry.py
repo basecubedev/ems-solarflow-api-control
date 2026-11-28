@@ -262,7 +262,7 @@ def _state_telemetry_fields(state, unused_inputs=frozenset()):
         "pack_state": int(getattr(state, "pack_state", 0) or 0),
         "fault_level": int(getattr(state, "fault_level", 0) or 0),
         "temperature_c": _rounded_or_none(getattr(state, "temp", None)),
-        "voltage_v": _rounded(getattr(state, "voltage", 0)),
+        "voltage_v": _rounded_or_none(getattr(state, "voltage", None)),
         "battery_packs": [asdict(pack) for pack in getattr(state, "battery_packs", ()) or ()],
         "rssi": int(getattr(state, "rssi", 0) or 0),
         "remain_minutes": _rounded(getattr(state, "remain_minutes", 0)),

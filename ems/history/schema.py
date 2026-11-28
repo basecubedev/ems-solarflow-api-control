@@ -85,6 +85,10 @@ BATTERY_TASK_SUFFIX = ":battery"
 BATTERY_DOWNSAMPLED = (
     ("battery_pack", "temp_c", "mean"),
     ("battery_pack", "soc", "mean"),
+    ("battery_pack", "cell_spread_v", "max"),
+    ("battery_pack", "voltage_v", "mean"),
+    ("battery_pack", "current_a", "mean"),
+    ("battery_pack", "flow_w", "mean"),
     ("zendure_device", "heat_state", "max"),
     ("zendure_device", "low_temp", "max"),
     ("zendure_device", "error_flag", "max"),

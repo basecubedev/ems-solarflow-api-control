@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 basecubedev
 # SPDX-License-Identifier: AGPL-3.0-or-later
-from dataclasses import dataclass, field
+from dataclasses import InitVar, dataclass, field
 
 # Battery presence is three-valued because absence cannot be inferred from
 # silence: `packNum` missing means nobody said, not that there is no pack.
@@ -64,6 +64,7 @@ DEVICE_STATE_PROPERTIES = frozenset(
 
 
 MAX_PACK_NUMBER = 16
+PACK_CELLS_APART = "cellsApart"
 
 
 @dataclass(frozen=True)
@@ -74,16 +75,32 @@ class PackCells:
     1 charging, 2 discharging) the pack reports of itself, which the
     device-level pack values do not show while the device stands idle, its
     temperature in °C and its own state of charge in percent, where the
-    device's ``electricLevel`` gives one level for all its packs.
+    device's ``electricLevel`` gives one level for all its packs. The gap
+    between its highest and its lowest cell at that reading
+    (``cell_spread_v``), none when ``cells_paired`` says the two come from
+    different reports, its own voltage across all its cells
+    (``voltage_v``), and its current and power signed by the direction its
+    state names (``current_a``, ``flow_w``): positive while it charges,
+    negative while it discharges, as the history keeps the battery.
     """
 
     pack: int
     cell_min_v: float | None
     cell_max_v: float | None
+    cell_spread_v: float | None = field(init=False, default=None)
     power_w: float | None = None
     state: int | None = None
     temp_c: float | None = None
     soc: float | None = None
+    voltage_v: float | None = None
+    current_a: float | None = None
+    flow_w: float | None = None
+    cells_paired: InitVar[bool] = True
+
+    def __post_init__(self, cells_paired):
+        low, high = self.cell_min_v, self.cell_max_v
+        paired = cells_paired and low is not None and high is not None and high >= low
+        object.__setattr__(self, "cell_spread_v", round(high - low, 3) if paired else None)
 
 
 @dataclass
@@ -116,7 +133,7 @@ class DeviceState:
     pack_out: float
 
     temp: float | None
-    voltage: float
+    voltage: float | None
     rssi: int
 
     remain_minutes: float

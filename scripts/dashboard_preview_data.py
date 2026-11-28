@@ -616,8 +616,12 @@ def _history(snapshot, points=96, now=None):
 
 
 _PREVIEW_BATTERY_STATES = ("heat_state", "low_temp", "ac_input", "winter_hold", "derate", "error_flag")
-_PREVIEW_BATTERY_VALUES = ("device_temp", "min_soc", "winter_target", "charge_avail", "discharge_avail", "input_limit")
-_PREVIEW_PACK_SERIES = ("pack_temp", "pack_soc", "cell_min", "cell_max")
+_PREVIEW_BATTERY_VALUES = (
+    "device_temp", "device_voltage", "min_soc", "winter_target", "charge_avail", "discharge_avail", "input_limit",
+)
+_PREVIEW_PACK_SERIES = (
+    "pack_temp", "pack_soc", "pack_voltage", "pack_current", "pack_power", "cell_min", "cell_max", "cell_spread",
+)
 
 
 def preview_battery_series(series):
@@ -636,8 +640,9 @@ def preview_battery_value(series, hour):
     they are too cold the battery accepts no charge and the device derates,
     and it heats from 05:00 until they are warm again, when the morning's
     charge request comes. Winter mode holds the midday solar power for the
-    battery. Each further pack runs 0.7 °C warmer, its cells 10 mV lower and
-    its charge 8 points lower.
+    battery. The packs discharge through the night and charge from the
+    morning, about 320 W at most. Each further pack runs 0.7 °C warmer, its
+    cells 10 mV lower, its charge 8 points lower and its power a tenth less.
     Deterministic, like the rest of the preview's history.
     """
 
@@ -652,6 +657,15 @@ def preview_battery_value(series, hour):
     if kind in ("cell_min", "cell_max"):
         low = 3.22 + 0.06 * math.sin(2 * math.pi * (hour - 13.0) / 24.0) - 0.01 * offset
         return round(low + (0.02 if kind == "cell_max" else 0.0), 3)
+    if kind == "cell_spread":
+        return 0.02
+    flow = round(320.0 * math.sin(2 * math.pi * (hour - 7.0) / 24.0) * (1.0 - 0.1 * offset))
+    if kind == "pack_power":
+        return flow
+    if kind == "pack_voltage":
+        return round(15 * (3.22 + 0.06 * math.sin(2 * math.pi * (hour - 13.0) / 24.0)) - 0.15 * offset, 2)
+    if kind == "pack_current":
+        return round(flow / 48.0, 1)
     values = {
         "heat_state": int(cold and 5.0 <= hour < 12.0),
         "low_temp": int(cold),
@@ -660,6 +674,7 @@ def preview_battery_value(series, hour):
         "derate": int(cold),
         "error_flag": 0,
         "device_temp": round(temp + 9.0, 1),
+        "device_voltage": round(15 * (3.23 + 0.06 * math.sin(2 * math.pi * (hour - 13.0) / 24.0)), 2),
         "min_soc": 15,
         "winter_target": 25,
         "charge_avail": 0 if cold else 1200,

@@ -65,6 +65,7 @@ SERIES_CATALOG = {
         name: {"label": label, "color_var": "--m-muted", "sqlite_field": None}
         for name, label in (
             ("device_temp", "Inverter temperature"),
+            ("device_voltage", "Battery voltage"),
             ("min_soc", "Minimum SoC"),
             ("winter_target", "Winter target"),
             ("heat_state", "Battery heating"),
@@ -100,15 +101,34 @@ MAX_CONSUMER_NAME = 256
 # and a downsampling step: a short dip of the lowest cell is what it is read for.
 PACK_CELL_SERIES = {"cell_min": "cell_min_v", "cell_max": "cell_max_v"}
 PACK_CELL_REDUCERS = {"cell_min_v": "min", "cell_max_v": "max"}
-PACK_SERIES = {**PACK_CELL_SERIES, "pack_temp": "temp_c", "pack_soc": "soc"}
-PACK_SERIES_REDUCERS = {**PACK_CELL_REDUCERS, "temp_c": "mean", "soc": "mean"}
-# A pack's own power, state, temperature and state of charge stay out of the
-# cell task. power_w carries no direction -- state does -- so a window's mean
-# across a change of direction means nothing, and a field added to the cell
-# task would leave every installation's existing task "kept" until an operator
-# synced by hand. The temperature and the state of charge are carried by the
-# battery task (ems.history.schema BATTERY_DOWNSAMPLED).
-PACK_RAW_FIELDS = ("power_w", "state", "temp_c", "soc")
+PACK_SERIES = {
+    **PACK_CELL_SERIES,
+    "pack_temp": "temp_c",
+    "pack_soc": "soc",
+    "cell_spread": "cell_spread_v",
+    "pack_voltage": "voltage_v",
+    "pack_current": "current_a",
+    "pack_power": "flow_w",
+}
+PACK_SERIES_REDUCERS = {
+    **PACK_CELL_REDUCERS,
+    "temp_c": "mean",
+    "soc": "mean",
+    "cell_spread_v": "max",
+    "voltage_v": "mean",
+    "current_a": "mean",
+    "flow_w": "mean",
+}
+# A pack's other readings stay out of the cell task: a field added to it would
+# leave every installation's existing task "kept" until an operator synced by
+# hand. power_w carries no direction -- state does -- so a window's mean across
+# a change of direction means nothing; flow_w and current_a carry it, signed
+# as the battery series is, and are averaged like the temperature, the state
+# of charge and the voltage by the battery task (ems.history.schema
+# BATTERY_DOWNSAMPLED). cell_spread_v keeps each window's widest gap between
+# the cells of one reading, which the window's lowest and highest cell, read
+# at different times, cannot give.
+PACK_RAW_FIELDS = ("power_w", "state", "temp_c", "soc", "cell_spread_v", "voltage_v", "current_a", "flow_w")
 _REDUCE = {"min": min, "max": max, "mean": lambda values: sum(values) / len(values)}
 
 # Per-device snapshot fields (under payload["devices"][name]) used when the
