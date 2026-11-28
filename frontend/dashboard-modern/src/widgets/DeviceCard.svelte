@@ -10,7 +10,10 @@
   import Fact from "../../../shared/ui/Fact.svelte";
   import Status from "../../../shared/ui/Status.svelte";
   import { t, fmt, tv, translatedOr } from "../i18n/i18n.svelte.js";
-  import { assistView, firmwareFacts } from "../lib/devices.js";
+  import { assistView, diagnosis, firmwareFacts } from "../lib/devices.js";
+  import { ampText } from "../lib/batteryAxes.js";
+  import { zoomSpan } from "../lib/history.js";
+  import { MINUS } from "../../../shared/lib/format.js";
   import { cellRange, cellText, chargeText, packChargeRange, packFlowTotal, packReadings, reportedCells, temperatureRange, temperatureText } from "../lib/cells.js";
   import { batteryDirection } from "../lib/flow.js";
 
@@ -39,7 +42,8 @@
         pack.watts !== null ? f.power(pack.watts, { signed: true }) : null,
         pack.celsius !== null ? f.temperature(pack.celsius) : null,
       ].filter(Boolean).join(" · ");
-      return { pack: pack.pack, label: details && charge ? `${name} · ${charge}` : name, text: details || charge };
+      const note = [pack.volts !== null ? f.voltage(pack.volts) : null, pack.amps !== null ? ampText(pack.amps, f, { signed: true }) : null].filter(Boolean).join(" · ");
+      return { pack: pack.pack, label: details && charge ? `${name} · ${charge}` : name, text: details || charge, note };
     }),
   );
   const settings = $derived(
@@ -55,6 +59,38 @@
   const assist = $derived(d.fullChargeAssist && d.fullChargeAssist.enabled && d.fullChargeAssist.has_battery ? d.fullChargeAssist : null);
   const assisted = $derived(assist ? assistView(assist) : null);
   const charging = $derived((d.targetW ?? 0) < 0);
+  const diag = $derived(diagnosis(d));
+  const stateRow = $derived(diag.rows.find((row) => row.id === "state") || null);
+  const diagFacts = $derived(diag.rows.filter((row) => row.id !== "state"));
+  const DIAGNOSIS_LABELS = {
+    voltage: "device.batteryVoltage",
+    current: "device.batteryCurrent",
+    chargeAvail: "series.charge_avail",
+    dischargeAvail: "series.discharge_avail",
+    remaining: "device.remaining",
+    wifi: "device.wifi",
+  };
+  const statesId = $props.id();
+
+  /** Hours and minutes under two days, as a device's own estimate reads best; days beyond. */
+  function remainingText(minutes) {
+    const whole = Math.round(minutes);
+    if (whole >= 2 * 24 * 60) {
+      const span = zoomSpan(whole * 60);
+      return t(span.key, { n: f.number(span.n, Number.isInteger(span.n) ? 0 : 1) });
+    }
+    const hours = Math.floor(whole / 60);
+    const rest = whole % 60;
+    return [hours ? t("chart.span.h", { n: f.number(hours, 0) }) : "", rest || !hours ? t("chart.span.m", { n: f.number(rest, 0) }) : ""].filter(Boolean).join(" ");
+  }
+
+  function diagnosisText(row) {
+    if (row.id === "voltage") return f.voltage(row.value);
+    if (row.id === "current") return ampText(row.value, f, { signed: true });
+    if (row.id === "remaining") return remainingText(row.value);
+    if (row.id === "wifi") return `${MINUS}${f.number(Math.abs(row.value), 0)}\u00a0dBm`;
+    return f.power(row.value);
+  }
   const show = (value) => (d.online ? value : "—");
 </script>
 
@@ -115,9 +151,28 @@
       <summary><Icon name="chevron-right" />{t("device.packs")} · {packRows.length}</summary>
       <div class="facts body packs">
         {#each packRows as row (row.pack)}
-          <Fact label={row.label} icon="battery-medium" tone="c-bat" value={row.text} />
+          <Fact label={row.label} icon="battery-medium" tone="c-bat" value={row.text} note={row.note} />
         {/each}
       </div>
+    </details>
+  {/if}
+
+  {#if diag.rows.length}
+    <details class="more" data-testid="device-diagnosis">
+      <summary><Icon name="chevron-right" />{t("device.diagnosis")}{#if diag.on.length}<span class="warn">{` · ${diag.on.length === 1 ? t(`series.${diag.on[0]}`) : t("device.statesOn", { n: diag.on.length })}`}</span>{/if}</summary>
+      {#if stateRow}
+        <div class="states" role="group" aria-labelledby={statesId}>
+          <span class="states-label" id={statesId}>{t("device.batteryNotices")}</span>
+          {#each stateRow.on as id (id)}<span class="pill on">{t(`series.${id}`)}</span>{:else}<span class="pill">{t("device.noNotice")}</span>{/each}
+        </div>
+      {/if}
+      {#if diagFacts.length}
+        <div class="facts body diag">
+          {#each diagFacts as row (row.id)}
+            <Fact label={t(DIAGNOSIS_LABELS[row.id])} value={show(diagnosisText(row))} missing={!d.online} />
+          {/each}
+        </div>
+      {/if}
     </details>
   {/if}
 
@@ -198,6 +253,12 @@
   .soc-value { font-size: 30px; font-weight: 680; letter-spacing: -0.03em; }
   .soc-meta { font-size: 12px; color: var(--m-muted); text-align: right; }
   details.more { margin-top: 0; }
+  summary .warn { color: var(--m-warn); }
+  .facts.diag { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .states { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 6px 0 10px; }
+  .states-label { color: var(--m-muted); font-size: 12.5px; margin-right: 2px; }
+  .states .pill { height: 24px; padding: 0 10px; }
+  .states .pill.on { color: var(--m-warn); border-color: var(--m-warn); }
   .assist { display: flex; flex-direction: column; gap: var(--s3); }
   .assist-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; }
   .assist .note { margin-top: 0; }

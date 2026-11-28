@@ -90,6 +90,16 @@ export function packFlows(entries) {
     .sort((a, b) => a.pack - b.pack);
 }
 
+/** Each pack's voltage and current from the live data, in pack order; a pack that reports neither is left out. */
+export function packElectrics(entries) {
+  if (!Array.isArray(entries)) return [];
+  return entries
+    .filter((entry) => Number.isInteger(entry?.pack) && entry.pack > 0 && entry.pack <= MAX_PACK_NUMBER)
+    .map((entry) => ({ pack: entry.pack, volts: finite(entry.voltage_v), amps: finite(entry.current_a) }))
+    .filter((entry) => entry.volts !== null || entry.amps !== null)
+    .sort((a, b) => a.pack - b.pack);
+}
+
 /** Each pack's temperature from the live data, in pack order; a pack that reports none is left out. */
 export function packTemperatures(entries) {
   if (!Array.isArray(entries)) return [];
@@ -119,9 +129,17 @@ export function packReadings(device) {
   if (!device.hasBattery) return [];
   const flows = new Map(device.packFlows.map((flow) => [flow.pack, flow.watts]));
   const temperatures = new Map((device.packTemps || []).map((reading) => [reading.pack, reading.celsius]));
+  const electrics = new Map((device.packElectrics || []).map((reading) => [reading.pack, reading]));
   return device.cells
-    .map((pack) => ({ ...pack, soc: pack.soc ?? null, watts: flows.get(pack.pack) ?? null, celsius: temperatures.get(pack.pack) ?? null }))
-    .filter((pack) => pack.soc !== null || pack.low !== null || pack.high !== null || pack.watts !== null || pack.celsius !== null);
+    .map((pack) => ({
+      ...pack,
+      soc: pack.soc ?? null,
+      watts: flows.get(pack.pack) ?? null,
+      celsius: temperatures.get(pack.pack) ?? null,
+      volts: electrics.get(pack.pack)?.volts ?? null,
+      amps: electrics.get(pack.pack)?.amps ?? null,
+    }))
+    .filter((pack) => [pack.soc, pack.low, pack.high, pack.watts, pack.celsius, pack.volts, pack.amps].some((value) => value !== null && value !== undefined));
 }
 
 /** What the packs together report, null when none reports its power. */

@@ -39,7 +39,9 @@ export function currentReading(shown) {
   return { key: null, amps: 0 };
 }
 
-/** A current in amps to the tenth the packs report it in. */
-export function ampText(value, f) {
-  return Number.isFinite(value) ? `${value < 0 ? MINUS : ""}${f.number(Math.abs(value), 1)}\u00a0A` : MISSING;
+/** A current in amps to the tenth the packs report it in; ``signed`` marks a positive one with a plus, as the card signs power. */
+export function ampText(value, f, { signed = false } = {}) {
+  if (!Number.isFinite(value)) return MISSING;
+  const sign = value < 0 && Math.abs(value) >= 0.05 ? MINUS : signed && value >= 0.05 ? "+" : "";
+  return `${sign}${f.number(Math.abs(value), 1)}\u00a0A`;
 }

@@ -106,6 +106,9 @@ test("a current reads to a tenth of an amp with a true minus", () => {
   assert.equal(ampText(-2.5, fakeFormat), `${MINUS}2.5\u00a0A`);
   assert.equal(ampText(6.25, fakeFormat), "6.3\u00a0A");
   assert.equal(ampText(null, fakeFormat), MISSING);
+  assert.equal(ampText(0.6, fakeFormat, { signed: true }), "+0.6\u00a0A");
+  assert.equal(ampText(-0.04, fakeFormat), "0.0\u00a0A");
+  assert.equal(ampText(0.04, fakeFormat, { signed: true }), "0.0\u00a0A");
 });
 
 test("the cell voltage's card reads the pack's own cell spread, which the request carries beside the chart", () => {

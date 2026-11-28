@@ -117,7 +117,20 @@ temperature** and **Pack temperature**, the coolest to the warmest pack, are
 main facts too when the device reports them, over the local API and MQTT alike;
 one it does not report is left out, never shown as 0 °C. The folded **Packs**
 section lists every pack that reports its charge, its cells, such a power or
-its temperature, its charge beside its number (*Pack 1 · 30 %*).
+its temperature, its charge beside its number (*Pack 1 · 30 %*), its own
+voltage and current in a muted line below. The folded **Diagnosis** section,
+shown when the device reports any of it, names the battery's states
+(`heat_state`, `low_temp`, `derate`, `error_flag`) as **Battery notices**
+pills, *None* while all it reports are off, the states that are on in its
+title (one by name, several by number), none at all while the device is
+offline; then **Battery voltage** (`voltage_v`), **Battery current** (the
+packs' `current_a` together, only when every pack reports one), **Charge
+accepted** and **Discharge accepted** (`charge_avail_w`, `discharge_avail_w`),
+**Time left** (`remain_minutes`, only while the battery discharges, in hours
+and minutes) and **Wi-Fi signal** (`rssi`, only a negative dBm reading). The
+live snapshot carries those states and limits as `devices.<name>.heat_state`,
+`low_temp`, `derate`, `error_flag`, `charge_avail_w` and `discharge_avail_w`,
+`null` where the device does not report them.
 The live snapshot carries the inverter's as `devices.<name>.temperature_c` and
 the packs per device as `devices.<name>.battery_packs`, a
 list of `{"pack": 1, "cell_min_v": 3.17, "cell_max_v": 3.18, "power_w": 4,

@@ -26,6 +26,9 @@ def _rounded(value, digits=1):
         return 0
 
 
+BATTERY_CONDITION_FIELDS = ("heat_state", "low_temp", "derate", "error_flag", "charge_avail_w", "discharge_avail_w")
+
+
 def _rounded_or_none(value, digits=1):
     """A reading that may be missing; a missing one stays missing, not 0."""
 
@@ -275,6 +278,7 @@ def _state_telemetry_fields(state, unused_inputs=frozenset()):
         "soc_status": int(getattr(state, "soc_status", 0) or 0),
         "pack_num": parse_pack_count(getattr(state, "pack_num", None)),
         "input_limit_w": _rounded(getattr(state, "input_limit_w", 0)),
+        **{name: _rounded_or_none(getattr(state, name, None), 0) for name in BATTERY_CONDITION_FIELDS},
     }
 
 

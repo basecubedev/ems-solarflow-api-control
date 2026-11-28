@@ -218,8 +218,8 @@ test.describe("EMS Dashboard documentation captures @docs", () => {
     await open(page, baseURL, "#/devices");
     const card = page.locator('[data-testid="device-card"][data-device="WR1"]');
     await expect(card).toHaveAttribute("data-state", "online");
-    for (const name of ["Firmware status", "Device settings"]) await card.locator("details.more > summary", { hasText: name }).click();
-    await expect(card.locator("details.more[open]")).toHaveCount(2);
+    for (const name of ["Firmware status", "Device settings", "Diagnosis"]) await card.locator("details.more > summary", { hasText: name }).click();
+    await expect(card.locator("details.more[open]")).toHaveCount(3);
     await shoot(page, "dashboard-devices-details");
   });
 

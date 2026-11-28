@@ -14,6 +14,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from dashboard.telemetry import BATTERY_CONDITION_FIELDS, _state_telemetry_fields
 from ems.clients import parse_device
 from ems.config import normalize_influxdb_config
 from ems.controller import history_decisions
@@ -283,3 +284,20 @@ def test_the_sqlite_summary_reads_no_field_a_series_does_not_have():
 
     assert "$.None" not in provider._SUMMARY_SELECT
     assert None not in provider._SUMMARY_FIELDS
+
+
+def test_the_live_data_carries_the_battery_s_states_and_what_it_accepts_none_when_not_reported():
+    """The device card reads them now as the history keeps them; a state the
+    report does not carry stays missing rather than reading as off."""
+
+    reported = _state_telemetry_fields(parse_device({"properties": {
+        "electricLevel": 40, "heatState": 1, "lowTemperature": 0, "derateFlag": 1, "is_error": 0,
+        "chargeAvailPower": 0, "dischargeAvailPower": 1200,
+    }}))
+    silent = _state_telemetry_fields(parse_device({"properties": {"electricLevel": 40}}))
+
+    assert {name: reported[name] for name in BATTERY_CONDITION_FIELDS} == {
+        "heat_state": 1, "low_temp": 0, "derate": 1, "error_flag": 0, "charge_avail_w": 0, "discharge_avail_w": 1200,
+    }
+    assert {name: silent[name] for name in BATTERY_CONDITION_FIELDS} == dict.fromkeys(BATTERY_CONDITION_FIELDS)
+    assert set(BATTERY_CONDITION_FIELDS) <= set(_DEVICE_FIELDS)

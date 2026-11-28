@@ -8,7 +8,7 @@
  */
 
 import { finite } from "../../../shared/lib/format.js";
-import { packCells, packFlows, packTemperatures } from "./cells.js";
+import { packCells, packElectrics, packFlows, packTemperatures } from "./cells.js";
 
 function deviceName(device, index) {
   return String(device?.device || device?.name || `Device ${index + 1}`);
@@ -18,6 +18,35 @@ export function deviceEntries(snapshot) {
   const devices = snapshot?.devices;
   if (Array.isArray(devices)) return devices.map((device, index) => [deviceName(device, index), device || {}]);
   return Object.entries(devices || {}).map(([name, device], index) => [name || deviceName(device, index), device || {}]);
+}
+
+/** The battery states a device may report of itself, in the order the card names them. */
+export const BATTERY_STATES = Object.freeze(["heat_state", "low_temp", "derate", "error_flag"]);
+
+/**
+ * What a device card's Diagnosis fold shows, each only where the device
+ * reports it: the battery's states (those on, or none while all it reports
+ * are off; only while the device is online, as a state held from before is
+ * no state now), its voltage and its current (the packs' together, positive
+ * while charging, and only when every pack names its direction), what it
+ * accepts now, how long it lasts while it discharges, and the Wi-Fi signal.
+ * ``on`` names the states that are on, for the fold's summary.
+ */
+export function diagnosis(device) {
+  const reported = device.online ? BATTERY_STATES.filter((id) => device.states?.[id] !== null && device.states?.[id] !== undefined) : [];
+  const on = reported.filter((id) => device.states[id] > 0);
+  const amps = (device.packElectrics || []).map((pack) => pack.amps);
+  const allAmps = amps.length > 0 && amps.length === (device.cells || []).length && amps.every((value) => value !== null);
+  const rows = [
+    reported.length ? { id: "state", on } : null,
+    device.batteryVolts !== null && device.batteryVolts !== undefined ? { id: "voltage", value: device.batteryVolts } : null,
+    allAmps ? { id: "current", value: Math.round(amps.reduce((sum, value) => sum + value, 0) * 10) / 10 } : null,
+    device.chargeAvailW !== null && device.chargeAvailW !== undefined ? { id: "chargeAvail", value: device.chargeAvailW } : null,
+    device.dischargeAvailW !== null && device.dischargeAvailW !== undefined ? { id: "dischargeAvail", value: device.dischargeAvailW } : null,
+    device.remainMinutes > 0 && device.batteryW < 0 ? { id: "remaining", value: device.remainMinutes } : null,
+    device.rssi < 0 ? { id: "wifi", value: device.rssi } : null,
+  ].filter(Boolean);
+  return { on, rows: device.hasBattery ? rows : rows.filter((row) => row.id === "wifi") };
 }
 
 export function normalizeDevice(name, raw) {
@@ -54,7 +83,14 @@ export function normalizeDevice(name, raw) {
     cells: packCells(device.battery_packs),
     packFlows: hardware.battery !== false ? packFlows(device.battery_packs) : [],
     packTemps: hardware.battery !== false ? packTemperatures(device.battery_packs) : [],
+    packElectrics: hardware.battery !== false ? packElectrics(device.battery_packs) : [],
     temperatureC: finite(device.temperature_c),
+    batteryVolts: finite(device.voltage_v),
+    remainMinutes: finite(device.remain_minutes),
+    rssi: finite(device.rssi),
+    chargeAvailW: finite(device.charge_avail_w),
+    dischargeAvailW: finite(device.discharge_avail_w),
+    states: Object.fromEntries(BATTERY_STATES.map((id) => [id, finite(device[id])])),
     inputLimitW: inputLimit !== null && inputLimit > 0 ? inputLimit : null,
     capability: device.capability || null,
     settings: device.settings || null,

@@ -537,6 +537,36 @@ const cellsRead = (path, check = () => true) => seriesRead(path, (params) => /ce
 const batteryRead = (check = () => true) => seriesRead("/api/analytics/series", (params) => /pack_(temp|soc|power|voltage|current):|charge_avail/.test(params.get("series") || "") && check(params));
 
 test.describe("Modern dashboard views: cell voltage @smoke", () => {
+  test("a device card's Diagnosis names the states on in its title and only what the device reports", async ({ page }) => {
+    await shapeLive(page, (body) => {
+      Object.assign(body.devices.WR2, {
+        heat_state: 1, low_temp: 0, derate: null, error_flag: null, voltage_v: 47.88, battery_power_w: -120,
+        remain_minutes: 95, rssi: -61, charge_avail_w: 0, discharge_avail_w: 1200,
+      });
+      body.devices.WR2.battery_packs = [
+        { pack: 1, cell_min_v: 3.2, cell_max_v: 3.22, voltage_v: 47.6, current_a: -1.2 },
+        { pack: 2, cell_min_v: 3.3, cell_max_v: 3.33, voltage_v: 47.95, current_a: -1.3 },
+      ];
+      Object.assign(body.devices.WR1, {
+        heat_state: null, low_temp: null, derate: null, error_flag: null, voltage_v: null,
+        remain_minutes: 0, rssi: 0, charge_avail_w: null, discharge_avail_w: null,
+      });
+    });
+    await openModern(page, "#/devices");
+    await expect(deviceCard(page, "WR1").getByTestId("device-diagnosis")).toHaveCount(0);
+    const two = deviceCard(page, "WR2");
+    const fold = two.getByTestId("device-diagnosis");
+    await expect(fold.locator("summary")).toHaveText("Diagnosis · Heating");
+    await expect(fold.locator(".fact").first()).toBeHidden();
+    await fold.locator("summary").click();
+    await expect(fold.getByRole("group", { name: "Battery notices" }).locator(".pill")).toHaveText(["Heating"]);
+    await expect(fold.locator(".fact-label")).toHaveText(["Battery voltage", "Battery current", "Charge accepted", "Discharge accepted", "Time left", "Wi-Fi signal"]);
+    await expect(fold.locator(".fact-value")).toHaveText(["47.88 V", "−2.5 A", "0 W", "1.20 kW", "1 h 35 min", "−61 dBm"]);
+    const packs = two.getByTestId("device-cells");
+    await packs.locator("summary").click();
+    await expect(packs.locator(".fact-note")).toHaveText(["47.60 V · −1.2 A", "47.95 V · −1.3 A"]);
+  });
+
   test("a device card names its cells' voltage, and each pack's when it has several", async ({ page }) => {
     await shapeLive(page, withCells);
     await openModern(page, "#/devices");
@@ -1240,20 +1270,26 @@ test.describe("Modern dashboard views: labels fit @smoke", () => {
     }
   });
 
-  test("a device card with several packs keeps every pack figure whole", async ({ page }) => {
+  test("a device card with several packs keeps every pack figure and its diagnosis whole", async ({ page }) => {
     test.slow();
     await shapeLive(page, (body) => {
       body.devices.WR1.battery_packs = [{ pack: 1, soc: 61, cell_min_v: 3.17, cell_max_v: 3.18, power_w: 30, state: 1, temp_c: 13 }];
       body.devices.WR2.battery_packs = [
-        { pack: 1, soc: 30, cell_min_v: 3.2, cell_max_v: 3.22, power_w: 30, state: 1, temp_c: -1.5 },
-        { pack: 2, soc: 70, cell_min_v: 3.3, cell_max_v: 3.33, power_w: 10, state: 2, temp_c: 25 },
+        { pack: 1, soc: 30, cell_min_v: 3.2, cell_max_v: 3.22, power_w: 30, state: 1, temp_c: -1.5, voltage_v: 47.6, current_a: 0.6 },
+        { pack: 2, soc: 70, cell_min_v: 3.3, cell_max_v: 3.33, power_w: 10, state: 2, temp_c: 25, voltage_v: 47.95, current_a: -12.5 },
       ];
+      Object.assign(body.devices.WR2, {
+        heat_state: 1, low_temp: 1, derate: 1, error_flag: 1, voltage_v: 47.88, battery_power_w: -1250,
+        remain_minutes: 2950, rssi: -61, charge_avail_w: 1200, discharge_avail_w: 1200,
+      });
     });
     for (const lang of LANGUAGES) {
       await inLanguage(page, "#/devices", lang);
       await expect(page.getByTestId("device-cells")).toHaveCount(1);
+      await expect(page.getByTestId("device-diagnosis")).not.toHaveCount(0);
+      await expect(page.locator('[data-device="WR2"] [data-testid="device-diagnosis"] summary .warn')).toHaveText(/ · 4 /);
       await page.locator('[data-testid="device-card"] details').evaluateAll((blocks) => blocks.forEach((block) => { block.open = true; }));
-      const lines = page.locator('[data-testid="device-card"] :is(.fact-label .ellipsis, .fact-value)');
+      const lines = page.locator('[data-testid="device-card"] :is(.fact-label .ellipsis, .fact-value, .fact-note, summary, .states .pill)');
       for (const width of WIDTHS) {
         await page.setViewportSize({ width, height: 900 });
         expect(await broken(lines), `${lang} at ${width} px`).toEqual([]);

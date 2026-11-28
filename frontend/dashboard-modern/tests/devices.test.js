@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import test from "node:test";
 import assert from "node:assert/strict";
-import { normalizeDevice, deviceEntries, firmwareFacts, acPath, fleetSummary, normalizedDevices, assistView, flowDevices, hardwareOf } from "../src/lib/devices.js";
+import { BATTERY_STATES, diagnosis, normalizeDevice, deviceEntries, firmwareFacts, acPath, fleetSummary, normalizedDevices, assistView, flowDevices, hardwareOf } from "../src/lib/devices.js";
 
 test("a field the device did not report stays null instead of becoming 0", () => {
   const device = normalizeDevice("WR1", { online: true });
@@ -98,4 +98,34 @@ test("the full-charge assist names the facts Classic's card names for each statu
   assert.deepEqual(restore.facts.map((fact) => fact.label), ["assist.last", "assist.next", "assist.maxSocRestore", "assist.acOutputMode"]);
   assert.deepEqual(restore.description, ["assist.desc.restoreMaxSoc", "assist.desc.restoreAcMode", "assist.desc.restoreWaits"]);
   assert.equal(assistView({ status: "something" }).status, "unknown");
+});
+
+test("the card's Diagnosis names only what the device reports, the battery's states first", () => {
+  const full = normalizeDevice("Shed", {
+    online: true, heat_state: 1, low_temp: 0, derate: 1, error_flag: null,
+    voltage_v: 47.88, battery_power_w: -120, remain_minutes: 95, rssi: -61,
+    charge_avail_w: 0, discharge_avail_w: 1200,
+    battery_packs: [{ pack: 1, current_a: -1.2 }, { pack: 2, current_a: -1.3 }],
+  });
+  const read = diagnosis(full);
+  assert.deepEqual(read.on, ["heat_state", "derate"]);
+  assert.deepEqual(read.rows.map((row) => row.id), ["state", "voltage", "current", "chargeAvail", "dischargeAvail", "remaining", "wifi"]);
+  assert.equal(read.rows.find((row) => row.id === "current").value, -2.5);
+
+  const quiet = diagnosis(normalizeDevice("Quiet", { online: true, heat_state: 0, low_temp: 0, battery_power_w: 30, remain_minutes: 95, rssi: 0 }));
+  assert.deepEqual(quiet.rows, [{ id: "state", on: [] }]);
+  assert.deepEqual(quiet.on, []);
+
+  const offline = diagnosis(normalizeDevice("Gone", { online: false, heat_state: 1, voltage_v: 47.9 }));
+  assert.deepEqual(offline.on, []);
+  assert.deepEqual(offline.rows.map((row) => row.id), ["voltage"]);
+
+  const partial = diagnosis(normalizeDevice("Half", { online: true, battery_packs: [{ pack: 1, current_a: -1.2 }, { pack: 2, voltage_v: 47.9 }] }));
+  assert.deepEqual(partial.rows, []);
+  const cellsOnly = diagnosis(normalizeDevice("Third", { online: true, battery_packs: [{ pack: 1, current_a: 1 }, { pack: 2, cell_min_v: 3.3 }] }));
+  assert.deepEqual(cellsOnly.rows, []);
+
+  assert.deepEqual(diagnosis(normalizeDevice("Bare", {})).rows, []);
+  assert.deepEqual(diagnosis(normalizeDevice("Inverter", { hardware: { battery: false }, voltage_v: 0, heat_state: 0, rssi: -70 })).rows, [{ id: "wifi", value: -70 }]);
+  assert.deepEqual(BATTERY_STATES, ["heat_state", "low_temp", "derate", "error_flag"]);
 });

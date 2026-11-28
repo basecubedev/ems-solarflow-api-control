@@ -66,6 +66,12 @@ def _device(name, **over):
         "temperature_c": 24.5,
         "voltage_v": 52.4,
         "rssi": -58,
+        "heat_state": 0,
+        "low_temp": 0,
+        "derate": 0,
+        "error_flag": 0,
+        "charge_avail_w": 1200,
+        "discharge_avail_w": 1200,
         "remain_minutes": 180,
         # Firmware status enums (see ZenSDK properties + dashboard helpers).
         "soc_limit": 0,
