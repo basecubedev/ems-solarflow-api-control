@@ -13,7 +13,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
-from ems.models import parse_pack_count
+from ems.models import PACK_CELLS_APART, parse_pack_count
 from ems.zendure_mqtt.external_catalog import EXTERNAL_TOPIC_FAMILIES
 from ems.zendure_mqtt.payloads import coerce_scalar, parse_report_payload
 from ems.zendure_mqtt.topics import (
@@ -85,6 +85,9 @@ def merge_packs(known, reported, count=None):
     ``battery_pack_cells`` numbers none of the packs rather than guess which
     one left. The first list, and one whose entries do not all carry a serial
     and so cannot be matched, replace the known packs as every report used to.
+    A pack whose lowest and highest cell now come from different reports
+    carries ``PACK_CELLS_APART`` until one report gives both again, so no gap
+    between them is taken for one reading's.
     """
 
     def serial(pack):
@@ -95,7 +98,12 @@ def merge_packs(known, reported, count=None):
         return [dict(pack) for pack in reported]
     merged = {serial(pack): dict(pack) for pack in known if serial(pack)}
     for pack in reported:
-        merged.setdefault(serial(pack), {}).update(pack)
+        entry = merged.setdefault(serial(pack), {})
+        entry.update(pack)
+        if ("minVol" in pack) != ("maxVol" in pack):
+            entry[PACK_CELLS_APART] = True
+        elif "minVol" in pack:
+            entry.pop(PACK_CELLS_APART, None)
     if count is not None and len(reported) == count:
         named = {serial(pack) for pack in reported}
         merged = {key: entry for key, entry in merged.items() if key in named}

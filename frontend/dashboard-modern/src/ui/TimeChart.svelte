@@ -1,12 +1,13 @@
 <!-- SPDX-FileCopyrightText: 2026 basecubedev -->
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script>
+  import { untrack } from "svelte";
   import { t, fmt } from "../i18n/i18n.svelte.js";
   import { prefs } from "../state/prefs.svelte.js";
   import Icon from "../../../shared/ui/Icon.svelte";
-  import { withGapBreaks, stackLists, gapRanges, sampleSpacing, shownValue, batteryReading, axisPower, tickLabels, tickPad, tickSpace, atLeastAMinute, ZOOM_STEP, PAN_STEP, escapeLeavesZoom, zoomCenter, zoomDiffers, zoomStep, panStep, pinchWindow, wheelGesture, wheelZoomFactor } from "../lib/history.js";
+  import { withGapBreaks, stackLists, gapRanges, sampleSpacing, shownValue, plottedValue, plottedLists, batteryReading, axisPower, tickLabels, tickPad, tickSpace, atLeastAMinute, ZOOM_STEP, PAN_STEP, escapeLeavesZoom, zoomCenter, zoomDiffers, zoomStep, panStep, pinchWindow, wheelGesture, wheelZoomFactor } from "../lib/history.js";
   import { voltRange } from "../lib/cells.js";
-  import { celsiusRange, celsiusTick } from "../lib/battery.js";
+  import { ampRange, ampText, celsiusRange, celsiusTick, currentReading } from "../lib/batteryAxes.js";
 
   /**
    * One uPlot instance per chart, kept across data refreshes (setData) and
@@ -30,11 +31,22 @@
    * one whole; the legend and the table keep each series' own value.
    * ``unit`` "V" reads the left axis in volts, close around the data, for
    * cell voltages; "°C" in degrees, always showing 0 °C, for temperatures;
+   * "A" in whole amps, always showing 0 A, for currents;
    * "%" from 0 to 100 %, for charge levels, with a series in percent on that
    * same axis rather than a second one; every other chart reads it in watts
-   * from zero. ``busy``
+   * from zero. A fixed ``xRange`` marks the stretch at its start or end
+   * without data as it marks a gap. ``busy``
    * lays a Loading pill over the plot, or over its empty frame, while a page
    * reads new data for it, taking no room, so nothing around the chart moves.
+   * A series marked ``below`` is drawn at its size below zero, as a floor
+   * under the battery's charge, and read as its size. Charts under one
+   * ``sync`` key show the same moment under the cursor, but only the chart
+   * dragged across draws the selection and zooms; a chart given
+   * ``follow`` takes the window ``{start, end}`` the page last heard from
+   * ``onzoom``, or null for the way back, so charts drawn one over the other
+   * zoom together; one without it keeps its own. ``alignPercent`` keeps the
+   * room a percent scale takes on the right free, so a chart drawn under one
+   * with that scale ends its time axis where that one does.
    */
   let {
     series,
@@ -51,6 +63,9 @@
     busy = false,
     stacked = false,
     unit = "W",
+    sync = "",
+    follow = undefined,
+    alignPercent = false,
   } = $props();
 
   let host = $state();
@@ -71,9 +86,9 @@
 
   const f = $derived(fmt());
   const prepared = $derived.by(() => {
-    const lists = series.map((s) => (values?.[s.id] || []).map((raw) => shownValue(s.id, raw)));
+    const lists = plottedLists(series, values);
     const broken = withGapBreaks(time, lists);
-    return { time: broken.time, lists: broken.series, gaps: gapRanges(time, lists) };
+    return { time: broken.time, lists: broken.series, gaps: gapRanges(time, lists, { span: xRange }) };
   });
   const plotted = $derived(stacked ? stackLists(prepared.lists) : prepared.lists);
   /** Whether the zoomed window touches the start or the end of the range, re-read as new data widens it. */
@@ -122,10 +137,16 @@
 
   function valueText(value, s) {
     if (value === null || value === undefined) return "—";
+    if (s?.below) return f.power(Math.abs(Number(value)));
     if (s?.unit === "%" || unit === "%") return f.percent(value);
     if (unit === "V") return f.voltage(value);
+    if (unit === "A" && /^pack_current:/.test(s?.id || "") && Number.isFinite(Number(value))) {
+      const reading = currentReading(value);
+      return reading.key ? t(reading.key, { v: ampText(reading.amps, f) }) : ampText(0, f);
+    }
+    if (unit === "A") return ampText(value, f);
     if (unit === "°C" && s?.unit !== "%") return f.temperature(value);
-    if (s?.id === "battery" && Number.isFinite(Number(value))) {
+    if ((s?.id === "battery" || /^pack_power:/.test(s?.id || "")) && Number.isFinite(Number(value))) {
       const reading = batteryReading(value);
       return reading.key ? t(reading.key, { v: f.power(reading.watts) }) : f.power(0);
     }
@@ -140,13 +161,13 @@
     const ranges = prepared.gaps;
     if (!ranges.length) return;
     const { ctx } = u;
-    const { top, height: h } = u.bbox;
+    const { top, height: h, left, width } = u.bbox;
     const ratio = globalThis.devicePixelRatio || 1;
     const muted = token("--m-muted");
     ctx.save();
     for (const range of ranges) {
-      const x1 = u.valToPos(range.from, "x", true);
-      const x2 = u.valToPos(range.to, "x", true);
+      const x1 = Math.max(left, u.valToPos(range.from, "x", true));
+      const x2 = Math.min(left + width, u.valToPos(range.to, "x", true));
       if (!Number.isFinite(x1) || !Number.isFinite(x2) || x2 - x1 < 2) continue;
       ctx.save();
       ctx.beginPath();
@@ -191,14 +212,30 @@
     applyZoom(next);
   }
 
-  function resetZoom() {
+  function resetZoom(heard = true) {
     dropPending();
     zoomWindow = null;
     viewWindow = null;
     zoomed = false;
     const stamps = prepared.time;
-    if (chart && stamps.length) chart.setScale("x", { min: stamps[0], max: stamps[stamps.length - 1] });
-    onzoom?.(null);
+    const span = xRange ? [xRange[0], xRange[1]] : stamps.length ? [stamps[0], stamps[stamps.length - 1]] : null;
+    if (chart && span) chart.setScale("x", { min: span[0], max: span[1] });
+    if (heard) onzoom?.(null);
+  }
+
+  /** Takes the window a chart beside this one zoomed to, or its way back, without telling ``onzoom`` again. */
+  function followZoom(window) {
+    if (!window) {
+      if (zoomed) resetZoom(false);
+      return;
+    }
+    const next = { min: window.start, max: window.end };
+    if (zoomWindow && Math.abs(zoomWindow.min - next.min) <= 1 && Math.abs(zoomWindow.max - next.max) <= 1) return;
+    dropPending();
+    zoomWindow = next;
+    viewWindow = next;
+    zoomed = true;
+    chart?.setScale("x", next);
   }
 
   /** How far out the chart may zoom: its fixed range, else the bounds it was given, else its loaded data. */
@@ -382,15 +419,15 @@
       {
         width: host.clientWidth || 600,
         height,
-        padding: [8, (u) => Math.max(0, tickPad(u.scales.x.min, u.scales.x.max) - (percent ? PERCENT_AXIS_PX : 0)), 0, 0],
+        padding: [8, (u) => (percent ? Math.max(0, tickPad(u.scales.x.min, u.scales.x.max) - PERCENT_AXIS_PX) : Math.max(tickPad(u.scales.x.min, u.scales.x.max), alignPercent ? PERCENT_AXIS_PX : 0)), 0, 0],
         legend: { show: false },
-        cursor: { y: false, drag: { x: true, y: false, setScale: false }, points: { size: 7, width: 2 } },
+        cursor: { y: false, drag: { x: true, y: false, setScale: false }, points: { size: 7, width: 2 }, ...(sync ? { sync: { key: sync, filters: { pub: (type) => type === "mousemove" } } } : {}) },
         scales: {
           x: {
             time: true,
             range: (u, min, max) => (zoomWindow ? atLeastAMinute(zoomWindow.min, zoomWindow.max) : xRange ? [xRange[0], xRange[1]] : atLeastAMinute(min, max)),
           },
-          y: { range: (u, min, max) => (unit === "%" ? [0, 100] : unit === "V" ? voltRange(min, max) : unit === "°C" ? celsiusRange(min, max) : [Math.min(0, Math.floor((min || 0) / 500) * 500), Math.max(500, Math.ceil((max || 0) / 500) * 500)]) },
+          y: { range: (u, min, max) => (unit === "%" ? [0, 100] : unit === "V" ? voltRange(min, max) : unit === "A" ? ampRange(min, max) : unit === "°C" ? celsiusRange(min, max) : [Math.min(0, Math.floor((min || 0) / 500) * 500), Math.max(500, Math.ceil((max || 0) / 500) * 500)]) },
           ...(percent ? { pct: { range: [0, 100] } } : {}),
         },
         axes: [
@@ -400,7 +437,7 @@
             space: (u, axis, min, max) => tickSpace(min, max),
             values: (u, splits, axis, space, step) => tickLabels(splits, step, f),
           },
-          { ...axis, size: 66, values: (u, splits) => splits.map((value) => (unit === "%" ? f.percent(value) : unit === "V" ? f.voltage(value) : unit === "°C" ? celsiusTick(value, f) : axisPower(value, f))) },
+          { ...axis, size: 66, values: (u, splits) => splits.map((value) => (unit === "%" ? f.percent(value) : unit === "V" ? f.voltage(value) : unit === "A" ? ampText(value, f) : unit === "°C" ? celsiusTick(value, f) : axisPower(value, f))) },
           ...(percent
             ? [{ ...axis, scale: "pct", side: 1, size: PERCENT_AXIS_PX, stroke: token(percent.ink || "--m-muted"), grid: { show: false }, values: (u, splits) => splits.map((value) => f.percent(value)) }]
             : []),
@@ -439,7 +476,7 @@
   }
 
   $effect(() => {
-    const next = [series.map((s) => `${s.id}=${s.token}`).join(","), stacked, unit, prefs.theme, prefs.lang, height, xRange ? xRange.join("-") : ""].join("|");
+    const next = [series.map((s) => `${s.id}=${s.token}`).join(","), stacked, unit, prefs.theme, prefs.lang, height, alignPercent].join("|");
     const reach = `${scope}|${xRange ? xRange.join("-") : ""}`;
     if (zoomScope !== null && reach !== zoomScope) {
       zoomWindow = null;
@@ -454,6 +491,11 @@
     } else {
       chart.setData([prepared.time, ...plotted]);
     }
+  });
+
+  $effect(() => {
+    const window = follow;
+    if (window !== undefined) untrack(() => followZoom(window));
   });
 
   $effect(() => {
@@ -479,7 +521,7 @@
 
   const lastIndex = $derived.by(() => {
     for (let i = prepared.time.length - 1; i >= 0; i -= 1) {
-      if (prepared.time[i] < shown.from || prepared.time[i] > shown.to) continue;
+      if (prepared.time[i] < shown.from || prepared.time[i] > (xRange ? xRange[1] : shown.to)) continue;
       if (prepared.lists.some((list) => list[i] !== null && list[i] !== undefined)) return i;
     }
     return null;
@@ -506,7 +548,7 @@
     {/each}
     <span class="zoom">
       {#if zoomed}
-        <button class="btn secondary small" type="button" onclick={resetZoom} data-testid="chart-zoom-reset">{t("chart.zoomReset")}</button>
+        <button class="btn secondary small" type="button" onclick={() => resetZoom()} data-testid="chart-zoom-reset">{t("chart.zoomReset")}</button>
         <button class="icon-btn small" type="button" onclick={() => panByStep(-1)} disabled={atEdge.start} aria-label={t("chart.panEarlier")} title={t("chart.panEarlier")} data-testid="chart-pan-earlier"><Icon name="chevron-left" size="sm" /></button>
         <button class="icon-btn small" type="button" onclick={() => panByStep(1)} disabled={atEdge.end} aria-label={t("chart.panLater")} title={t("chart.panLater")} data-testid="chart-pan-later"><Icon name="chevron-right" size="sm" /></button>
       {:else}
@@ -532,7 +574,7 @@
             {#if i % Math.max(1, Math.ceil(time.length / 96)) === 0}
               <tr>
                 <td class="num">{f.dateTime(stamp * 1000, { seconds: subMinute })}</td>
-                {#each series as s (s.id)}<td class="r num">{valueText(shownValue(s.id, values?.[s.id]?.[i] ?? null), s)}</td>{/each}
+                {#each series as s (s.id)}<td class="r num">{valueText(plottedValue(s, values?.[s.id]?.[i] ?? null), s)}</td>{/each}
               </tr>
             {/if}
           {/each}

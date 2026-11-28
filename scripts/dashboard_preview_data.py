@@ -66,6 +66,12 @@ def _device(name, **over):
         "temperature_c": 24.5,
         "voltage_v": 52.4,
         "rssi": -58,
+        "heat_state": 0,
+        "low_temp": 0,
+        "derate": 0,
+        "error_flag": 0,
+        "charge_avail_w": 1200,
+        "discharge_avail_w": 1200,
         "remain_minutes": 180,
         # Firmware status enums (see ZenSDK properties + dashboard helpers).
         "soc_limit": 0,
@@ -616,8 +622,15 @@ def _history(snapshot, points=96, now=None):
 
 
 _PREVIEW_BATTERY_STATES = ("heat_state", "low_temp", "ac_input", "winter_hold", "derate", "error_flag")
-_PREVIEW_BATTERY_VALUES = ("device_temp", "min_soc", "winter_target", "charge_avail", "discharge_avail", "input_limit")
-_PREVIEW_PACK_SERIES = ("pack_temp", "pack_soc", "cell_min", "cell_max")
+_PREVIEW_BATTERY_VALUES = (
+    "device_temp", "device_voltage", "min_soc", "winter_target", "charge_avail", "discharge_avail", "input_limit",
+)
+PREVIEW_WINTER_DEVICE_SERIES = ("pv", "ac_charge", "battery", "output", "soc")
+_PREVIEW_SUNRISE, _PREVIEW_SUNSET, _PREVIEW_HOLD_END = 7.5, 16.5, 9.5
+_PREVIEW_WARM_HOUR = 11.0 - 24.0 * math.asin(2.5 / 4.0) / (2.0 * math.pi)
+_PREVIEW_PACK_SERIES = (
+    "pack_temp", "pack_soc", "pack_voltage", "pack_current", "pack_power", "cell_min", "cell_max", "cell_spread",
+)
 
 
 def preview_battery_series(series):
@@ -632,18 +645,22 @@ def preview_battery_series(series):
 def preview_battery_value(series, hour):
     """A cold winter day for the Analytics batteries view, by the hour of the day in UTC.
 
-    The packs fall below 0 °C before midnight and warm up after dawn; while
+    The packs fall below 0 °C after midnight and warm up after dawn; while
     they are too cold the battery accepts no charge and the device derates,
-    and it heats from 05:00 until they are warm again, when the morning's
-    charge request comes. Winter mode holds the midday solar power for the
-    battery. Each further pack runs 0.7 °C warmer, its cells 10 mV lower and
-    its charge 8 points lower.
+    and it heats them with the sun's power from sunrise, when the morning's
+    charge request comes, until they are warm again. Winter mode holds the device's output for the
+    battery from sunrise until its charge is back at the minimum
+    (``_preview_winter_device_value``). The packs discharge through the night and charge from the
+    morning, about 320 W at most. Each further pack runs 0.7 °C warmer, its
+    cells 10 mV lower, its charge 8 points lower and its power a tenth less.
     Deterministic, like the rest of the preview's history.
     """
 
     kind, _, pack = series.partition(":")
+    if kind in PREVIEW_WINTER_DEVICE_SERIES:
+        return _preview_winter_device_value(kind, hour)
     offset = int(pack) - 1 if pack else 0
-    temp = round(2.5 + 4.0 * math.sin(2 * math.pi * (hour - 9.0) / 24.0), 1)
+    temp = _preview_cold_temp(hour)
     cold = temp < 0.0
     if kind == "pack_temp":
         return round(temp + 0.7 * offset, 1)
@@ -652,14 +669,24 @@ def preview_battery_value(series, hour):
     if kind in ("cell_min", "cell_max"):
         low = 3.22 + 0.06 * math.sin(2 * math.pi * (hour - 13.0) / 24.0) - 0.01 * offset
         return round(low + (0.02 if kind == "cell_max" else 0.0), 3)
+    if kind == "cell_spread":
+        return 0.02
+    flow = round(320.0 * math.sin(2 * math.pi * (hour - 7.0) / 24.0) * (1.0 - 0.1 * offset))
+    if kind == "pack_power":
+        return flow
+    if kind == "pack_voltage":
+        return round(15 * (3.22 + 0.06 * math.sin(2 * math.pi * (hour - 13.0) / 24.0)) - 0.15 * offset, 2)
+    if kind == "pack_current":
+        return round(flow / 48.0, 1)
     values = {
-        "heat_state": int(cold and 5.0 <= hour < 12.0),
+        "heat_state": int(cold and _PREVIEW_SUNRISE < hour < 12.0),
         "low_temp": int(cold),
         "ac_input": 0,
-        "winter_hold": int(9.0 <= hour < 14.0),
+        "winter_hold": int(_PREVIEW_SUNRISE < hour < _PREVIEW_HOLD_END),
         "derate": int(cold),
         "error_flag": 0,
         "device_temp": round(temp + 9.0, 1),
+        "device_voltage": round(15 * (3.23 + 0.06 * math.sin(2 * math.pi * (hour - 13.0) / 24.0)), 2),
         "min_soc": 15,
         "winter_target": 25,
         "charge_avail": 0 if cold else 1200,
@@ -667,6 +694,52 @@ def preview_battery_value(series, hour):
         "input_limit": 0,
     }
     return values[kind]
+
+
+def _preview_cold_temp(hour):
+    """The first pack's temperature on the batteries view's cold day, below 0 °C from about 01:35 to 08:25 UTC."""
+
+    return round(2.5 + 4.0 * math.sin(2 * math.pi * (hour - 11.0) / 24.0), 1)
+
+
+def _preview_winter_device_value(kind, hour):
+    """The device on the batteries view's cold day, by the hour of the day in UTC.
+
+    The battery's charge fell below its minimum overnight and its packs are
+    still below 0 °C when the sun comes up at 07:30. Winter mode holds the
+    device's output for the battery, as ``ems.winter_reserve`` does, but the
+    battery management accepts no charge yet, so the sun's power only heats
+    the packs. Once they are warm, at about 08:25, the sun charges the
+    battery, none of it from the grid, until its charge is back at the
+    minimum at 09:30, when the hold ends and the device gives power to the
+    house. The battery feeds the house through the evening.
+    """
+
+    sun = 650.0 * math.sin(math.pi * (hour - _PREVIEW_SUNRISE) / (_PREVIEW_SUNSET - _PREVIEW_SUNRISE))
+    sun = max(0.0, sun) if _PREVIEW_SUNRISE <= hour <= _PREVIEW_SUNSET else 0.0
+    cold = _preview_cold_temp(hour) < 0.0
+    held = _PREVIEW_SUNRISE < hour < _PREVIEW_HOLD_END
+    pv = round(min(sun, 80.0) if cold else sun)
+    if held or not (pv or hour >= 17.0):
+        output = 0
+    else:
+        output = min(pv, 300) if pv else 150
+    if kind == "pv":
+        return pv
+    if kind == "output":
+        return output
+    if kind == "battery":
+        return 0 if cold else pv - output
+    if kind == "ac_charge":
+        return 0
+    points = (
+        (0.0, 15.0), (_PREVIEW_SUNRISE, 12.0), (_PREVIEW_WARM_HOUR, 12.0), (_PREVIEW_HOLD_END, 15.0),
+        (_PREVIEW_SUNSET, 40.0), (17.0, 40.0), (24.0, 15.0),
+    )
+    for (start, low), (end, high) in zip(points, points[1:]):
+        if start <= hour <= end:
+            return round(low + (high - low) * (hour - start) / (end - start))
+    return 15
 
 
 # Four metered consumers, by history key: the flow names the two drawing most.

@@ -75,7 +75,7 @@ ramp. A lasting gap means something limits the device — the
 
 ### 4 — The folded sections
 
-![WR1's card with the Firmware status and Device settings sections opened: AC path, SoC guard, battery state, DC path, grid and SoC calibration, then fan and light](../../assets/screenshots/dashboard/dashboard-devices-details.png)
+![WR1's card with the Diagnosis and Firmware status sections opened: no battery notices, battery voltage, charge and discharge accepted, Wi-Fi signal, then AC path, SoC guard and battery state](../../assets/screenshots/dashboard/dashboard-devices-details.png)
 
 Under the facts, sections you open by clicking their name:
 
@@ -83,8 +83,24 @@ Under the facts, sections you open by clicking their name:
   to **PV 4**, when it reports more than one; an input it does not report, or
   one marked as having no module in the Admin console, is left out, keeping the
   numbers of the others.
-- **Cell voltage · 2** — the lowest and the highest cell of each pack,
-  **Pack 1**, **Pack 2**, …, when the device has more than one. The packs are
+- **Diagnosis** — what the battery and the device report beyond the main
+  figures, each only where the device reports it, so the section stays short:
+  - **Battery notices** — *None*, or each state that is on: **Heating**,
+    **Too cold**, **Derating**, **Error flag**. A state that is on also shows
+    in the section's title, *Diagnosis · Heating* (several by their number),
+    so it is seen folded. An offline device shows none, as a state from
+    before is no state now.
+  - **Battery voltage**, the device's own reading, and **Battery current**, the
+    packs' together, negative while discharging, when every pack reports its
+    own.
+  - **Charge accepted** and **Discharge accepted** — what the battery accepts
+    right now, as its battery management reports it; less in the cold.
+  - **Time left** — while the battery discharges, the device's own estimate,
+    for example *1 h 35 min*.
+  - **Wi-Fi signal** — in dBm; nearer 0 is stronger.
+- **Packs · 2** — each pack, **Pack 1**, **Pack 2**, …, when the device has
+  more than one: its charge beside its number, its cells, power and
+  temperature, and below them its own voltage and current. The packs are
   numbered in the order of their serial numbers, which need not be the order
   the Zendure app lists them in; adding or removing a pack renumbers the ones
   after it, and the chart of a number goes on with the pack that has it now.

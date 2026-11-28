@@ -28,6 +28,7 @@ Admin Console screenshots live in [`../admin/`](../admin/).
 | `dashboard-energy-expert.png` | Energy — Expert with September's month detail | `normal` |
 | `dashboard-analytics.png` | Analytics — Overview view with the Grid overlay, KPI cards | `normal` |
 | `dashboard-analytics-batteries.png` | Analytics — Batteries: WR1's two packs' temperature over a cold night, States opened | `ac-charging` |
+| `dashboard-analytics-batteries-winter.png` | Analytics — Batteries, measure Winter: a cold morning, Battery first while the sun heats and then charges the battery, output once the charge is back at the minimum, the packs' temperature under it, States opened | `ac-charging` |
 | `dashboard-control.png` | Control signed in — What the EMS is doing now, Runtime settings | `write-mode` |
 | `dashboard-control-pipeline.png` | Control — How the target is made, Decision per device | `write-mode` |
 | `dashboard-control-device.png` | Control — Decision per device with WR1's five stages opened | `write-mode` |

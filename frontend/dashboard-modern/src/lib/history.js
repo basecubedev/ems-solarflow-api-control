@@ -99,13 +99,19 @@ export function hourlyKwh(time, values, dayStartSeconds, { transform, maxGap } =
   });
 }
 
-/** Runs without samples inside the measured span, for hatched "no data" bands. */
-export function gapRanges(time, seriesList, { maxGap } = {}) {
+/**
+ * Runs without samples inside the measured span, for hatched "no data" bands.
+ * With the ``span`` a chart shows, as [start, end], the stretch before the
+ * first sample and after the last one counts too once it is longer than a
+ * gap, so a range whose data begins late says so.
+ */
+export function gapRanges(time, seriesList, { maxGap, span } = {}) {
   if (!Array.isArray(time) || time.length < 2) return [];
   const limit = maxGap ?? gapLimit(time);
   const measuredAt = (index) => seriesList.some((values) => value(values, index) !== null);
   const ranges = [];
   let gapStart = null;
+  let firstMeasured = null;
   let lastMeasured = null;
   for (let i = 0; i < time.length; i += 1) {
     const t = Number(time[i]);
@@ -116,11 +122,16 @@ export function gapRanges(time, seriesList, { maxGap } = {}) {
       } else if (lastMeasured !== null && t - lastMeasured > limit) {
         ranges.push({ from: lastMeasured, to: t });
       }
+      if (firstMeasured === null) firstMeasured = t;
       lastMeasured = t;
     } else if (lastMeasured !== null && gapStart === null) {
       gapStart = lastMeasured;
     }
   }
+  if (!Array.isArray(span) || span.length !== 2 || firstMeasured === null) return ranges;
+  const [from, to] = span.map(Number);
+  if (firstMeasured - from > limit) ranges.unshift({ from, to: firstMeasured });
+  if (to - lastMeasured > limit) ranges.push({ from: lastMeasured, to });
   return ranges;
 }
 
@@ -167,12 +178,39 @@ export function withGapBreaks(time, seriesList, { maxGap } = {}) {
 /**
  * Classic's analyticsChartDisplayValue: a chart draws the battery charging
  * below zero and discharging above, so power into the battery and out of it
- * part at the axis. Display only -- the API, the table's source data, the KPIs
- * and every energy figure keep charging positive.
+ * part at the axis, and each pack's power and current the same way. Display
+ * only -- the API, the table's source data, the KPIs and every energy figure
+ * keep charging positive.
  */
 export function shownValue(id, raw) {
   if (raw === null || raw === undefined) return raw;
-  return id === "battery" ? 0 - Number(raw) : raw;
+  return id === "battery" || /^pack_(power|current):/.test(id) ? 0 - Number(raw) : raw;
+}
+
+/**
+ * The value a chart draws for a series: its shown value, or, for a series
+ * drawn as a floor under the battery's charge (``below``), its size below zero.
+ */
+export function plottedValue(series, raw) {
+  if (!series?.below || raw === null || raw === undefined) return shownValue(series?.id, raw);
+  return 0 - Math.abs(Number(raw));
+}
+
+/** What a chart draws: each series' values as ``plottedValue`` gives them, an empty list for a series without any. */
+export function plottedLists(series, values) {
+  return series.map((s) => (values?.[s.id] || []).map((raw) => plottedValue(s, raw)));
+}
+
+/**
+ * The span a chart's time axis shows for an answer's ``[start, end]``: up to
+ * now at most, as a range reaching into the future has no data there yet,
+ * but never short of the ``latest`` point, which a browser clock behind the
+ * server's would cut off; null for none, or for one that starts later.
+ */
+export function shownSpan(span, now, latest = -Infinity) {
+  if (!Array.isArray(span) || span.length !== 2) return null;
+  const end = Math.min(Number(span[1]), Math.max(now, latest));
+  return Number(span[0]) < end ? [Number(span[0]), end] : null;
 }
 
 /**

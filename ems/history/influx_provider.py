@@ -27,7 +27,7 @@ from ems.influx_setup import (
 )
 from ems.logging_utils import log_event
 from ems.history.provider import (
-    PACK_CELL_REDUCERS,
+    PACK_SERIES_REDUCERS,
     STATE_SERIES,
     HistoryProvider,
     HistoryResult,
@@ -106,23 +106,13 @@ INFLUX_SERIES = {
     },
 }
 
-PACK_CELL_INFLUX_SERIES = {
-    field_name: {
-        "measurement": "battery_pack",
-        "field": field_name,
-        "device_scoped": True,
-        "window": reducer,
-        "collapse": reducer,
-    }
-    for field_name, reducer in PACK_CELL_REDUCERS.items()
-}
-
 # The battery's condition per device, as the battery task keeps it: a state
 # such as the heating with its window's maximum, so a window in which it was on
 # at all shows it on; temperatures and SoC values with their mean; what the
 # battery accepts summed over the devices like any power.
 BATTERY_INFLUX_SERIES = {
     "device_temp": {"measurement": "zendure_device", "field": "temp", "device_scoped": True, "collapse": "mean"},
+    "device_voltage": {"measurement": "zendure_device", "field": "voltage", "device_scoped": True, "collapse": "mean"},
     "min_soc": {"measurement": "zendure_device", "field": "min_soc", "device_scoped": True, "collapse": "mean"},
     "winter_target": {
         "measurement": "zendure_device", "field": "winter_target", "device_scoped": True, "collapse": "mean",
@@ -137,10 +127,17 @@ BATTERY_INFLUX_SERIES = {
     },
 }
 
+# Every pack series by the reducer it keeps (PACK_SERIES_REDUCERS): a cell
+# voltage and the cell spread their window's extreme, the rest their mean.
 PACK_INFLUX_SERIES = {
-    **PACK_CELL_INFLUX_SERIES,
-    "temp_c": {"measurement": "battery_pack", "field": "temp_c", "device_scoped": True, "collapse": "mean"},
-    "soc": {"measurement": "battery_pack", "field": "soc", "device_scoped": True, "collapse": "mean"},
+    field_name: {
+        "measurement": "battery_pack",
+        "field": field_name,
+        "device_scoped": True,
+        "window": reducer,
+        "collapse": reducer,
+    }
+    for field_name, reducer in PACK_SERIES_REDUCERS.items()
 }
 
 # One consumer's power, selected by its name in the ``device`` tag.

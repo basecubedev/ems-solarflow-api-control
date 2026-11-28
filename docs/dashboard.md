@@ -117,11 +117,25 @@ temperature** and **Pack temperature**, the coolest to the warmest pack, are
 main facts too when the device reports them, over the local API and MQTT alike;
 one it does not report is left out, never shown as 0 °C. The folded **Packs**
 section lists every pack that reports its charge, its cells, such a power or
-its temperature, its charge beside its number (*Pack 1 · 30 %*).
+its temperature, its charge beside its number (*Pack 1 · 30 %*), its own
+voltage and current in a muted line below. The folded **Diagnosis** section,
+shown when the device reports any of it, names the battery's states
+(`heat_state`, `low_temp`, `derate`, `error_flag`) as **Battery notices**
+pills, *None* while all it reports are off, the states that are on in its
+title (one by name, several by number), none at all while the device is
+offline; then **Battery voltage** (`voltage_v`), **Battery current** (the
+packs' `current_a` together, only when every pack reports one), **Charge
+accepted** and **Discharge accepted** (`charge_avail_w`, `discharge_avail_w`),
+**Time left** (`remain_minutes`, only while the battery discharges, in hours
+and minutes) and **Wi-Fi signal** (`rssi`, only a negative dBm reading). The
+live snapshot carries those states and limits as `devices.<name>.heat_state`,
+`low_temp`, `derate`, `error_flag`, `charge_avail_w` and `discharge_avail_w`,
+`null` where the device does not report them.
 The live snapshot carries the inverter's as `devices.<name>.temperature_c` and
 the packs per device as `devices.<name>.battery_packs`, a
 list of `{"pack": 1, "cell_min_v": 3.17, "cell_max_v": 3.18, "power_w": 4,
-"state": 2, "temp_c": 13.0, "soc": 41.0}`: Zendure's `packData[].minVol` and `maxVol`, hundredths of a volt,
+"state": 2, "temp_c": 13.0, "soc": 41.0, "cell_spread_v": 0.01,
+"voltage_v": 47.6, "current_a": -0.1, "flow_w": -4.0}`: Zendure's `packData[].minVol` and `maxVol`, hundredths of a volt,
 in volts, `null` where a pack reports none or a value no cell can have (outside
 1.5–5.0 V, or a lowest cell above the highest); `packData[].power` in whole
 watts, whose sign is not a direction (`state` names it), a 16-bit value of 32768–65535 read as the
@@ -130,7 +144,18 @@ negative number it encodes (as `batcur` 65535 is −1), `null` outside ±10 kW; 
 value; and `packData[].maxTemp`, tenths of a kelvin like the inverter's
 `hyperTmp`, in °C, `null` where a pack reports none or a value outside -60 to
 120 °C; and `packData[].socLevel`, the pack's own state of charge in whole
-percent, `null` where a pack reports none or a value outside 0–100. The card takes the
+percent, `null` where a pack reports none or a value outside 0–100; and
+`packData[].totalVol`, the pack's voltage across all its cells in hundredths
+of a volt, in volts (`voltage_v`, `null` outside 5–120 V); `current_a` and
+`flow_w` are the size of `packData[].batcur` (tenths of an amp, a 16-bit value
+read like `power`) and of `power`, signed by `state`: positive while the pack
+charges, negative while it discharges, as the stores keep the battery, 0 for
+an idle pack reporting 0, `null` where `state` names no direction;
+`cell_spread_v` is `cell_max_v` less `cell_min_v` of the same reading, `null`
+without both, and over MQTT `null` while the two come from different change
+reports. The
+device's `BatVolt` (hundredths of a volt) is `devices.<name>.voltage_v`, `null`
+where the device reports none. The card takes the
 direction from `state`; the EMS's control does not read either. The packs are numbered from 1 in the order of their
 serial numbers, which are not published; adding or removing a pack renumbers
 the ones after it, so from then on a number's history goes on with another
@@ -874,9 +899,13 @@ and highest value rather than its mean, so a short dip still shows in a long
 range. SQLite reads them from the snapshot's `battery_packs` and thins a long
 range to at most 2,000 snapshots like every other series, so it can miss a dip
 shorter than the gap between two of them. `pack_temp:<pack>` reads one pack's
-temperature in °C the same way, the mean across devices, and `pack_soc:<pack>`
-its own state of charge in percent. With `devices`,
-`device_temp`, `min_soc`, `winter_target`, `heat_state`, `low_temp`,
+temperature in °C the same way, the mean across devices, `pack_soc:<pack>`
+its own state of charge in percent, `pack_voltage:<pack>` its voltage,
+`pack_current:<pack>` its current and `pack_power:<pack>` its power, the last
+two positive while it charges (`flow_w`, `current_a`), and `cell_spread:<pack>`
+the gap between its highest and lowest cell of one reading, each window's and
+each thinned stretch's widest. With `devices`,
+`device_temp`, `device_voltage` (the device's battery voltage), `min_soc`, `winter_target`, `heat_state`, `low_temp`,
 `error_flag`, `derate`, `winter_hold`, `ac_input`, `charge_avail`,
 `discharge_avail` and `input_limit` read the battery's condition (see [A
 battery in the cold](technical/influxdb.md#a-battery-in-the-cold)); InfluxDB
@@ -945,17 +974,37 @@ energy KPI cards (no extra chart pages):
 - **Battery** — Battery; KPIs Battery charged, Battery discharged.
 - **Solar** — Solar and Output; KPIs Solar, Solar peak, Output.
 - **Batteries** — one device's batteries, one measure at a time: every pack's
-  `pack_temp:<n>` (KPIs Coldest pack, Warmest pack), every pack's
+  `pack_temp:<n>` with the inverter's `device_temp` as a solid line (KPIs
+  Coldest pack, Warmest pack), every pack's
   `pack_soc:<n>` on a 0–100 % axis (KPIs Emptiest pack, Fullest pack), one
   pack's
-  `cell_min:<n>`/`cell_max:<n>` (KPIs Lowest cell, Highest cell), or, in
-  Expert, `charge_avail`, `discharge_avail` and `input_limit`. Its overlays are
-  `soc`, and in Expert `min_soc`, `winter_target` and, on the temperature,
-  `device_temp`. The same request carries the state lanes of the folded
-  **States** card: `heat_state` and `low_temp`, in Expert also `ac_input`,
-  `winter_hold`, `derate` and `error_flag`. Basic or Expert is kept in
+  `cell_min:<n>`/`cell_max:<n>` (KPIs Lowest cell, Highest cell, and Widest
+  cell spread from the pack's `cell_spread:<n>`, which the request carries
+  beside them), every pack's `pack_power:<n>`, drawn below zero while it
+  charges as the battery is (KPIs Strongest discharge, Strongest charge),
+  Winter, or, in Expert,
+  every pack's `pack_voltage:<n>` with the device's `device_voltage` (KPIs
+  Lowest and Highest pack voltage), every pack's `pack_current:<n>` drawn like
+  its power on an amp axis through 0 A (KPIs Strongest discharge, Strongest
+  charge), and
+  `charge_avail`, `discharge_avail` and `input_limit`. Its overlays are
+  `soc`, and in Expert `min_soc` and `winter_target`. Winter draws the
+  device's `pv`, `ac_charge`, `battery` (below zero while it charges),
+  `output` and `charge_avail` (drawn at its size below zero, a shaded room
+  under the charge) in watts with `soc`, `min_soc` and `winter_target` on the percent
+  axis and no overlays, and under it a second chart of every pack's
+  `pack_temp:<n>` with `device_temp`; the two share the cursor and the zoom,
+  and one request carries both. The same request carries the state lanes of the folded
+  **States** card: `heat_state` and `low_temp`, with Winter or in Expert also
+  `ac_input` and `winter_hold`, in Expert also `derate` and `error_flag`. Basic or Expert is kept in
   `localStorage` (`ems-modern.analyticsDetail`). See
   [Batteries](user/dashboard/energy.md#batteries).
+
+The chart's time axis spans the chosen range, as the response's `start` and
+`end` name it, up to now at most, whatever the data covers; a stretch at its
+start or end without a point, longer than a gap, is hatched as one (a value
+recorded only since an update, say). A zoomed chart spans its window. A
+refresh draws into the same chart rather than building a new one.
 
 Every view adds **Current state of charge** and **Runtime role**.
 

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import test from "node:test";
 import assert from "node:assert/strict";
-import { integrateKwh, hourlyKwh, gapRanges, withGapBreaks, sameTimeComparison, sampleSpacing, localDayStart, niceCeiling, zoomStep, zoomDiffers, zoomSpan, zoomCenter, panStep, wheelGesture, wheelZoomFactor, pinchWindow, ZOOM_STEP, escapeLeavesZoom, emptyKey, sourceKey, tickLabels, tickSpace, tickPad, atLeastAMinute, shownValue, batteryReading, axisPower } from "../src/lib/history.js";
+import { integrateKwh, hourlyKwh, gapRanges, shownSpan, withGapBreaks, sameTimeComparison, sampleSpacing, localDayStart, niceCeiling, zoomStep, zoomDiffers, zoomSpan, zoomCenter, panStep, wheelGesture, wheelZoomFactor, pinchWindow, ZOOM_STEP, escapeLeavesZoom, emptyKey, sourceKey, tickLabels, tickSpace, tickPad, atLeastAMinute, shownValue, plottedValue, plottedLists, batteryReading, axisPower } from "../src/lib/history.js";
 import { createFormat } from "../../shared/lib/format.js";
 
 const MIDNIGHT = localDayStart(new Date(1_800_000_000 * 1000));
@@ -34,6 +34,37 @@ test("a step longer than the gap limit is a gap, not a straight line", () => {
   const broken = withGapBreaks(time, [values]);
   assert.equal(broken.time.length, 6);
   assert.equal(broken.series[0][3], null);
+});
+
+test("a chart draws a pack's power and current below zero while charging, as the battery, and nothing else flipped", () => {
+  assert.equal(shownValue("pack_power:2", 300), -300);
+  assert.equal(shownValue("pack_current:1", -2.5), 2.5);
+  assert.equal(shownValue("battery", 100), -100);
+  assert.equal(shownValue("pack_voltage:1", 47.6), 47.6);
+  assert.equal(shownValue("pack_temp:1", 3), 3);
+  assert.equal(shownValue("pack_power:1", null), null);
+});
+
+test("a chart's span reaches up to now at most, never short of its latest point, and a span in the future is none", () => {
+  assert.deepEqual(shownSpan([100, 200], 300), [100, 200]);
+  assert.deepEqual(shownSpan([100, 500], 300), [100, 300]);
+  assert.deepEqual(shownSpan([100, 500], 300, 450), [100, 450]);
+  assert.deepEqual(shownSpan([100, 200], 150, 200), [100, 200]);
+  assert.deepEqual(shownSpan([100, 200], 150, undefined), [100, 150]);
+  assert.equal(shownSpan([400, 500], 300), null);
+  assert.equal(shownSpan(null, 300), null);
+});
+
+test("a chart's span marks the stretch before the first sample and after the last one, once longer than a gap", () => {
+  const time = [3600, 3900, 4200, 4500];
+  const values = [1, 1, 1, 1];
+  assert.deepEqual(gapRanges(time, [values], { span: [0, 4500] }), [{ from: 0, to: 3600 }]);
+  assert.deepEqual(gapRanges(time, [values], { span: [3600, 9000] }), [{ from: 4500, to: 9000 }]);
+  assert.deepEqual(gapRanges(time, [[1, 1, null, null]], { span: [3600, 4500] }), []);
+  assert.deepEqual(gapRanges(time, [[1, 1, null, null]], { span: [3600, 9000] }), [{ from: 3900, to: 9000 }]);
+  assert.deepEqual(gapRanges(time, [values], { span: [3500, 4600] }), []);
+  assert.deepEqual(gapRanges(time, [[null, null, null, null]], { span: [0, 9000] }), []);
+  assert.deepEqual(gapRanges(time, [values]), []);
 });
 
 test("the gap limit is three typical steps, as in Classic, without a floor", () => {
@@ -337,4 +368,39 @@ test("a power axis below zero carries the same minus sign as every other power f
   assert.equal(axisPower(1500, f), "1.5 kW");
   assert.equal(axisPower(-1500, createFormat("de")), "−1,5 kW");
   assert.equal(axisPower(-500, f).charAt(0), f.power(-500).charAt(0));
+});
+
+test("a series answer names the span it covers in epoch seconds, and none it cannot read", async () => {
+  const { fetchSeries } = await import("../src/lib/historyApi.js");
+  const answers = [
+    { start: "2026-11-27T23:00:00+00:00", end: "2026-11-28T23:00:00Z", time: [1795820400], series: {} },
+    { time: [] },
+    { start: "soon", end: "2026-11-28T23:00:00Z" },
+    { start: "2026-11-28T23:00:00Z", end: "2026-11-27T23:00:00Z" },
+  ];
+  const original = globalThis.fetch;
+  const spans = [];
+  try {
+    for (const answer of answers) {
+      globalThis.fetch = async () => new Response(JSON.stringify(answer), { status: 200, headers: { "Content-Type": "application/json" } });
+      spans.push((await fetchSeries({ source: "analytics", range: "24h", series: ["pv"] })).span);
+    }
+  } finally {
+    globalThis.fetch = original;
+  }
+  assert.deepEqual(spans, [[1795820400, 1795906800], null, null, null]);
+});
+
+test("a series drawn as a floor under the charge is plotted at its size below zero, any other at its shown value", () => {
+  assert.equal(plottedValue({ id: "charge_avail", below: true }, 1200), -1200);
+  assert.equal(plottedValue({ id: "charge_avail", below: true }, -50), -50);
+  assert.equal(plottedValue({ id: "charge_avail", below: true }, null), null);
+  assert.equal(plottedValue({ id: "charge_avail" }, 1200), 1200);
+  assert.equal(plottedValue({ id: "battery" }, 300), -300);
+});
+
+test("a chart draws every series as plottedValue gives it, a series without values as an empty list", () => {
+  const series = [{ id: "charge_avail", below: true }, { id: "battery" }, { id: "pv" }, { id: "output" }];
+  assert.deepEqual(plottedLists(series, { charge_avail: [1200, null], battery: [300, -100], pv: [5] }), [[-1200, null], [-300, 100], [5], []]);
+  assert.deepEqual(plottedLists(series, null), [[], [], [], []]);
 });

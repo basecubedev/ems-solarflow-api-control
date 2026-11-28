@@ -182,6 +182,37 @@ def test_the_preview_answers_the_batteries_view_with_a_cold_night(preview_server
     assert all(0 <= second < first <= 100 for first, second in zip(charge["pack_soc:1"], charge["pack_soc:2"]))
 
 
+def test_the_preview_answers_the_winter_measure_with_a_morning_that_charges_from_the_sun_first(preview_server):
+    _, base = preview_server(fixed_now=datetime.fromisoformat("2026-10-21T18:30:00+02:00").timestamp())
+    winter = "pv,ac_charge,battery,output,charge_avail,soc,min_soc,pack_temp:1,heat_state,low_temp,winter_hold"
+    series = _get_json(base, f"/api/analytics/series?range=24h&series={winter}&devices=WR1")["series"]
+
+    assert set(series) == set(winter.split(","))
+    assert set(series["ac_charge"]) == {0}
+    assert all(output >= 0 for output in series["output"])
+    sunny = [index for index, pv in enumerate(series["pv"]) if pv > 0]
+    held = [index for index, hold in enumerate(series["winter_hold"]) if hold]
+    first_output = next(index for index in sunny if series["output"][index] > 0)
+    assert held == list(range(sunny[0], first_output))
+    assert all(series["output"][index] == 0 for index in held)
+    refused = [index for index in held if series["charge_avail"][index] == 0]
+    assert refused and all(series["low_temp"][index] and series["heat_state"][index] for index in refused)
+    assert all(series["battery"][index] == 0 for index in refused)
+    charged = [index for index in held if series["charge_avail"][index] > 0]
+    assert charged and all(series["battery"][index] == series["pv"][index] > 0 for index in charged)
+    assert series["soc"][sunny[0]] < series["min_soc"][sunny[0]] <= series["soc"][first_output]
+    assert series["soc"][held[-1]] <= series["min_soc"][held[-1]]
+    assert all(series["pv"][index] <= 80 for index in refused) and max(series["pv"]) > 80
+    heating = [index for index, heat in enumerate(series["heat_state"]) if heat]
+    assert heating and all(series["pv"][index] > 0 for index in heating)
+    assert all(battery == pv - output for battery, pv, output, avail in zip(series["battery"], series["pv"], series["output"], series["charge_avail"]) if avail)
+    summer = _get_json(base, "/api/analytics/series?range=24h&series=pv,ac_charge&devices=WR1")["series"]
+    assert set(summer) == {"pv"}
+    assert summer["pv"] != series["pv"]
+    overlay = _get_json(base, "/api/analytics/series?range=24h&series=pack_soc:1,soc&devices=WR1")["series"]
+    assert overlay["soc"] != series["soc"]
+
+
 def test_the_preview_still_falls_back_for_a_series_it_does_not_know(preview_server):
     _, base = preview_server()
     body = _get_json(base, "/api/analytics/series?range=24h&series=pack_temp:0,pack_temp:17,heat_state:1")

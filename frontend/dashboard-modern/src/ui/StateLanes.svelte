@@ -8,7 +8,9 @@
   /**
    * On/off states over the chart's time axis, one lane each: a bar where the
    * state was on, and how long that was. A lane the device never reported in
-   * the range is named as such instead of drawn off.
+   * the range is named as such instead of drawn off. A lane with a
+   * ``source`` names it after its label: the device that reports it, or the
+   * EMS that decided it.
    */
   let { time = [], lanes = [], label = "" } = $props();
 
@@ -46,7 +48,7 @@
 <div class="lanes" role="list" aria-label={label} data-testid="state-lanes">
   {#each rows as row (row.id)}
     <div class="lane" role="listitem" data-lane={row.id}>
-      <span class="name">{row.label}</span>
+      <span class="name">{row.label}{#if row.source}<span class="sr-only">({t(`lanes.sourceTitle.${row.source}`)})</span><span class="source" title={t(`lanes.sourceTitle.${row.source}`)} aria-hidden="true">{t(`lanes.source.${row.source}`)}</span>{/if}</span>
       <div class="track" class:silent={!row.reported} aria-hidden="true">
         {#each row.segments as segment, index (index)}
           <span class="on" style:left={left(segment.start)} style:width={width(segment)} style:--c={`var(${row.token})`} title={`${stamp(segment.start)}–${stamp(segment.end)}`}></span>
@@ -68,8 +70,9 @@
 
 <style>
   .lanes { display: flex; flex-direction: column; gap: 8px; }
-  .lane { display: grid; grid-template-columns: minmax(120px, 180px) 1fr minmax(90px, auto); gap: var(--s3); align-items: center; font-size: 12.5px; }
+  .lane { display: grid; grid-template-columns: minmax(120px, 220px) 1fr minmax(90px, auto); gap: var(--s3); align-items: center; font-size: 12.5px; }
   .name { color: var(--m-text); }
+  .source { margin-left: 6px; color: var(--m-muted); font-size: 11px; white-space: nowrap; }
   .total { color: var(--m-muted); text-align: right; white-space: nowrap; }
   .track { position: relative; height: 14px; border-radius: var(--m-radius-pill); background: var(--m-well); overflow: hidden; }
   .track.silent { background: repeating-linear-gradient(135deg, var(--m-well), var(--m-well) 4px, transparent 4px, transparent 8px); }

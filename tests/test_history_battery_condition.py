@@ -14,6 +14,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from dashboard.telemetry import BATTERY_CONDITION_FIELDS, _state_telemetry_fields
 from ems.clients import parse_device
 from ems.config import normalize_influxdb_config
 from ems.controller import history_decisions
@@ -127,6 +128,10 @@ def test_each_condition_keeps_its_own_reducer_in_the_downsampled_buckets():
     assert kept == {
         ("battery_pack", "temp_c"): "mean",
         ("battery_pack", "soc"): "mean",
+        ("battery_pack", "cell_spread_v"): "max",
+        ("battery_pack", "voltage_v"): "mean",
+        ("battery_pack", "current_a"): "mean",
+        ("battery_pack", "flow_w"): "mean",
         **{("zendure_device", state): "max" for state in STATE_SERIES},
         ("zendure_device", "charge_avail_w"): "mean",
         ("zendure_device", "discharge_avail_w"): "mean",
@@ -159,13 +164,13 @@ def test_an_installed_system_gets_the_battery_task_by_itself():
     }
 
 
-def test_every_battery_series_is_catalogued_and_reads_a_field_the_battery_task_keeps():
+def test_every_battery_series_is_catalogued_and_reads_a_field_a_downsampling_task_keeps():
     kept = {(measurement, field) for measurement, field, _reducer in schema.BATTERY_DOWNSAMPLED}
 
     for name, spec in BATTERY_INFLUX_SERIES.items():
         assert name in SERIES_CATALOG, name
         assert normalize_series([name]) == [name]
-        assert (spec["measurement"], spec["field"]) in kept or spec["field"] in ("temp", "min_soc"), name
+        assert (spec["measurement"], spec["field"]) in kept or spec["field"] in schema.NUMERIC_FIELDS, name
 
 
 @pytest.mark.parametrize(
@@ -279,3 +284,20 @@ def test_the_sqlite_summary_reads_no_field_a_series_does_not_have():
 
     assert "$.None" not in provider._SUMMARY_SELECT
     assert None not in provider._SUMMARY_FIELDS
+
+
+def test_the_live_data_carries_the_battery_s_states_and_what_it_accepts_none_when_not_reported():
+    """The device card reads them now as the history keeps them; a state the
+    report does not carry stays missing rather than reading as off."""
+
+    reported = _state_telemetry_fields(parse_device({"properties": {
+        "electricLevel": 40, "heatState": 1, "lowTemperature": 0, "derateFlag": 1, "is_error": 0,
+        "chargeAvailPower": 0, "dischargeAvailPower": 1200,
+    }}))
+    silent = _state_telemetry_fields(parse_device({"properties": {"electricLevel": 40}}))
+
+    assert {name: reported[name] for name in BATTERY_CONDITION_FIELDS} == {
+        "heat_state": 1, "low_temp": 0, "derate": 1, "error_flag": 0, "charge_avail_w": 0, "discharge_avail_w": 1200,
+    }
+    assert {name: silent[name] for name in BATTERY_CONDITION_FIELDS} == dict.fromkeys(BATTERY_CONDITION_FIELDS)
+    assert set(BATTERY_CONDITION_FIELDS) <= set(_DEVICE_FIELDS)

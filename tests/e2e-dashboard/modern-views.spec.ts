@@ -517,6 +517,13 @@ async function cellSeries(page, path) {
       if (temp) return offset * 10 + 2 + Number(temp[1]);
       const charge = /^pack_soc:(\d+)$/.exec(id);
       if (charge) return 20 * Number(charge[1]) + offset * 5;
+      const electric = /^pack_(power|voltage|current):(\d+)$/.exec(id);
+      const first = electric && electric[2] === "1";
+      if (electric) return { power: first ? 300 : -100, voltage: 47.5 + Number(electric[2]) / 10, current: first ? 6.2 : -2.1 }[electric[1]];
+      const spread = /^cell_spread:(\d+)$/.exec(id);
+      if (spread) return 0.012 + offset * 0.01;
+      if (id === "device_temp") return 9 + offset;
+      if (id === "device_voltage") return 47.8;
       if (!match) return 50;
       return offset + 3 + Number(match[2]) / 10 + (match[1] === "max" ? 0.05 : 0);
     };
@@ -527,9 +534,39 @@ async function cellSeries(page, path) {
 }
 
 const cellsRead = (path, check = () => true) => seriesRead(path, (params) => /cell_/.test(params.get("series") || "") && check(params));
-const batteryRead = (check = () => true) => seriesRead("/api/analytics/series", (params) => /pack_temp:|pack_soc:|charge_avail/.test(params.get("series") || "") && check(params));
+const batteryRead = (check = () => true) => seriesRead("/api/analytics/series", (params) => /pack_(temp|soc|power|voltage|current):|charge_avail/.test(params.get("series") || "") && check(params));
 
 test.describe("Modern dashboard views: cell voltage @smoke", () => {
+  test("a device card's Diagnosis names the states on in its title and only what the device reports", async ({ page }) => {
+    await shapeLive(page, (body) => {
+      Object.assign(body.devices.WR2, {
+        heat_state: 1, low_temp: 0, derate: null, error_flag: null, voltage_v: 47.88, battery_power_w: -120,
+        remain_minutes: 95, rssi: -61, charge_avail_w: 0, discharge_avail_w: 1200,
+      });
+      body.devices.WR2.battery_packs = [
+        { pack: 1, cell_min_v: 3.2, cell_max_v: 3.22, voltage_v: 47.6, current_a: -1.2 },
+        { pack: 2, cell_min_v: 3.3, cell_max_v: 3.33, voltage_v: 47.95, current_a: -1.3 },
+      ];
+      Object.assign(body.devices.WR1, {
+        heat_state: null, low_temp: null, derate: null, error_flag: null, voltage_v: null,
+        remain_minutes: 0, rssi: 0, charge_avail_w: null, discharge_avail_w: null,
+      });
+    });
+    await openModern(page, "#/devices");
+    await expect(deviceCard(page, "WR1").getByTestId("device-diagnosis")).toHaveCount(0);
+    const two = deviceCard(page, "WR2");
+    const fold = two.getByTestId("device-diagnosis");
+    await expect(fold.locator("summary")).toHaveText("Diagnosis · Heating");
+    await expect(fold.locator(".fact").first()).toBeHidden();
+    await fold.locator("summary").click();
+    await expect(fold.getByRole("group", { name: "Battery notices" }).locator(".pill")).toHaveText(["Heating"]);
+    await expect(fold.locator(".fact-label")).toHaveText(["Battery voltage", "Battery current", "Charge accepted", "Discharge accepted", "Time left", "Wi-Fi signal"]);
+    await expect(fold.locator(".fact-value")).toHaveText(["47.88 V", "−2.5 A", "0 W", "1.20 kW", "1 h 35 min", "−61 dBm"]);
+    const packs = two.getByTestId("device-cells");
+    await packs.locator("summary").click();
+    await expect(packs.locator(".fact-note")).toHaveText(["47.60 V · −1.2 A", "47.95 V · −1.3 A"]);
+  });
+
   test("a device card names its cells' voltage, and each pack's when it has several", async ({ page }) => {
     await shapeLive(page, withCells);
     await openModern(page, "#/devices");
@@ -635,7 +672,7 @@ test.describe("Modern dashboard views: cell voltage @smoke", () => {
     await expect(chart.locator(".legend-item")).toHaveText(["Lowest cell4.20 V", "Highest cell4.25 V"]);
   });
 
-  test("the analytics batteries view draws every pack's temperature, then one pack's cells on a volt axis, with the state of charge as an overlay", async ({ page }) => {
+  test("the analytics batteries view draws every pack's temperature beside the inverter's, then one pack's cells on a volt axis, with the state of charge as an overlay", async ({ page }) => {
     await shapeLive(page, withCells);
     await cellSeries(page, "/api/analytics/series");
     await openModern(page, "#/analytics");
@@ -645,20 +682,21 @@ test.describe("Modern dashboard views: cell voltage @smoke", () => {
       page.waitForRequest(batteryRead()),
       views.getByRole("button", { name: "Batteries", exact: true }).click(),
     ]);
-    expect(new URL(asked.url()).searchParams.get("series")).toBe("pack_temp:1,heat_state,low_temp");
+    expect(new URL(asked.url()).searchParams.get("series")).toBe("pack_temp:1,device_temp,heat_state,low_temp");
     expect(new URL(asked.url()).searchParams.get("devices")).toBe("WR1");
     const chart = page.getByRole("region", { name: "Batteries", exact: true });
-    await expect(chart.locator(".legend-item")).toHaveText(["Pack 13.0 °C"]);
-    const temps = page.getByTestId("analytics-temp-kpi");
+    await expect(chart.locator(".legend-item")).toHaveText(["Pack 13.0 °C", "Inverter9.0 °C"]);
+    await expect(chart.locator(".legend-item i.dash")).toHaveCount(0);
+    const temps = page.getByTestId("analytics-temperature-kpi");
     await expect(temps.locator(".kpi-label")).toHaveText(["Coldest pack · 24 h", "Warmest pack · 24 h"]);
     await expect(temps.locator(".kpi-value")).toHaveText(["3.0 °C", "3.0 °C"]);
     const measures = page.getByRole("group", { name: "Measure" });
-    await expect(measures.getByRole("button")).toHaveText(["Temperature", "Pack state of charge", "Cell voltage"]);
+    await expect(measures.getByRole("button")).toHaveText(["Temperature", "Pack state of charge", "Cell voltage", "Pack power", "Winter"]);
     const [both] = await Promise.all([
       page.waitForRequest(batteryRead((params) => params.get("devices") === "WR2")),
       page.getByRole("combobox", { name: "Device" }).selectOption("WR2"),
     ]);
-    expect(new URL(both.url()).searchParams.get("series")).toBe("pack_temp:1,pack_temp:2,heat_state,low_temp");
+    expect(new URL(both.url()).searchParams.get("series")).toBe("pack_temp:1,pack_temp:2,device_temp,heat_state,low_temp");
     await expect(page.getByRole("group", { name: "Pack" })).toHaveCount(0);
     await expect(temps.locator(".kpi-value")).toHaveText(["13.0 °C", "14.0 °C"]);
     await page.getByRole("combobox", { name: "Device" }).selectOption("WR1");
@@ -667,28 +705,28 @@ test.describe("Modern dashboard views: cell voltage @smoke", () => {
       page.waitForRequest(cellsRead("/api/analytics/series")),
       measures.getByRole("button", { name: "Cell voltage", exact: true }).click(),
     ]);
-    expect(new URL(cells.url()).searchParams.get("series")).toBe("cell_min:1,cell_max:1,heat_state,low_temp");
+    expect(new URL(cells.url()).searchParams.get("series")).toBe("cell_min:1,cell_max:1,cell_spread:1,heat_state,low_temp");
     await expect(chart.locator(".legend-item")).toHaveText(["Lowest cell3.10 V", "Highest cell3.15 V"]);
-    await expect(page.getByTestId("analytics-temp-kpi")).toHaveCount(0);
-    await expect(page.getByTestId("analytics-cell-kpi").locator(".kpi-label")).toHaveText(["Lowest cell · 24 h", "Highest cell · 24 h"]);
-    await expect(page.getByTestId("analytics-cell-kpi").locator(".kpi-value")).toHaveText(["3.10 V", "3.15 V"]);
+    await expect(page.getByTestId("analytics-temperature-kpi")).toHaveCount(0);
+    await expect(page.getByTestId("analytics-cells-kpi").locator(".kpi-label")).toHaveText(["Lowest cell · 24 h", "Highest cell · 24 h", "Widest cell spread · 24 h"]);
+    await expect(page.getByTestId("analytics-cells-kpi").locator(".kpi-value")).toHaveText(["3.10 V", "3.15 V", "12 mV"]);
     await expect(page.getByRole("combobox", { name: "Device" }).locator("option")).toHaveText(["WR1", "WR2"]);
     const overlays = page.getByRole("group", { name: "Overlays" });
     await expect(overlays.getByRole("button")).toHaveText(["State of charge"]);
     const [withSoc] = await Promise.all([
-      page.waitForRequest(cellsRead("/api/analytics/series", (params) => params.get("series") === "cell_min:1,cell_max:1,soc,heat_state,low_temp")),
+      page.waitForRequest(cellsRead("/api/analytics/series", (params) => params.get("series") === "cell_min:1,cell_max:1,soc,cell_spread:1,heat_state,low_temp")),
       overlays.getByRole("button", { name: "State of charge" }).click(),
     ]);
     expect(new URL(withSoc.url()).searchParams.get("devices")).toBe("WR1");
     const [packTwo] = await Promise.all([
-      page.waitForRequest(cellsRead("/api/analytics/series", (params) => params.get("series") === "cell_min:2,cell_max:2,soc,heat_state,low_temp")),
+      page.waitForRequest(cellsRead("/api/analytics/series", (params) => params.get("series") === "cell_min:2,cell_max:2,soc,cell_spread:2,heat_state,low_temp")),
       (async () => {
         await page.getByRole("combobox", { name: "Device" }).selectOption("WR2");
         await page.getByRole("group", { name: "Pack" }).getByRole("button", { name: "Pack 2", exact: true }).click();
       })(),
     ]);
     expect(new URL(packTwo.url()).searchParams.get("devices")).toBe("WR2");
-    await expect(page.getByTestId("analytics-cell-kpi").locator(".kpi-value")).toHaveText(["4.20 V", "4.25 V"]);
+    await expect(page.getByTestId("analytics-cells-kpi").locator(".kpi-value")).toHaveText(["4.20 V", "4.25 V", "22 mV"]);
   });
 
   test("the batteries view draws each pack's own state of charge on one percent axis with the emptiest and the fullest pack", async ({ page }) => {
@@ -704,7 +742,7 @@ test.describe("Modern dashboard views: cell voltage @smoke", () => {
       page.waitForRequest(batteryRead((params) => params.get("devices") === "WR2" && (params.get("series") || "").startsWith("pack_temp:"))),
       page.getByRole("combobox", { name: "Device" }).selectOption("WR2"),
     ]);
-    expect(new URL(both.url()).searchParams.get("series")).toBe("pack_temp:1,pack_temp:2,heat_state,low_temp");
+    expect(new URL(both.url()).searchParams.get("series")).toBe("pack_temp:1,pack_temp:2,device_temp,heat_state,low_temp");
     const [charge] = await Promise.all([
       page.waitForRequest(batteryRead((params) => (params.get("series") || "").startsWith("pack_soc:"))),
       page.getByRole("group", { name: "Measure" }).getByRole("button", { name: "Pack state of charge", exact: true }).click(),
@@ -748,11 +786,13 @@ test.describe("Modern dashboard views: cell voltage @smoke", () => {
       page.waitForRequest(batteryRead((params) => (params.get("series") || "").includes("error_flag"))),
       detail.getByRole("button", { name: "Expert", exact: true }).click(),
     ]);
-    expect(new URL(expert.url()).searchParams.get("series")).toBe("pack_temp:1,heat_state,low_temp,ac_input,winter_hold,derate,error_flag");
-    await expect(lanes).toHaveText([/1 min on$/, /2 min on$/, /^AC charging role.*never on$/, /^Export hold.*never on$/, /^Derating.*never on$/, /^Error flag.*not reported$/]);
-    await expect(page.getByRole("group", { name: "Overlays" }).getByRole("button")).toHaveText(["State of charge", "Minimum SoC", "Winter target", "Inverter"]);
+    expect(new URL(expert.url()).searchParams.get("series")).toBe("pack_temp:1,device_temp,heat_state,low_temp,ac_input,winter_hold,derate,error_flag");
+    await expect(lanes).toHaveText([/1 min on$/, /2 min on$/, /^AC charging role.*never on$/, /^Battery first.*never on$/, /^Derating.*never on$/, /^Error flag.*not reported$/]);
+    await expect(lanes.locator(".source")).toHaveText(["Device", "Device", "EMS", "EMS", "Device", "Device"]);
+    await expect(lanes.filter({ hasText: "Battery first" }).locator(".source")).toHaveAttribute("title", "Decided by the EMS");
+    await expect(page.getByRole("group", { name: "Overlays" }).getByRole("button")).toHaveText(["State of charge", "Minimum SoC", "Winter target"]);
     const measures = page.getByRole("group", { name: "Measure" });
-    await expect(measures.getByRole("button")).toHaveText(["Temperature", "Pack state of charge", "Cell voltage", "Limits"]);
+    await expect(measures.getByRole("button")).toHaveText(["Temperature", "Pack state of charge", "Cell voltage", "Pack power", "Winter", "Voltage", "Current", "Limits"]);
     const [limits] = await Promise.all([
       page.waitForRequest(batteryRead((params) => (params.get("series") || "").startsWith("charge_avail"))),
       measures.getByRole("button", { name: "Limits", exact: true }).click(),
@@ -765,14 +805,125 @@ test.describe("Modern dashboard views: cell voltage @smoke", () => {
     await page.getByTestId("analytics-view-block").locator(".seg").first().getByRole("button", { name: "Batteries", exact: true }).click();
     await expect(page.getByRole("group", { name: "Detail" }).getByRole("button", { name: "Expert", exact: true })).toHaveAttribute("aria-pressed", "true");
     const [basic] = await Promise.all([
-      page.waitForRequest(batteryRead((params) => params.get("series") === "pack_temp:1,heat_state,low_temp")),
+      page.waitForRequest(batteryRead((params) => params.get("series") === "pack_temp:1,device_temp,heat_state,low_temp")),
       (async () => {
         await page.getByRole("group", { name: "Measure" }).getByRole("button", { name: "Limits", exact: true }).click();
         await page.getByRole("group", { name: "Detail" }).getByRole("button", { name: "Basic", exact: true }).click();
       })(),
     ]);
     expect(new URL(basic.url()).searchParams.get("devices")).toBe("WR1");
-    await expect(page.getByRole("group", { name: "Measure" }).getByRole("button")).toHaveText(["Temperature", "Pack state of charge", "Cell voltage"]);
+    await expect(page.getByRole("group", { name: "Measure" }).getByRole("button")).toHaveText(["Temperature", "Pack state of charge", "Cell voltage", "Pack power", "Winter"]);
+  });
+
+  test("the batteries view's winter measure draws what charged the battery and where its power went over the packs' temperatures, both charts at one moment and one zoom", async ({ page }) => {
+    await shapeLive(page, withCells);
+    await openModern(page, "#/analytics");
+    await expect(page.locator(".chart .u-over")).toBeVisible();
+    await Promise.all([
+      page.waitForRequest(batteryRead()),
+      page.getByTestId("analytics-view-block").locator(".seg").first().getByRole("button", { name: "Batteries", exact: true }).click(),
+    ]);
+    const [winter] = await Promise.all([
+      page.waitForRequest(batteryRead((params) => (params.get("series") || "").startsWith("pv,"))),
+      page.getByRole("group", { name: "Measure" }).getByRole("button", { name: "Winter", exact: true }).click(),
+    ]);
+    expect(new URL(winter.url()).searchParams.get("series")).toBe("pv,ac_charge,battery,output,charge_avail,soc,min_soc,winter_target,pack_temp:1,device_temp,heat_state,low_temp,ac_input,winter_hold");
+    expect(new URL(winter.url()).searchParams.get("devices")).toBe("WR1");
+    const power = page.getByRole("region", { name: "Batteries", exact: true });
+    const temperature = page.getByRole("region", { name: "Temperature", exact: true });
+    await expect(power.locator(".legend-item")).toHaveText([/^Solar\d/, /^AC charging0\sW$/, /^Battery(Charge \d|Discharge \d|0\sW)/, /^Output\d/, /^Charge accepted\d/, /^State of charge\d+%$/, /^Minimum SoC15%$/, /^Winter target25%$/]);
+    await expect(power.locator(".legend-item").filter({ hasText: "Charge accepted" }).locator("i")).toHaveClass(/dash/);
+    await expect(power.locator(".card-sub")).toHaveText("From InfluxDB · what charged the battery, where its power went, and its charge");
+    await expect(temperature.locator(".legend-item")).toHaveText([/^Pack 1.*°C$/, /^Inverter.*°C$/]);
+    await expect(page.getByRole("group", { name: "Overlays" })).toHaveCount(0);
+    const states = page.getByTestId("battery-states");
+    await expect(states.locator(".card-sub").first()).toHaveText("As the device reports them, and what the EMS decided");
+    await states.getByRole("button", { name: "States" }).click();
+    await expect(states.locator("[data-lane] .source")).toHaveText(["Device", "Device", "EMS", "EMS"]);
+    await expect(states.getByTestId("state-lanes")).toMatchAriaSnapshot(`
+      - list "States":
+        - listitem: /^Heating \\(Reported by the device\\) (up to|never|\\d)/
+        - listitem: /^Too cold \\(Reported by the device\\) (up to|never|\\d)/
+        - listitem: /^AC charging role \\(Decided by the EMS\\) (up to|never|\\d)/
+        - listitem: /^Battery first \\(Decided by the EMS\\) (up to|never|\\d)/
+    `);
+
+    const latest = await power.locator(".legend-time").textContent();
+    await power.locator(".u-over").scrollIntoViewIfNeeded();
+    const box = await power.locator(".u-over").boundingBox();
+    const under = await temperature.locator(".u-over").boundingBox();
+    expect(Math.abs(under.x - box.x)).toBeLessThan(1);
+    expect(Math.abs(under.width - box.width)).toBeLessThan(1);
+    await page.mouse.move(box.x + box.width * 0.25, box.y + box.height / 2);
+    const moment = power.locator(".legend-time");
+    await expect(moment).not.toHaveText(latest || "");
+    await expect(temperature.locator(".legend-time")).toHaveText((await moment.textContent()) || "");
+
+    await page.mouse.move(box.x + box.width * 0.3, box.y + box.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(box.x + box.width * 0.6, box.y + box.height / 2, { steps: 6 });
+    const selected = (chart) => chart.locator(".u-select").evaluate((node) => node.getBoundingClientRect().width);
+    await expect.poll(() => selected(power)).toBeGreaterThan(0);
+    await page.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))));
+    expect(await selected(temperature)).toBe(0);
+    await page.mouse.up();
+    await expect(power.getByTestId("chart-zoom-reset")).toBeVisible();
+    await expect(temperature.getByTestId("chart-zoom-reset")).toBeVisible();
+    await power.getByTestId("chart-zoom-reset").click();
+    await expect(page.getByTestId("chart-zoom-reset")).toHaveCount(0);
+
+    await page.mouse.move(box.x + box.width * 0.5, box.y - 40);
+    await power.getByTestId("chart-zoom-in").click();
+    await expect(power.getByTestId("chart-zoom-reset")).toBeVisible();
+    await expect(temperature.getByTestId("chart-zoom-reset")).toBeVisible();
+    await temperature.getByTestId("chart-zoom-reset").click();
+    await expect(page.getByTestId("chart-zoom-reset")).toHaveCount(0);
+  });
+
+  test("the batteries view draws each pack's power below zero while it charges, as the battery, and in Expert its voltage beside the device's and its current", async ({ page }) => {
+    await shapeLive(page, withCells);
+    await cellSeries(page, "/api/analytics/series");
+    await openModern(page, "#/analytics");
+    await expect(page.locator(".chart .u-over")).toBeVisible();
+    await Promise.all([
+      page.waitForRequest(batteryRead()),
+      page.getByTestId("analytics-view-block").locator(".seg").first().getByRole("button", { name: "Batteries", exact: true }).click(),
+    ]);
+    await Promise.all([
+      page.waitForRequest(batteryRead((params) => params.get("devices") === "WR2")),
+      page.getByRole("combobox", { name: "Device" }).selectOption("WR2"),
+    ]);
+    const measures = page.getByRole("group", { name: "Measure" });
+    const chart = page.getByRole("region", { name: "Batteries", exact: true });
+    const kpis = (id) => page.getByTestId(`analytics-${id}-kpi`);
+    const [power] = await Promise.all([
+      page.waitForRequest(batteryRead((params) => (params.get("series") || "").startsWith("pack_power"))),
+      measures.getByRole("button", { name: "Pack power", exact: true }).click(),
+    ]);
+    expect(new URL(power.url()).searchParams.get("series")).toBe("pack_power:1,pack_power:2,heat_state,low_temp");
+    await expect(chart.locator(".legend-item")).toHaveText(["Pack 1Charge 300 W", "Pack 2Discharge 100 W"]);
+    await expect(page.locator(".card-sub").filter({ hasText: "each pack's power" })).toHaveText("From InfluxDB · each pack's power, below zero while it charges");
+    await expect(kpis("power").locator(".kpi-label")).toHaveText(["Strongest discharge · 24 h", "Strongest charge · 24 h"]);
+    await expect(kpis("power").locator(".kpi-value")).toHaveText(["100 W", "300 W"]);
+
+    await page.getByRole("group", { name: "Detail" }).getByRole("button", { name: "Expert", exact: true }).click();
+    const [voltage] = await Promise.all([
+      page.waitForRequest(batteryRead((params) => (params.get("series") || "").startsWith("pack_voltage"))),
+      measures.getByRole("button", { name: "Voltage", exact: true }).click(),
+    ]);
+    expect(new URL(voltage.url()).searchParams.get("series")).toBe("pack_voltage:1,pack_voltage:2,device_voltage,heat_state,low_temp,ac_input,winter_hold,derate,error_flag");
+    await expect(chart.locator(".legend-item")).toHaveText(["Pack 147.60 V", "Pack 247.70 V", "Device47.80 V"]);
+    await expect(kpis("voltage").locator(".kpi-label")).toHaveText(["Lowest pack voltage · 24 h", "Highest pack voltage · 24 h"]);
+    await expect(kpis("voltage").locator(".kpi-value")).toHaveText(["47.60 V", "47.70 V"]);
+
+    const [current] = await Promise.all([
+      page.waitForRequest(batteryRead((params) => (params.get("series") || "").startsWith("pack_current"))),
+      measures.getByRole("button", { name: "Current", exact: true }).click(),
+    ]);
+    expect(new URL(current.url()).searchParams.get("series")).toBe("pack_current:1,pack_current:2,heat_state,low_temp,ac_input,winter_hold,derate,error_flag");
+    await expect(chart.locator(".legend-item")).toHaveText(["Pack 1Charge 6.2 A", "Pack 2Discharge 2.1 A"]);
+    await expect(kpis("current").locator(".kpi-value")).toHaveText(["2.1 A", "6.2 A"]);
+    await expect(kpis("power")).toHaveCount(0);
   });
 });
 
@@ -787,6 +938,55 @@ const analyticsRead = (check = () => true) => seriesRead("/api/analytics/series"
 const startsWith = (labels) => labels.map((label) => new RegExp(`^${label}`));
 
 test.describe("Modern dashboard views: analytics @smoke", () => {
+  const spanning = (page, answers) => page.route("**/api/analytics/series**", (route) => {
+    answers.count += 1;
+    const params = new URL(route.request().url()).searchParams;
+    const ids = (params.get("series") || "").split(",").filter(Boolean);
+    const now = Math.floor(Date.now() / 1000) + answers.count;
+    const start = params.has("start") ? Number(params.get("start")) : now - 86400;
+    const end = params.has("end") ? Number(params.get("end")) : now;
+    const iso = (seconds) => new Date(seconds * 1000).toISOString();
+    const series = Object.fromEntries(ids.map((id) => [id, [answers.count, answers.count]]));
+    return route.fulfill({ json: { available: true, source: "influxdb", start: iso(start), end: iso(end), time: [now - 120, now - 60], series, meta: {} } });
+  });
+
+  test("the chart spans the range the answer names, so zooming in reads a window inside it rather than inside the data", async ({ page }) => {
+    const answers = { count: 0 };
+    await spanning(page, answers);
+    await openModern(page, "#/analytics");
+    await expect(page.locator(".chart .u-over")).toBeVisible();
+    const [zoomed] = await Promise.all([
+      page.waitForRequest(analyticsRead((params) => params.has("start"))),
+      page.getByRole("button", { name: "Zoom in" }).first().click(),
+    ]);
+    const params = new URL(zoomed.url()).searchParams;
+    expect(Number(params.get("end")) - Number(params.get("start"))).toBeGreaterThan(3600);
+    expect(Number(params.get("start"))).toBeLessThan(Date.now() / 1000 - 3600);
+  });
+
+  test("a browser clock behind the server's still shows the latest point the answer holds", async ({ page }) => {
+    await page.clock.install({ time: Date.now() - 3_600_000 });
+    const answers = { count: 0 };
+    await spanning(page, answers);
+    await openModern(page, "#/analytics");
+    await expect(page.locator(".chart .u-over")).toBeVisible();
+    await expect(page.getByRole("region", { name: "Overview", exact: true }).locator(".legend-item").first()).toContainText(new RegExp(`${answers.count}\\sW`));
+  });
+
+  test("a refresh draws into the same chart, though every answer names a later end", async ({ page }) => {
+    await page.clock.install();
+    const answers = { count: 0 };
+    await spanning(page, answers);
+    await openModern(page, "#/analytics");
+    await expect(page.locator(".chart .u-over")).toBeVisible();
+    const plot = await page.locator(".chart .uplot").first().elementHandle();
+    const before = answers.count;
+    await page.clock.fastForward(31_000);
+    await expect.poll(() => answers.count).toBeGreaterThan(before);
+    await expect(page.getByRole("region", { name: "Overview", exact: true }).locator(".legend-item").first()).toContainText(new RegExp(`${answers.count}\\sW`));
+    expect(await plot.evaluate((element) => element.isConnected)).toBe(true);
+  });
+
   test("each view reads its own series and names its chart, legend and tiles", async ({ page }) => {
     await openModern(page, "#/analytics");
     await expect(page.locator(".chart .u-over")).toBeVisible();
@@ -1061,17 +1261,37 @@ test.describe("Modern dashboard views: labels fit @smoke", () => {
     test(`every Analytics KPI label stays on one line: ${lang}`, async ({ page }) => {
       test.slow();
       await inLanguage(page, "#/analytics", lang);
-      const views = page.locator('[role="group"]').first().getByRole("button");
+      const views = page.getByTestId("analytics-view-block").locator(".seg").first().getByRole("button");
+      await expect(views).toHaveCount(7);
       for (let index = 0; index < await views.count(); index += 1) {
         await views.nth(index).click();
         await expect(page.locator(".kpi-label").first()).toBeVisible();
-        const measures = page.getByTestId("battery-controls").locator(".seg").first().getByRole("button");
-        for (let measure = 0; measure < Math.max(1, await measures.count()); measure += 1) {
-          if (await measures.count()) await measures.nth(measure).click();
-          for (const width of WIDTHS) {
-            await page.setViewportSize({ width, height: 900 });
-            expect(await broken(page.locator(".kpi-label")), `${lang}, view ${index}, measure ${measure}, at ${width} px`).toEqual([]);
-          }
+        if (await page.getByTestId("battery-controls").count()) continue;
+        for (const width of WIDTHS) {
+          await page.setViewportSize({ width, height: 900 });
+          expect(await broken(page.locator(".kpi-label")), `${lang}, view ${index}, at ${width} px`).toEqual([]);
+        }
+      }
+    });
+
+    test(`every batteries KPI label stays on one line, Expert's measures too: ${lang}`, async ({ page }) => {
+      test.slow();
+      await shapeLive(page, withCells);
+      await cellSeries(page, "/api/analytics/series");
+      await inLanguage(page, "#/analytics", lang);
+      await expect(page.locator(".kpi-label").first()).toBeVisible();
+      await page.getByTestId("analytics-view-block").locator(".seg").first().getByRole("button").last().click();
+      const controls = page.getByTestId("battery-controls");
+      await expect(controls).toBeVisible();
+      await controls.locator(".detail").getByRole("button").last().click();
+      const measures = controls.locator(".seg").first().getByRole("button");
+      await expect(measures).toHaveCount(8);
+      for (let measure = 0; measure < await measures.count(); measure += 1) {
+        await measures.nth(measure).click();
+        await expect(page.locator(".kpi-label").first()).toBeVisible();
+        for (const width of WIDTHS) {
+          await page.setViewportSize({ width, height: 900 });
+          expect(await broken(page.locator(".kpi-label")), `${lang}, measure ${measure}, at ${width} px`).toEqual([]);
         }
       }
     });
@@ -1117,20 +1337,26 @@ test.describe("Modern dashboard views: labels fit @smoke", () => {
     }
   });
 
-  test("a device card with several packs keeps every pack figure whole", async ({ page }) => {
+  test("a device card with several packs keeps every pack figure and its diagnosis whole", async ({ page }) => {
     test.slow();
     await shapeLive(page, (body) => {
       body.devices.WR1.battery_packs = [{ pack: 1, soc: 61, cell_min_v: 3.17, cell_max_v: 3.18, power_w: 30, state: 1, temp_c: 13 }];
       body.devices.WR2.battery_packs = [
-        { pack: 1, soc: 30, cell_min_v: 3.2, cell_max_v: 3.22, power_w: 30, state: 1, temp_c: -1.5 },
-        { pack: 2, soc: 70, cell_min_v: 3.3, cell_max_v: 3.33, power_w: 10, state: 2, temp_c: 25 },
+        { pack: 1, soc: 30, cell_min_v: 3.2, cell_max_v: 3.22, power_w: 30, state: 1, temp_c: -1.5, voltage_v: 47.6, current_a: 0.6 },
+        { pack: 2, soc: 70, cell_min_v: 3.3, cell_max_v: 3.33, power_w: 10, state: 2, temp_c: 25, voltage_v: 47.95, current_a: -12.5 },
       ];
+      Object.assign(body.devices.WR2, {
+        heat_state: 1, low_temp: 1, derate: 1, error_flag: 1, voltage_v: 47.88, battery_power_w: -1250,
+        remain_minutes: 2950, rssi: -61, charge_avail_w: 1200, discharge_avail_w: 1200,
+      });
     });
     for (const lang of LANGUAGES) {
       await inLanguage(page, "#/devices", lang);
       await expect(page.getByTestId("device-cells")).toHaveCount(1);
+      await expect(page.getByTestId("device-diagnosis")).not.toHaveCount(0);
+      await expect(page.locator('[data-device="WR2"] [data-testid="device-diagnosis"] summary .warn')).toHaveText(/ · 4 /);
       await page.locator('[data-testid="device-card"] details').evaluateAll((blocks) => blocks.forEach((block) => { block.open = true; }));
-      const lines = page.locator('[data-testid="device-card"] :is(.fact-label .ellipsis, .fact-value)');
+      const lines = page.locator('[data-testid="device-card"] :is(.fact-label .ellipsis, .fact-value, .fact-note, summary, .states .pill)');
       for (const width of WIDTHS) {
         await page.setViewportSize({ width, height: 900 });
         expect(await broken(lines), `${lang} at ${width} px`).toEqual([]);

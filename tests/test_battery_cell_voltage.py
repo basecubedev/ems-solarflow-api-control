@@ -20,7 +20,7 @@ from dashboard.sqlite_store import DashboardStore
 from dashboard.telemetry import _state_telemetry_fields
 from ems.clients import battery_pack_cells, parse_device, zendure_cell_voltage_v, zero_device_state
 from ems.history import schema
-from ems.history.influx_provider import PACK_CELL_INFLUX_SERIES, InfluxHistoryProvider
+from ems.history.influx_provider import PACK_INFLUX_SERIES, InfluxHistoryProvider
 from ems.history.influx_writer import _PACK_CELL_FIELDS, build_telemetry_lines
 from ems.history.provider import (
     PACK_CELL_REDUCERS,
@@ -29,7 +29,7 @@ from ems.history.provider import (
     normalize_series,
     pack_cells_of_series,
 )
-from ems.models import MAX_PACK_NUMBER, PackCells
+from ems.models import MAX_PACK_NUMBER, PACK_CELLS_APART, PackCells
 from ems.diagnostics import diagnose_reported_property_names
 from ems.zendure_mqtt.snapshot import ZendureMqttAggregator, merge_packs, observable_metrics, pack_witness
 
@@ -179,7 +179,7 @@ def test_an_mqtt_report_of_one_pack_of_two_keeps_the_other_pack():
 
     assert _mqtt_state(aggregator).battery_packs == (
         PackCells(pack=1, cell_min_v=3.2, cell_max_v=3.22),
-        PackCells(pack=2, cell_min_v=3.31, cell_max_v=3.33),
+        PackCells(pack=2, cell_min_v=3.31, cell_max_v=3.33, cells_paired=False),
     )
 
 
@@ -197,7 +197,7 @@ def test_a_change_report_updates_the_packs_it_names_and_leaves_the_rest():
     known = [{"sn": "PACK-A", "minVol": 320}, {"sn": "PACK-B", "minVol": 330}]
 
     assert merge_packs(known, [{"sn": "PACK-A", "maxVol": 322}], 2) == [
-        {"sn": "PACK-A", "minVol": 320, "maxVol": 322},
+        {"sn": "PACK-A", "minVol": 320, "maxVol": 322, PACK_CELLS_APART: True},
         {"sn": "PACK-B", "minVol": 330},
     ]
     assert merge_packs(known, [{"minVol": 316}], 2) == [{"minVol": 316}]
@@ -276,8 +276,10 @@ def test_the_live_data_names_each_pack_by_number_and_no_serial():
     fields = _state_telemetry_fields(state)
 
     assert fields["battery_packs"] == [
-        {"pack": 1, "cell_min_v": 3.2, "cell_max_v": 3.22, "power_w": None, "state": None, "temp_c": None, "soc": None},
-        {"pack": 2, "cell_min_v": 3.3, "cell_max_v": None, "power_w": None, "state": None, "temp_c": None, "soc": None},
+        {"pack": 1, "cell_min_v": 3.2, "cell_max_v": 3.22, "cell_spread_v": 0.02, "power_w": None, "state": None, "temp_c": None, "soc": None,
+         "voltage_v": None, "current_a": None, "flow_w": None},
+        {"pack": 2, "cell_min_v": 3.3, "cell_max_v": None, "cell_spread_v": None, "power_w": None, "state": None, "temp_c": None, "soc": None,
+         "voltage_v": None, "current_a": None, "flow_w": None},
     ]
     assert "PACK-A" not in repr(fields)
     assert _state_telemetry_fields(zero_device_state())["battery_packs"] == []
@@ -296,7 +298,7 @@ def test_influxdb_records_one_point_per_pack_and_no_serial():
 
     packs = [line for line in lines if line.startswith("battery_pack")]
     assert packs == [
-        "battery_pack,device=Grill,pack=1,source=zendure cell_max_v=3.22,cell_min_v=3.2 1",
+        "battery_pack,device=Grill,pack=1,source=zendure cell_max_v=3.22,cell_min_v=3.2,cell_spread_v=0.02 1",
         "battery_pack,device=Grill,pack=2,source=zendure cell_min_v=3.3 1",
     ]
     assert not any("PACK-" in line for line in lines)
@@ -398,8 +400,9 @@ def test_the_safe_sync_adds_the_cell_tasks_beside_main_tasks_it_keeps():
 
 
 def test_every_pack_series_reads_a_field_the_writer_records_in_both_histories():
-    assert sorted(PACK_CELL_SERIES.values()) == sorted(_PACK_CELL_FIELDS) == sorted(PACK_CELL_INFLUX_SERIES)
-    for field_name, spec in PACK_CELL_INFLUX_SERIES.items():
+    assert sorted(PACK_CELL_SERIES.values()) == sorted(_PACK_CELL_FIELDS)
+    for field_name in _PACK_CELL_FIELDS:
+        spec = PACK_INFLUX_SERIES[field_name]
         assert spec["measurement"] == schema.CELL_MEASUREMENT == "battery_pack"
         assert spec["field"] == field_name
         assert spec["window"] == spec["collapse"] == PACK_CELL_REDUCERS[field_name]
@@ -496,7 +499,8 @@ def test_a_device_offline_or_out_of_date_publishes_no_cells():
     snapshot = _snapshot_of(states, {"Live": True, "Offline": False, "Stale": True}, fresh=lambda name: name != "Stale")
 
     assert snapshot["devices"]["Live"]["battery_packs"] == [
-        {"pack": 1, "cell_min_v": 3.17, "cell_max_v": 3.18, "power_w": None, "state": None, "temp_c": None, "soc": None}
+        {"pack": 1, "cell_min_v": 3.17, "cell_max_v": 3.18, "cell_spread_v": 0.01, "power_w": None, "state": None, "temp_c": None, "soc": None,
+         "voltage_v": None, "current_a": None, "flow_w": None}
     ]
     assert snapshot["devices"]["Offline"]["battery_packs"] == []
     assert snapshot["devices"]["Stale"]["battery_packs"] == []

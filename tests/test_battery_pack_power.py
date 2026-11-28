@@ -46,7 +46,10 @@ def test_the_pack_reports_the_drain_the_device_level_values_hide():
 
     assert (state.pack_in, state.pack_out) == (0, 0)
     assert state.battery_packs == (
-        PackCells(pack=1, cell_min_v=3.25, cell_max_v=3.26, power_w=4.0, state=2, soc=41.0),
+        PackCells(
+            pack=1, cell_min_v=3.25, cell_max_v=3.26, power_w=4.0, state=2, soc=41.0,
+            voltage_v=48.8, current_a=-0.1, flow_w=-4.0,
+        ),
     )
 
 
@@ -83,7 +86,11 @@ def test_the_live_data_carries_each_pack_s_power_and_state():
     fields = _state_telemetry_fields(parse_device(IDLE_AT_MIN_SOC))
 
     assert fields["battery_packs"] == [
-        {"pack": 1, "cell_min_v": 3.25, "cell_max_v": 3.26, "power_w": 4.0, "state": 2, "temp_c": None, "soc": 41.0}
+        {
+            "pack": 1, "cell_min_v": 3.25, "cell_max_v": 3.26, "cell_spread_v": 0.01, "power_w": 4.0, "state": 2,
+            "temp_c": None, "soc": 41.0,
+            "voltage_v": 48.8, "current_a": -0.1, "flow_w": -4.0,
+        }
     ]
 
 
@@ -96,7 +103,9 @@ def _lines(report):
 
 def test_influxdb_records_the_pack_power_and_state_beside_its_cells():
     assert _lines(IDLE_AT_MIN_SOC) == [
-        "battery_pack,device=Grill,pack=1,source=zendure cell_max_v=3.26,cell_min_v=3.25,power_w=4.0,soc=41.0,state=2.0 1"
+        "battery_pack,device=Grill,pack=1,source=zendure cell_max_v=3.26,cell_min_v=3.25,cell_spread_v=0.01,"
+        "current_a=-0.1,flow_w=-4.0,"
+        "power_w=4.0,soc=41.0,state=2.0,voltage_v=48.8 1"
     ]
 
 
@@ -107,7 +116,7 @@ def test_a_value_the_pack_does_not_report_is_left_out_and_a_pack_with_power_only
     }
 
     assert _lines(report) == [
-        "battery_pack,device=Grill,pack=1,source=zendure power_w=30.0,state=1.0 1",
+        "battery_pack,device=Grill,pack=1,source=zendure flow_w=30.0,power_w=30.0,state=1.0 1",
         "battery_pack,device=Grill,pack=2,source=zendure cell_min_v=3.3 1",
     ]
 
@@ -147,4 +156,4 @@ def test_an_mqtt_report_reaches_the_same_pack_power_and_state():
     snapshot = aggregator.snapshots()[0]
     state = parse_device({"properties": observable_metrics(snapshot.metrics), "packData": pack_witness(snapshot)})
 
-    assert state.battery_packs == (PackCells(pack=1, cell_min_v=3.25, cell_max_v=3.26, power_w=6.0, state=2),)
+    assert state.battery_packs == (PackCells(pack=1, cell_min_v=3.25, cell_max_v=3.26, power_w=6.0, state=2, flow_w=-6.0),)

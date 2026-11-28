@@ -218,8 +218,8 @@ test.describe("EMS Dashboard documentation captures @docs", () => {
     await open(page, baseURL, "#/devices");
     const card = page.locator('[data-testid="device-card"][data-device="WR1"]');
     await expect(card).toHaveAttribute("data-state", "online");
-    for (const name of ["Firmware status", "Device settings"]) await card.locator("details.more > summary", { hasText: name }).click();
-    await expect(card.locator("details.more[open]")).toHaveCount(2);
+    for (const name of ["Firmware status", "Device settings", "Diagnosis"]) await card.locator("details.more > summary", { hasText: name }).click();
+    await expect(card.locator("details.more[open]")).toHaveCount(3);
     await shoot(page, "dashboard-devices-details");
   });
 
@@ -264,13 +264,28 @@ test.describe("EMS Dashboard documentation captures @docs", () => {
     await open(page, baseURL, "#/analytics", { scenario: "ac-charging" });
     await waitForChart(page);
     await page.getByTestId("analytics-view-block").getByRole("button", { name: "Batteries", exact: true }).click();
-    await expect(page.getByRole("region", { name: "Batteries", exact: true }).locator(".legend-item")).toHaveCount(2);
+    await expect(page.getByRole("region", { name: "Batteries", exact: true }).locator(".legend-item")).toHaveCount(3);
     await waitForChart(page);
     const states = page.getByTestId("battery-states");
     await states.getByRole("button", { name: "States" }).click();
     await expect(states.getByTestId("state-lanes").locator("[data-lane]")).toHaveCount(2);
     await scrollTo(page, page.getByTestId("analytics-view-block"), 12);
     await shoot(page, "dashboard-analytics-batteries");
+  });
+
+  test("dashboard-analytics-batteries-winter", async ({ page, baseURL }) => {
+    await open(page, baseURL, "#/analytics", { scenario: "ac-charging", viewport: { width: DESKTOP.width, height: 1400 } });
+    await waitForChart(page);
+    await page.getByTestId("analytics-view-block").getByRole("button", { name: "Batteries", exact: true }).click();
+    await page.getByRole("group", { name: "Measure" }).getByRole("button", { name: "Winter", exact: true }).click();
+    await expect(page.getByRole("region", { name: "Batteries", exact: true }).locator(".legend-item")).toHaveCount(8);
+    await expect(page.getByRole("region", { name: "Temperature", exact: true }).locator(".legend-item")).toHaveCount(3);
+    await waitForChart(page);
+    const states = page.getByTestId("battery-states");
+    await states.getByRole("button", { name: "States" }).click();
+    await expect(states.getByTestId("state-lanes").locator("[data-lane]")).toHaveCount(4);
+    await scrollTo(page, page.getByTestId("analytics-view-block"), 12);
+    await shoot(page, "dashboard-analytics-batteries-winter");
   });
 
   test("dashboard-control", async ({ page, baseURL }) => {
