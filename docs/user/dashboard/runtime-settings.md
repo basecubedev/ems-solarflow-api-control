@@ -74,11 +74,19 @@ on the same page.
 | 01 | **EMS / System** | Global limits and loop control | **EMS enabled**, **Max total power** (W), **Min output limit** (W), **Grid target while discharging** and **Grid target while charging** (each a direction, import or export, and up to 200 W, with a sentence under it saying what that means; [Grid target](../../technical/control-logic.md#grid-target)), **Loop interval** (s) |
 | 02, 03, … | One per device (**WR1**, **WR2**, …) | Device runtime values | **Device enabled**, **AC charging**, **AC discharging**, **Max power** (W), **PV priority** (×), **Off-grid socket**, **AC role**, **AC charge power** (W), and **Light**, **Fan**, **Buzzer** and **Battery heating** where the inverter has them |
 | next | **Winter mode** | Seasonal charging behaviour | **Winter mode** |
-| last | **AC charging** | Charge the batteries from grid surplus | **AC charging** |
+| next | **AC charging** | Charge the batteries from grid surplus | **AC charging** |
+| last | **Battery care** | Gentle discharge close to minSoc | **Battery care**, **Full power from (summer)** and **(winter)** (%), **PV only up to** (%), **Minimum discharge** (W), **Above PV** (%), **Above PV, at least** (W) |
 
-Each card has its own **Save** button.
+Each card has its own **Save** button. A switch stands right before its name.
+A number has **−** and **+** beside it, which step it, and, where the settings
+give it one, a bar under it that shows where the value sits in its usual
+range, with a fine tick at its default where it has one; pointing at the
+field, or editing it, names that default. **Max total power**, a device's
+**Max power** and **AC charge power** have no default to tick; an emptied
+**AC charge power** fills its bar in the paler colour, for the device's
+maximum. Two or three choices are buttons side by side.
 
-An emptied number field names its default in grey, such as *35 (default)*, and
+An emptied number field names its default in grey, such as *35 W (default)*, and
 **Save** sets that default. The default is the one the Admin's settings name
 too. **Max total power** and a device's **Max power** have none: the shipped
 value is the example installation's, not yours. **AC charge power** shows

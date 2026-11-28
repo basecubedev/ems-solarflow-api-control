@@ -177,7 +177,7 @@ and the **Settings check** shows its verdict: **Ready**, **Checking…** or
 **About Control and safety.** These switches are on by default, so a finished
 setup actually controls your system — you do not have to switch anything on.
 They exist to *stop* EMS: switch one off for read-only validation, or switch on
-*Dry run* while you check a setup. Read the group heading before the checkbox,
+*Dry run* while you check a setup. Read the group heading before the switch,
 because the two groups point in opposite directions:
 
 | Group | On means |

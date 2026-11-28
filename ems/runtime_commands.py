@@ -24,6 +24,7 @@ from ems.config import (
     GRID_TARGET_MAX_W,
 )
 from ems.config import OFFGRID_SOCKET_MODES as FIRMWARE_OFFGRID_SOCKET_MODES
+from ems.config_catalog import STEPPER_BAR_RANGES
 from ems.logging_utils import log_event
 from ems.winter_policies import MAX_RAISE_ABOVE_SOC
 
@@ -54,6 +55,10 @@ DEVICE_FIELDS = {
 DEVICE_AC_FIELDS = {
     "runtime_role": ("enum", ("ac_output", "ac_input")),
     "ac_charge_power_w": ("int_or_max", (0, GENERIC_MAX_POWER_W)),
+}
+
+RUNTIME_BAR_RANGES = {
+    "devices[].ac_charge_power_w": (0, 2400),
 }
 
 DEVICE_SETTING_FIELDS = {
@@ -604,26 +609,36 @@ def attach_limits(payload, validation_context, offered_settings=None, defaults=N
 
 
 def field_specs():
-    """Each runtime field's kind, range and choices as the writer checks them, for a form to offer the same."""
+    """Each runtime field's kind, range and choices as the writer checks them, for a form to offer the same.
+
+    A number the settings catalogue draws as a bar carries that bar's range as
+    ``scale`` (``STEPPER_BAR_RANGES``), so the dashboard draws the same bar as
+    the Admin console; a number only the runtime state holds takes its bar
+    from ``RUNTIME_BAR_RANGES``. It is a display range, never a limit.
+    """
 
     return {
-        "system": {key: _field_spec(*rule) for key, rule in SYSTEM_FIELDS.items()},
+        "system": {key: _field_spec(*rule, path=f"system.{key}") for key, rule in SYSTEM_FIELDS.items()},
         "devices": {
-            key: _field_spec(*rule) for key, rule in {**DEVICE_FIELDS, **DEVICE_AC_FIELDS}.items()
+            key: _field_spec(*rule, path=f"devices[].{key}")
+            for key, rule in {**DEVICE_FIELDS, **DEVICE_AC_FIELDS}.items()
         },
         "sections": {
-            section: {key: _field_spec(*rule) for key, rule in fields.items()}
+            section: {key: _field_spec(*rule, path=f"{section}.{key}") for key, rule in fields.items()}
             for section, fields in SECTION_FIELDS.items()
         },
     }
 
 
-def _field_spec(value_type, rule):
+def _field_spec(value_type, rule, path=None):
     spec = {"type": value_type}
     if value_type == "enum":
         spec["options"] = list(rule)
     elif isinstance(rule, tuple) and len(rule) == 2:
         spec["min"], spec["max"] = rule
+    bar = STEPPER_BAR_RANGES.get(path) or RUNTIME_BAR_RANGES.get(path)
+    if bar:
+        spec["scale"] = list(bar)
     return spec
 
 

@@ -61,6 +61,97 @@ RISKS = {
 }
 
 
+STEPPER_BAR_RANGES = {
+    "system.max_total_power": (0, 2400),
+    "system.max_device_power": (0, 2400),
+    "system.loop_interval": (1, 30),
+    "system.deadband": (0, 50),
+    "system.min_output_limit": (0, 200),
+    "system.grid_target_discharge_w": (-200, 200),
+    "system.grid_target_charge_w": (-200, 200),
+    "system.output_control.target_deadband_w": (0, 50),
+    "system.output_control.load_deadband_w": (0, 50),
+    "system.output_control.ramp_up_w_per_cycle": (0, 1000),
+    "system.output_control.ramp_down_w_per_cycle": (0, 1000),
+    "system.output_control.device_ramp_up_w_per_cycle": (0, 1000),
+    "system.output_control.device_ramp_down_w_per_cycle": (0, 1000),
+    "system.output_control.median_window": (1, 10),
+    "system.output_control.ema_alpha": (0, 1),
+    "system.output_control.sign_change_threshold_w": (0, 200),
+    "system.output_control.sign_change_filter_reset_factor": (0, 2),
+    "system.output_control.large_import_bypass_w": (0, 1500),
+    "system.output_control.large_export_bypass_w": (0, 1500),
+    "system.output_control.bypass_ramp_multiplier": (0, 3),
+    "system.output_control.telemetry_max_age_seconds": (0, 60),
+    "system.output_control.stale_telemetry_ramp_factor": (0, 1),
+    "system.output_control.write_dead_time_seconds": (0, 10),
+    "system.pv_charge_balance_deadband_percent": (0, 10),
+    "system.pv_charge_balance_full_bias_percent": (0, 50),
+    "system.pv_charge_balance_strength": (0, 1),
+    "system.soc_reconcile_interval": (1, 60),
+    "grid_meter.mqtt.max_age_seconds": (0, 120),
+    "devices[].max_power": (0, 2400),
+    "devices[].pv_kwp": (0, 5),
+    "devices[].pv_priority_factor": (0.01, 3),
+    "devices[].battery_kwh": (0, 12),
+    "devices[].min_soc": (0, 100),
+    "devices[].max_soc": (0, 100),
+    "zendure_mqtt.connect_timeout_seconds": (1, 60),
+    "zendure_mqtt.keepalive_seconds": (2, 120),
+    "winter.summer_min_soc": (0, 100),
+    "winter.winter_min_soc": (0, 100),
+    "winter.ramp_step_percent": (1, 3),
+    "winter.adjust_hour": (0, 23),
+    "battery_care.summer_full_points": (0, 10),
+    "battery_care.winter_full_points": (0, 10),
+    "battery_care.pv_only_points": (0, 10),
+    "battery_care.min_discharge_w": (0, 300),
+    "battery_care.pv_margin_percent": (0, 100),
+    "battery_care.pv_margin_min_w": (0, 200),
+    "battery_full_charge_assist.interval_days": (1, 90),
+    "battery_full_charge_assist.assist_window_days": (0, 30),
+    "battery_full_charge_assist.assist_start_soc": (0, 100),
+    "battery_full_charge_assist.ac_charge_power": (0, 2400),
+    "ac_charge_control.charge_start_w": (0, 500),
+    "ac_charge_control.charge_hysteresis_w": (0, 200),
+    "ac_charge_control.entry_confirm_cycles": (1, 20),
+    "ac_charge_control.entry_window_cycles": (1, 30),
+    "ac_charge_control.max_charge_entries_per_hour": (1, 60),
+    "ac_charge_control.surplus_export_devices": (0, 4),
+    "ac_charge_control.surplus_export_min_headroom_percent": (0, 20),
+    "ac_charge_control.surplus_export_limit_seconds": (0, 600),
+    "ac_charge_control.surplus_export_hold_minutes": (0, 60),
+    "energy_savings.price_per_kwh": (0, 1),
+    "energy_savings.max_sample_delta_seconds": (0, 120),
+    "dashboard.history_hours": (0, 168),
+    "dashboard.write_interval_seconds": (0, 60),
+    "dashboard.session_idle_timeout_seconds": (0, 7200),
+    "dashboard.session_absolute_max_seconds": (0, 86400),
+    "dashboard.log_buffer_lines": (1, 20000),
+    "influxdb.raw_write_interval_seconds": (0, 60),
+    "influxdb.retention.raw_days": (0, 120),
+    "influxdb.retention.one_minute_days": (0, 365),
+    "influxdb.retention.five_minute_days": (0, 1095),
+    "influxdb.retention.one_hour_days": (0, 3650),
+}
+
+STEPPER_WITHOUT_BAR = frozenset(
+    {
+        "config_schema_version",
+        "config_defaults_revision",
+        "grid_meter.unit_id",
+        "grid_meter.node_id",
+        "grid_meter.mqtt.port",
+        "grid_meter.mqtt.value_scale",
+        "zendure_mqtt.port",
+        "dashboard.port",
+        "devices[].max_charge_power_w",
+        "ac_charge_control.max_total_charge_power_w",
+        "ac_charge_control.surplus_export_limit_w",
+    }
+)
+
+
 def _field(
     path,
     label,
@@ -97,6 +188,13 @@ def _field(
     behaves: an address, a port, a URL, a database the EMS writes to, the
     user a broker knows it by. The overview of settings that differ from the
     defaults leaves it out.
+
+    A number named in ``STEPPER_BAR_RANGES`` carries ``scale``, the range
+    the Admin draws its stepper as a bar over: generous rather than a limit,
+    so a value beyond it fills the bar and is still taken. A number in
+    ``STEPPER_WITHOUT_BAR`` is one a fill would say nothing about: an
+    address, a port, a version, a factor of any sign, or a power where 0
+    means no limit of its own.
     """
     if restart_required is not None:
         requires_restart = restart_required
@@ -124,6 +222,8 @@ def _field(
         item["min"] = minimum
     if maximum is not None:
         item["max"] = maximum
+    if path in STEPPER_BAR_RANGES:
+        item["scale"] = list(STEPPER_BAR_RANGES[path])
     if options is not None:
         item["options"] = list(options)
     if group is not None:
@@ -1848,7 +1948,7 @@ _SECTIONS = [
                 "ac_charge_control.surplus_export_devices",
                 "Full devices passing PV",
                 "How many full devices may pass all their PV out at once (the app's export switch) while another device can charge it from AC. EMS refuses export everywhere else and when nothing can charge. 0: EMS stops setting the switch.",
-                "number",
+                "integer",
                 minimum=0,
                 risk="control_stability",
             ),

@@ -58,7 +58,7 @@
               </span>
               <span class="badges">
                 {#if row.value !== undefined}<span class="badge saved num">{t("settings.defaults.saved", { value: words(row.field, row.value) })}</span>{/if}
-                <span class="badge default num">{t("settings.edit.defaultBadge", { value: words(row.field, row.standard) })}</span>
+                <span class="badge default num">{t("common.defaultIs", { value: words(row.field, row.standard) })}</span>
               </span>
               <button class="btn secondary small" type="button" aria-label={t("settings.defaults.showField", { name: label.text })} onclick={() => onshow(row)}><Icon name="eye" size="sm" />{t("settings.defaults.show")}</button>
             </li>

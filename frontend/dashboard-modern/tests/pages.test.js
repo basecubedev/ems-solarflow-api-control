@@ -13,7 +13,7 @@ test("every page in the navigation has the component that renders it, and no oth
   assert.ok(eager && lazy, "COMPONENTS or LAZY not found in App.svelte");
   const ids = [...eager[1].matchAll(/(\w+):/g), ...lazy[1].matchAll(/(\w+):/g)].map((match) => match[1]);
   assert.deepEqual(ids.sort(), PAGES.map((page) => page.id).sort());
-  assert.deepEqual([...lazy[1].matchAll(/(\w+):/g)].map((match) => match[1]), ["analytics"]);
+  assert.deepEqual([...lazy[1].matchAll(/(\w+):/g)].map((match) => match[1]), ["analytics", "control"]);
 });
 
 test("the bar's pages: four known pages, each once, the default filling the gaps", () => {

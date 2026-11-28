@@ -363,14 +363,15 @@ This page edits an existing installation.
   limit** for a device without its own. Below each, **Operating value: …**
   names the power EMS runs, changed on the Dashboard and never above the
   limit; lowering a limit below it lowers it at once, raising a limit leaves
-  it. A device's **Enabled** is its activation; **Control off on the
-  Dashboard** beside it says that EMS reads and shows the device but does not
-  write to it. A device you switch off, or turn telemetry-only while it keeps
+  it. A device's switch, at the right end of its card's head, is its
+  activation; **Control off on the Dashboard** in its card says that EMS reads
+  and shows the device but does not write to it. A device you switch off, or turn telemetry-only while it keeps
   its serial number, is taken out of control at once; one you switch back on
   is controlled again. Saving still never moves `data/` history,
   `docker-compose.yml`, or databases. A field whose value differs from its default shows
-  **Default: …**, for information only, except values that describe the
-  installation, such as power limits and battery size. An emptied field names
+  **Default: …**, for information only (a number with a bar ticks it on the
+  bar and names it while you point at it or edit it), except values that
+  describe the installation, such as power limits and battery size. An emptied field names
   in grey the value it falls back to, and saving makes that the value the EMS
   runs; a device's emptied power limit takes the system's per-device limit.
 
@@ -569,8 +570,8 @@ This page edits an existing installation.
   publishes into the project's MQTT namespace. Discovery offers it under the local broker it was seen on, and
   **Add inverter** adds it to the draft as a read-only card; there is nothing to
   set beyond what every device has, because the catalog fixes its topics and it
-  is never controlled. Like any device it has a **Device name** and an
-  **Enabled** switch; switched off, it stays in the config but EMS neither reads
+  is never controlled. Like any device it has a **Device name** and its own
+  switch in the card's head; switched off, it stays in the config but EMS neither reads
   it nor shows or counts its values (the device itself is never switched).
   Discovery shows the installed device as **In the settings**, whatever the broker
   profile it sits on is called, and the same device on another broker as an
@@ -591,7 +592,7 @@ This page edits an existing installation.
   transports of the same logical inverter. Switching between them keeps the
   device's identity, activation state, limits, SoC settings and allocation
   parameters, in every direction: a device you deactivated stays deactivated, and
-  one you did not stays active. Activation is the device's **Enabled** state and
+  one you did not stays active. Activation is the device's switch (its `enabled` value) and
   nothing else; a device that cannot control output is telemetry-only by
   capability, which never deactivates it. Only you make a device inactive.
   Control capability, unlike activation, is re-evaluated for the new connection:

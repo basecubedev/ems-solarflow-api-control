@@ -280,7 +280,8 @@
 {/snippet}
 
 {#snippet enabledField(device, index, kind)}
-  <SettingField field={{ path: "enabled", type: "boolean", label: t("devices.field.enabled"), description: t(`devices.enabledHint.${kind}`) }} lang={null} value={device.enabled !== false} operating={operatingLine(config.operating, "control", device?.original_name ?? "")} onchange={(value) => update(index, { ...device, enabled: value })} />
+  {@const line = operatingLine(config.operating, "control", device?.original_name ?? "")}
+  <p class="enabled-note"><span>{t(`devices.enabledHint.${kind}`)}</span>{#if line}<span class="badge operating num" title={line.hint} data-testid="operating-value">{line.text}</span>{/if}</p>
 {/snippet}
 
 <div class="editor" data-testid="devices-editor">
@@ -326,7 +327,7 @@
   {#each devices as device, index (keys[index] ?? `extra-${index}`)}
     {@const kind = deviceKind(device)}
     {#if kind === "local_api"}
-      <DeviceCard id={`inverter-${index}`} icon="zap" tone="c-inv" title={t("devices.inverter", { n: index + 1 })} model={t("devices.model.local")} meta={localSummary(device)} enabled={device.enabled !== false} connection={sourceLabel(device)} flag={hintFlag(device)} open={added === index || focus?.device === index} onremove={() => remove(index)}>
+      <DeviceCard id={`inverter-${index}`} icon="zap" tone="c-inv" title={t("devices.inverter", { n: index + 1 })} model={t("devices.model.local")} meta={localSummary(device)} enabled={device.enabled !== false} onenable={(value) => update(index, { ...device, enabled: value })} connection={sourceLabel(device)} flag={hintFlag(device)} open={added === index || focus?.device === index} onremove={() => remove(index)}>
         {@render inputHints(device, index)}
         <div class="fields">{@render enabledField(device, index, "local")}</div>
         {@render levelled(fields.identity, { device, index })}
@@ -336,7 +337,7 @@
       {@const control = mqttControl(device, catalog)}
       {@const model = hardwareModel(catalog, device.hardware_model)}
       {@const modelWords = model?.label ? catalogText(model.label) : { text: t("devices.mqtt.unknownModel") }}
-      <DeviceCard id={`mqtt-${index}`} icon="zap" tone="c-inv" title={t("devices.inverter", { n: index + 1 })} model={modelWords.text + (device.alternative_layout ? ` · ${t("devices.mqtt.alternativeLayout")}` : "")} modelLang={modelWords.lang} meta={mqttSummary(device)} enabled={device.enabled !== false} connection={sourceLabel(device)} flag={hintFlag(device)} open={added === index || focus?.device === index} onremove={() => remove(index)}>
+      <DeviceCard id={`mqtt-${index}`} icon="zap" tone="c-inv" title={t("devices.inverter", { n: index + 1 })} model={modelWords.text + (device.alternative_layout ? ` · ${t("devices.mqtt.alternativeLayout")}` : "")} modelLang={modelWords.lang} meta={mqttSummary(device)} enabled={device.enabled !== false} onenable={(value) => update(index, { ...device, enabled: value })} connection={sourceLabel(device)} flag={hintFlag(device)} open={added === index || focus?.device === index} onremove={() => remove(index)}>
         {@render inputHints(device, index)}
         <div class="fields">
           <SettingField field={own("name")} lang={null} value={device.name || ""} onchange={(value) => update(index, { ...device, name: value })} />
@@ -376,7 +377,7 @@
       {@const mqtt = device.mqtt || device.entry?.mqtt || {}}
       {@const state = externalState(device)}
       {@const consumer = mqtt.topic_family === CONSUMER_FAMILY}
-      <DeviceCard id={`external-${index}`} icon={consumer ? "plug-zap" : "zap"} tone={consumer ? "c-out" : "c-inv"} title={t(consumer ? "devices.consumer" : "devices.inverter", { n: index + 1 })} model={`${device.catalog_label || device.display_name || t("devices.external.label")} · ${t(`devices.external.model.${device.catalog_retired ? (device.proposal_id ? "readOnApply" : "notRead") : "read"}`)}`} meta={[device.name || t("settings.unnamed"), mqtt.device_id ? `ID ${mqtt.device_id}` : t("devices.idMissing"), t("devices.external.broker", { ref: mqtt.broker_ref || "default" }), t(`devices.external.state.${state}`)].join(" · ")} enabled={device.enabled !== false} flag={consumer ? "" : hintFlag(device)} onremove={() => remove(index)}>
+      <DeviceCard id={`external-${index}`} icon={consumer ? "plug-zap" : "zap"} tone={consumer ? "c-out" : "c-inv"} title={t(consumer ? "devices.consumer" : "devices.inverter", { n: index + 1 })} model={`${device.catalog_label || device.display_name || t("devices.external.label")} · ${t(`devices.external.model.${device.catalog_retired ? (device.proposal_id ? "readOnApply" : "notRead") : "read"}`)}`} meta={[device.name || t("settings.unnamed"), mqtt.device_id ? `ID ${mqtt.device_id}` : t("devices.idMissing"), t("devices.external.broker", { ref: mqtt.broker_ref || "default" }), t(`devices.external.state.${state}`)].join(" · ")} enabled={device.enabled !== false} onenable={(value) => update(index, { ...device, enabled: value })} flag={consumer ? "" : hintFlag(device)} onremove={() => remove(index)}>
         {#if !consumer}{@render inputHints(device, index)}{/if}
         <p class="note"><Icon name="info" />{t(`devices.external.note.${device.catalog_retired ? (device.proposal_id ? "moving" : "retired") : device.entry ? "installed" : "added"}`)}</p>
         <div class="fields">
@@ -390,7 +391,7 @@
         </div>
       </DeviceCard>
     {:else if kind === "opendtu_http"}
-      <DeviceCard id={`opendtu-${index}`} icon="solar-panel" tone="c-pv" title={t("devices.readOnlyDevice", { n: index + 1 })} model={t("devices.model.opendtu")} meta={[device.name || t("settings.unnamed"), endpoint(device), device.serial ? `SN ${device.serial}` : "", t("devices.readOnly")].filter(Boolean).join(" · ")} enabled={device.enabled !== false} connection={sourceLabel(device)} flag={hintFlag(device)} open={added === index} onremove={() => remove(index)}>
+      <DeviceCard id={`opendtu-${index}`} icon="solar-panel" tone="c-pv" title={t("devices.readOnlyDevice", { n: index + 1 })} model={t("devices.model.opendtu")} meta={[device.name || t("settings.unnamed"), endpoint(device), device.serial ? `SN ${device.serial}` : "", t("devices.readOnly")].filter(Boolean).join(" · ")} enabled={device.enabled !== false} onenable={(value) => update(index, { ...device, enabled: value })} connection={sourceLabel(device)} flag={hintFlag(device)} open={added === index} onremove={() => remove(index)}>
         {@render inputHints(device, index)}
         <div class="fields">
           {@render enabledField(device, index, "opendtu")}
@@ -403,7 +404,7 @@
         </div>
       </DeviceCard>
     {:else if kind === "e3dc_modbus"}
-      <DeviceCard id={`e3dc-${index}`} icon="battery" tone="c-bat" title={t("devices.readOnlyDevice", { n: index + 1 })} model={t("devices.model.e3dc")} meta={[device.name || t("settings.unnamed"), endpoint(device), t("devices.readOnly")].join(" · ")} enabled={device.enabled !== false} connection={sourceLabel(device)} flag={hintFlag(device)} open={added === index} onremove={() => remove(index)}>
+      <DeviceCard id={`e3dc-${index}`} icon="battery" tone="c-bat" title={t("devices.readOnlyDevice", { n: index + 1 })} model={t("devices.model.e3dc")} meta={[device.name || t("settings.unnamed"), endpoint(device), t("devices.readOnly")].join(" · ")} enabled={device.enabled !== false} onenable={(value) => update(index, { ...device, enabled: value })} connection={sourceLabel(device)} flag={hintFlag(device)} open={added === index} onremove={() => remove(index)}>
         {@render inputHints(device, index)}
         <div class="fields">
           {@render enabledField(device, index, "e3dc")}
@@ -457,6 +458,7 @@
   .setting { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
   .head { font-size: 13.5px; font-weight: 560; }
   .desc { margin: 0; color: var(--m-muted); font-size: 12.5px; }
+  .enabled-note { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--s2); margin: 0; color: var(--m-muted); font-size: 12.5px; grid-column: 1 / -1; }
   .level summary { cursor: pointer; font-size: 13px; font-weight: 600; margin-bottom: var(--s3); }
   .facts-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--s3) var(--s5); }
   .fact-line { display: flex; flex-direction: column; gap: 2px; min-width: 0; }

@@ -35,11 +35,20 @@
     };
   }
 
-  /** The range the EMS's writer accepts for a field, so this form offers no other. */
-  function accepted(scope, name) {
+  function spec(scope, name) {
     const fields = limits.fields || {};
-    const spec = (scope === "system" || scope === "devices" ? fields[scope] : fields.sections?.[scope])?.[name] || {};
-    return { min: spec.min, max: spec.max };
+    return (scope === "system" || scope === "devices" ? fields[scope] : fields.sections?.[scope])?.[name] || {};
+  }
+
+  /** The range the EMS's writer accepts for a field, so this form offers no other, and the settings catalogue's bar over it. */
+  function accepted(scope, name) {
+    const { min, max, scale } = spec(scope, name);
+    return { min, max, scale };
+  }
+
+  /** The settings catalogue's bar for a field whose bound this form sets itself. */
+  function scaleOf(scope, name) {
+    return spec(scope, name).scale;
   }
 
   /** The values the EMS's writer accepts for a device field, in its order. */
@@ -75,10 +84,10 @@
 
   const systemFields = $derived([
     { name: "enabled", type: "toggle", fallback: switchDefault(limits, null, "enabled"), label: t("runtime.emsEnabled") },
-    bounded({ name: "max_total_power", type: "number", label: t("runtime.maxTotal"), min: 0, unit: "W" }, "installation", Number(limits.system?.max_total_power || 5000)),
-    { name: "min_output_limit", type: "number", label: t("runtime.minOutput"), min: 0, max: Number(limits.system?.min_output_limit || 5000), unit: "W" },
-    { name: "grid_target_discharge_w", type: "gridTarget", phase: "discharge", direction: "import", label: t("gridTarget.whileDischarging"), min: -gridTargetMax("discharge"), max: gridTargetMax("discharge"), unit: "W" },
-    { name: "grid_target_charge_w", type: "gridTarget", phase: "charge", direction: "export", label: t("gridTarget.whileCharging"), help: t("gridTarget.help"), min: -gridTargetMax("charge"), max: gridTargetMax("charge"), unit: "W" },
+    bounded({ name: "max_total_power", type: "number", label: t("runtime.maxTotal"), min: 0, unit: "W", scale: scaleOf("system", "max_total_power") }, "installation", Number(limits.system?.max_total_power || 5000)),
+    { name: "min_output_limit", type: "number", label: t("runtime.minOutput"), min: 0, max: Number(limits.system?.min_output_limit || 5000), unit: "W", scale: scaleOf("system", "min_output_limit") },
+    { name: "grid_target_discharge_w", type: "gridTarget", phase: "discharge", direction: "import", label: t("gridTarget.whileDischarging"), min: -gridTargetMax("discharge"), max: gridTargetMax("discharge"), unit: "W", scale: scaleOf("system", "grid_target_discharge_w") },
+    { name: "grid_target_charge_w", type: "gridTarget", phase: "charge", direction: "export", label: t("gridTarget.whileCharging"), help: t("gridTarget.help"), min: -gridTargetMax("charge"), max: gridTargetMax("charge"), unit: "W", scale: scaleOf("system", "grid_target_charge_w") },
     { name: "loop_interval", type: "number", label: t("runtime.loop"), ...accepted("system", "loop_interval"), unit: "s" },
   ].map((field) => withDefault(field, defaults.system?.[field.name])));
 
@@ -88,8 +97,8 @@
       { name: "enabled", type: "toggle", fallback: true, label: t("runtime.deviceEnabled") },
       { name: "ac_charge_enabled", type: "toggle", fallback: switchDefault(limits, name, "ac_charge_enabled"), label: t("runtime.acCharging") },
       { name: "ac_discharge_enabled", type: "toggle", strict: true, label: t("runtime.acDischarging"), help: t("runtime.acDischargingHelp") },
-      bounded({ name: "max_power", type: "number", label: t("runtime.maxPower"), min: 0, unit: "W" }, "device", maxPower),
-      { name: "pv_priority_factor", type: "number", label: t("runtime.pvPriority"), ...accepted("devices", "pv_priority_factor"), step: 0.01, unit: "×" },
+      bounded({ name: "max_power", type: "number", label: t("runtime.maxPower"), min: 0, unit: "W", scale: scaleOf("devices", "max_power") }, "device", maxPower),
+      { name: "pv_priority_factor", type: "number", label: t("runtime.pvPriority"), ...accepted("devices", "pv_priority_factor"), unit: "×" },
       {
         name: "offgrid_socket_mode",
         type: "select",
@@ -106,7 +115,7 @@
         label: t("runtime.acRole"),
         options: choices("runtime_role").map((value) => ({ value, label: t(`runtime.role.${value.replace("ac_", "")}`) })),
       });
-      fields.push({ name: "ac_charge_power_w", type: "number", label: t("runtime.acPower"), min: 0, max: Number(limits.ac_charge_power_max || 5000), unit: "W", clearable: true, placeholder: t("control.deviceMax"), help: t("runtime.acPowerHelp") });
+      fields.push({ name: "ac_charge_power_w", type: "number", label: t("runtime.acPower"), min: 0, max: Number(limits.ac_charge_power_max || 5000), unit: "W", scale: scaleOf("devices", "ac_charge_power_w"), clearable: true, emptyIsMaximum: true, placeholder: t("control.deviceMax"), help: t("runtime.acPowerHelp") });
       const reason = String(device.runtime_role_reason || "").trim();
       if (reason) fields.push({ name: "_role_reason", type: "readonly", label: t("runtime.roleSetBy"), value: reason });
     }
