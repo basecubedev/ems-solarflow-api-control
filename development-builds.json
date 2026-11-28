@@ -1,6 +1,21 @@
 {
   "builds": [
     {
+      "admin_digest": "sha256:79fd428413b5c8fef0fe4968347a40203b8256ba2c65268094fde099ca6c713f",
+      "admin_image": "ghcr.io/basecubedev/ems-solarflow-admin:dev-feat-battery-diagnosis-telemetry-bc8348a4f4-c948763-46126729994-1",
+      "build_id": "dev-feat-battery-diagnosis-telemetry-bc8348a4f4-c948763-46126729994-1",
+      "channel": "development",
+      "created_at": "2026-11-28T09:03:33Z",
+      "display_name": "Feature feat-battery-diagnosis-telemetry",
+      "ems_digest": "sha256:ff9f5d12eef86f6afad94a152363f0325e5ed12393619a363db625e155c2017f",
+      "ems_image": "ghcr.io/basecubedev/ems-solarflow-api-control:dev-feat-battery-diagnosis-telemetry-bc8348a4f4-c948763-46126729994-1",
+      "installable": true,
+      "revision": "c94876335599ed83e1791dd45c9db0d6ac50069c",
+      "run_attempt": 1,
+      "run_id": "46126729994",
+      "tag": "dev-feat-battery-diagnosis-telemetry-bc8348a4f4-c948763-46126729994-1"
+    },
+    {
       "admin_digest": "sha256:e0f162c7151a8aeb23865bbad6ffd6e2c78cf9d0fc14c48bd23a3a9a4c6f1a23",
       "admin_image": "ghcr.io/basecubedev/ems-solarflow-admin:dev-feat-settings-controls-82341d2ed6-1661a8e-46126667788-1",
       "build_id": "dev-feat-settings-controls-82341d2ed6-1661a8e-46126667788-1",
