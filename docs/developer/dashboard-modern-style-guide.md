@@ -129,7 +129,7 @@ built stylesheet.
 | `--m-text`, `--m-muted`, `--m-muted-2` | three levels of ink |
 | `--m-accent`, `--m-accent-ink` | the one interactive colour: focus ring, selected navigation, primary button (a destructive one wears `--m-fault`, the start of a checked update `--m-ok`) |
 | `--m-selected-bg`, `--m-selected-ink` | the chosen segment of a segmented control, and a badge's fill and ink |
-| `--m-choice` | what is chosen in a setting: a pressed month chip, the pressed option of a setting's `ui/Segmented` (`choice`), a stepper's bar; a calm blue that marks the choice without drawing the eye |
+| `--m-choice` | what is chosen: a switch that is on, a pressed month chip, the pressed option of a setting's `ui/Segmented` (`choice`), a stepper's bar, a ticked checkbox or radio (`.check`, `.chip`) in every app; a calm blue that marks the choice without drawing the eye |
 | `--m-quiet-bg` | the fill of a badge that brings its own ink (a warning, the Admin's operating value): grey in Graphite, deep navy in Midnight |
 | `--m-ok`, `--m-warn`, `--m-fault` | status, always with an icon and a word; `--m-fault` and `--m-ok` also fill the two primary buttons above |
 

@@ -460,7 +460,6 @@
   .readonly { font-size: 13px; padding: 8px 0; }
   .chips { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
   .chip { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--m-line-strong); font-size: 12.5px; cursor: pointer; }
-  .chip input { accent-color: var(--m-accent); }
   .help { margin: 0; font-size: 12px; color: var(--m-muted); }
   .preview p { margin: 0 0 6px; }
   .preview ul, .next { margin: 0; padding-left: 18px; font-size: 13px; display: flex; flex-direction: column; gap: 4px; }

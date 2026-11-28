@@ -241,7 +241,8 @@ textarea.input { height: auto; padding: 8px 10px; }
 .input:focus { outline: 2px solid var(--m-accent); outline-offset: 0; border-color: transparent; }
 .input[aria-invalid="true"] { border-color: var(--m-fault); }
 .check { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; }
-.check input { width: 16px; height: 16px; accent-color: var(--m-accent); }
+.check input { width: 16px; height: 16px; accent-color: var(--m-choice); }
+.chip input { accent-color: var(--m-choice); }
 
 .switch { position: relative; display: inline-flex; flex: none; width: 42px; height: 24px; }
 .switch input { position: absolute; inset: 0; z-index: 1; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; }
