@@ -1,6 +1,9 @@
 # Flashing the card
 
-> **Video:** [Install Raspberry Pi](https://www.youtube.com/watch?v=8yq6SYDR6sY)
+> **Video:** [Set Up Your Appliance](https://www.youtube.com/watch?v=1gVK7pp9y0Q)
+> ([Deutsch](https://www.youtube.com/watch?v=5TGAYqA6CVc)), the whole setup in
+> four minutes · [Install Raspberry Pi](https://www.youtube.com/watch?v=8yq6SYDR6sY),
+> the older, longer walkthrough
 
 ## Purpose
 

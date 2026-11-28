@@ -5,6 +5,12 @@ runs your energy management and nothing else. You flash one card, plug it in,
 and manage it from a browser with the **Appliance Manager** on port `8088`.
 There is no shell to learn and no operating system to maintain by hand.
 
+> **New to the Raspberry Pi?** The film
+> [Set Up Your Appliance](https://www.youtube.com/watch?v=1gVK7pp9y0Q)
+> ([Deutsch](https://www.youtube.com/watch?v=5TGAYqA6CVc)) shows the whole setup
+> in four minutes, from the empty card to the dashboard, so you can judge the
+> effort before you begin.
+
 Each guide follows the same shape: what the workflow is for, when to use it,
 what you need first, numbered steps with what you see and what changes, then
 warnings and recovery.

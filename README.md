@@ -78,7 +78,7 @@ InfluxDB stores energy history and is optional — control does not need it. [Pi
 
 The **appliance image** turns the board into a box that runs EMS and nothing
 else: flash one card, plug in Ethernet, power on. No shell to learn and no
-operating system to maintain by hand.
+operating system to maintain by hand. New to the Raspberry Pi? **[Watch the whole setup in four minutes →](https://www.youtube.com/watch?v=1gVK7pp9y0Q)** · [Deutsch](https://www.youtube.com/watch?v=5TGAYqA6CVc)
 
 One writable root, patched in place by `apt`, on a 16 GB card or larger. Built
 for the **Raspberry Pi 3, 3B+, 4 and 5** — one image file per board. A failed
