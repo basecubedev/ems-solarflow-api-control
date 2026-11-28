@@ -188,6 +188,20 @@ export function shownValue(id, raw) {
 }
 
 /**
+ * The value a chart draws for a series: its shown value, or, for a series
+ * drawn as a floor under the battery's charge (``below``), its size below zero.
+ */
+export function plottedValue(series, raw) {
+  if (!series?.below || raw === null || raw === undefined) return shownValue(series?.id, raw);
+  return 0 - Math.abs(Number(raw));
+}
+
+/** What a chart draws: each series' values as ``plottedValue`` gives them, an empty list for a series without any. */
+export function plottedLists(series, values) {
+  return series.map((s) => (values?.[s.id] || []).map((raw) => plottedValue(s, raw)));
+}
+
+/**
  * The span a chart's time axis shows for an answer's ``[start, end]``: up to
  * now at most, as a range reaching into the future has no data there yet,
  * but never short of the ``latest`` point, which a browser clock behind the

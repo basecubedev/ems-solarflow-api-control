@@ -210,7 +210,7 @@ gives you the accumulated one.
 
 ### Batteries
 
-![Analytics, Batteries view: WR1's two packs' temperature over a cold night beside the inverter's, on a scale through 0 °C, the measure Temperature, Pack state of charge, Cell voltage or Pack power, Basic or Expert, the state of charge overlay, the coldest and the warmest pack as KPI cards, and the States card opened with the lanes Heating and Too cold](../../assets/screenshots/dashboard/dashboard-analytics-batteries.png)
+![Analytics, Batteries view: WR1's two packs' temperature over a cold night beside the inverter's, on a scale through 0 °C, the measure Temperature, Pack state of charge, Cell voltage, Pack power or Winter, Basic or Expert, the state of charge overlay, the coldest and the warmest pack as KPI cards, and the States card opened with the lanes Heating and Too cold](../../assets/screenshots/dashboard/dashboard-analytics-batteries.png)
 
 **Batteries** shows the batteries of one device at a time: its device choice
 lists every device with a battery the EMS controls, also one that is offline
@@ -243,6 +243,29 @@ packs shared the work, and what the EMS decided for it.
     charges and above while it discharges, as the **Battery** view draws the
     device's, so packs that do not share the work evenly show. **Strongest
     discharge** and **Strongest charge** of the period are the KPI cards.
+  - **Winter** shows what a cold morning does to the battery in one view: what
+    charged it, the sun or the grid, where the device's power went, and how
+    warm the packs were meanwhile. Its chart draws the device's **Solar**,
+    **AC charging** and **Output** in watts and the **Battery** below zero
+    while it charges. **Charge accepted**, what the battery management lets
+    the battery take, is a shaded room below zero with a dotted floor that
+    the battery's charge can fill; while the battery is too cold to take
+    anything, the room is gone. **State of charge**, **Minimum SoC** and
+    **Winter target** share the percent scale on the right. The
+    **Temperature** chart under it draws the packs and the inverter as the
+    Temperature measure does. Both charts show the same moment under the
+    pointer, zoom together and end their time axes at the same place, and
+    the States below add, in Basic too, the **AC charging role** and
+    **Battery first**. A typical winter morning reads from left to right:
+    the night took the charge below the minimum and the packs below 0 °C;
+    the sun rises, **Battery first** starts and the device gives the house
+    no more than its minimum output, but the battery accepts no charge yet,
+    so the sun's power only heats the packs, with **Heating** on; once they
+    are warm the room opens and the sun charges the battery, with no **AC
+    charging**; when the charge is back at the minimum, **Battery first**
+    ends and the **Output** starts.
+
+    ![Analytics, Batteries view, measure Winter: a cold morning with the charge below the minimum, the battery accepting no charge while its packs are below 0 °C and the sun's power only heating them, then the sun charging the battery into the shaded room of the charge it accepts with no AC charging and no output, the output starting when the charge is back at the minimum, the packs' and the inverter's temperature in a second chart under it, and the States card opened with Heating and Too cold from the device and AC charging role and Battery first from the EMS](../../assets/screenshots/dashboard/dashboard-analytics-batteries-winter.png)
   - **Voltage**, in Expert, draws every pack's voltage across all its cells
     and the **Device**'s battery voltage, with **Lowest pack voltage** and
     **Highest pack voltage** of the period as KPI cards.
@@ -251,25 +274,37 @@ packs shared the work, and what the EMS decided for it.
   - **Limits**, in Expert, draws in watts what the battery accepts now,
     **Charge accepted** and **Discharge accepted**, as its battery management
     reports them, and the **AC charge limit** the device is set to.
-- **Basic** and **Expert** — Basic shows what a battery in the cold needs and
-  how its packs share the work; Expert adds **Voltage**, **Current**,
+- **Basic** and **Expert** — Basic shows what a battery in the cold needs,
+  how its packs share the work and what a winter morning does; Expert adds **Voltage**, **Current**,
   **Limits**, the winter overlays and the states the EMS keeps.
   This browser remembers the choice.
 - **Overlays** — **State of charge**; Expert adds **Minimum SoC** and **Winter
   target**, the minimum state of charge [winter mode](../../winter-mode.md)
-  plans while it is on, both on the percent scale on the right.
+  plans while it is on, both on the percent scale on the right. **Winter**
+  draws all three anyway and offers no overlays.
 - **States** — folded under the chart, so it stays out of the way until it is
   wanted. Folded, it names the states that were on and for how long, for
   example *Heating 40 min · Too cold 6.5 h*. Opened, each state is a lane on
   the chart's time axis with a bar where it was on and how long that was in
-  total:
-  - **Heating** — the device reports its battery heating on.
-  - **Too cold** — the device reports a pack too cold.
-  - In Expert also **AC charging role** — the device was in its AC charging
-    role, charging from the grid as the EMS commanded or as the firmware
-    started it; **Export hold** — winter mode kept the device's solar power
-    for the battery instead of exporting it; **Derating** — the device
-    reports reduced power; **Error flag** — the device reports an error.
+  total. Each lane names where it comes from: *Device* for a state the device
+  reports, *EMS* for one the EMS decided.
+  - **Heating** (Device) — the device reports its battery heating on.
+  - **Too cold** (Device) — the device reports a pack too cold. Not every
+    device reports it.
+  - In Expert, and with **Winter** in Basic too, also **AC charging role**
+    (EMS) — the device was in its AC charging role, charging from the grid
+    as the EMS commanded or as the firmware started it; and **Battery
+    first** (EMS) — [winter mode](../../winter-mode.md#pv-charges-the-battery-first) held the device's
+    power to the house at its minimum output (`min_output_limit`) so that
+    its solar power refills a battery the
+    night left at least two points below its minimum SoC. It holds from the
+    day's first solar power, or from today's step of the minimum, until the
+    charge is back at the minimum, for three hours at most, so a battery too
+    cold to take a charge does not keep its solar power from the house all
+    day. It has nothing to do with the temperature or with charging from
+    the grid.
+  - In Expert also **Derating** (Device) — the device reports reduced power;
+    **Error flag** (Device) — the device reports an error.
 
   A state the device never reported in the period reads *not reported*, so it
   is not mistaken for off. Each point keeps whether the state was on at any

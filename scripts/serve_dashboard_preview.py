@@ -61,6 +61,7 @@ from dashboard_preview_data import (  # noqa: E402
     SCENARIOS,
     build_scenario,
     diagnose_report,
+    PREVIEW_WINTER_DEVICE_SERIES,
     preview_battery_series,
     preview_battery_value,
 )
@@ -418,9 +419,11 @@ class PreviewHandler(BaseHTTPRequestHandler):
         # differs so the dashboard can label the data origin.
         items = self._scenario()["history"]
         requested = [s for s in (query.get("series", [""])[0] or "").split(",") if s]
+        battery_view = any(preview_battery_series(s) for s in requested)
+        winter = PREVIEW_WINTER_DEVICE_SERIES if battery_view and "pv" in requested else ()
         keys = [
             s for s in requested
-            if s in self._SERIES_FIELDS or s.startswith("consumer:") or preview_battery_series(s)
+            if s in self._SERIES_FIELDS or s.startswith("consumer:") or preview_battery_series(s) or s in winter
         ] or [
             "pv",
             "output",
@@ -437,7 +440,7 @@ class PreviewHandler(BaseHTTPRequestHandler):
             time_axis.append(epoch)
             hour = (epoch % 86400) / 3600.0
             for key in keys:
-                if preview_battery_series(key):
+                if preview_battery_series(key) or key in winter:
                     cols[key].append(preview_battery_value(key, hour))
                 elif key.startswith("consumer:"):
                     consumer = (item.get("consumers") or {}).get(unquote(key[len("consumer:"):])) or {}

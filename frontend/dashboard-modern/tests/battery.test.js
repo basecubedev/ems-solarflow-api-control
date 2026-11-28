@@ -13,6 +13,7 @@ import {
   batteryOverlays,
   batteryRequest,
   batteryStyle,
+  besideChartIds,
   BATTERY_MEASURES,
   cardSeriesIds,
   laneReported,
@@ -32,9 +33,9 @@ import {
 } from "../src/lib/battery.js";
 import { ampRange, ampText, celsiusRange, celsiusTick, currentReading } from "../src/lib/batteryAxes.js";
 
-test("Basic offers temperature, charge, cell voltage and pack power; Expert adds voltage, current and the limits", () => {
-  assert.deepEqual(batteryMeasures(false).map((m) => m.id), ["temperature", "charge", "cells", "power"]);
-  assert.deepEqual(batteryMeasures(true).map((m) => m.id), ["temperature", "charge", "cells", "power", "voltage", "current", "limits"]);
+test("Basic offers temperature, charge, cell voltage, pack power and winter; Expert adds voltage, current and the limits", () => {
+  assert.deepEqual(batteryMeasures(false).map((m) => m.id), ["temperature", "charge", "cells", "power", "winter"]);
+  assert.deepEqual(batteryMeasures(true).map((m) => m.id), ["temperature", "charge", "cells", "power", "winter", "voltage", "current", "limits"]);
 });
 
 test("the charge draws every pack's own state of charge on a percent axis, with the percent overlays", () => {
@@ -73,7 +74,7 @@ test("pack power, voltage and current draw every pack; the voltage the device's 
   assert.deepEqual(batteryChartIds("voltage", [1, 2], 1, [], true), ["pack_voltage:1", "pack_voltage:2", "device_voltage"]);
   assert.deepEqual(batteryChartIds("current", [2], 2, [], true), ["pack_current:2"]);
   assert.deepEqual(batteryChartIds("voltage", [], null, [], true), []);
-  assert.deepEqual(batteryMeasures(true).map((m) => m.unit), ["°C", "%", "V", "W", "V", "A", "W"]);
+  assert.deepEqual(batteryMeasures(true).map((m) => m.unit), ["°C", "%", "V", "W", "W", "V", "A", "W"]);
   for (const id of ["device_temp", "device_voltage"]) {
     assert.deepEqual(batteryStyle(id), { label: `series.${id}`, token: "--inverter", fill: false });
   }
@@ -151,6 +152,44 @@ test("a device without packs asks for nothing, not for its lanes alone", () => {
 test("one request carries the chart and the lanes of the detail level", () => {
   assert.deepEqual(batteryRequest(["pack_temp:1"], false), ["pack_temp:1", "heat_state", "low_temp"]);
   assert.deepEqual(stateLanes(true).map((lane) => lane.id), ["heat_state", "low_temp", "ac_input", "winter_hold", "derate", "error_flag"]);
+});
+
+test("winter draws the device's power and charge with the packs' temperatures beside them, and takes no overlays", () => {
+  const winter = ["pv", "ac_charge", "battery", "output", "charge_avail", "soc", "min_soc", "winter_target"];
+  assert.deepEqual(batteryChartIds("winter", [1, 2], null, ["soc", "min_soc", "winter_target"], false), winter);
+  assert.deepEqual(batteryChartIds("winter", [], null, [], true), winter);
+  assert.deepEqual(besideChartIds("winter", [1, 2]), ["pack_temp:1", "pack_temp:2", "device_temp"]);
+  assert.deepEqual(besideChartIds("temperature", [1, 2]), []);
+  assert.deepEqual(batteryOverlays(true, "winter"), []);
+  assert.deepEqual(batteryOverlays(false, "temperature").map((o) => o.id), ["soc"]);
+  assert.equal(shownMeasure("winter", false).id, "winter");
+  for (const id of winter) assert.ok(`series.${id}` in STRINGS, id);
+});
+
+test("winter shows in Basic the lanes that say what the EMS decided, and one request carries both charts", () => {
+  assert.deepEqual(stateLanes(false, "winter").map((lane) => lane.id), ["heat_state", "low_temp", "ac_input", "winter_hold"]);
+  assert.deepEqual(stateLanes(false, "temperature").map((lane) => lane.id), ["heat_state", "low_temp"]);
+  assert.deepEqual(stateLanes(true, "winter").map((lane) => lane.id), ["heat_state", "low_temp", "ac_input", "winter_hold", "derate", "error_flag"]);
+  assert.deepEqual(batteryRequest(["pv", "pack_temp:1"], false, [], "winter"), ["pv", "pack_temp:1", "heat_state", "low_temp", "ac_input", "winter_hold"]);
+});
+
+test("winter draws the device's power as the other views do, and what the battery accepts as a dotted floor under the charge", () => {
+  assert.deepEqual(batteryStyle("pv", "winter"), { label: "series.pv", token: "--pv" });
+  assert.deepEqual(batteryStyle("battery", "winter"), { label: "series.battery", token: "--battery" });
+  assert.deepEqual(batteryStyle("charge_avail", "winter"), { label: "series.charge_avail", token: "--m-muted", dash: [2, 3], below: true });
+  assert.deepEqual(batteryStyle("charge_avail", "limits"), { label: "series.charge_avail", token: "--battery", fill: false });
+  assert.equal(batteryStyle("soc", "winter").unit, "%");
+  assert.equal(batteryStyle("output", "temperature"), null);
+});
+
+test("every lane names where it comes from: the device reports its battery's states, the EMS decides the charging role and the winter hold", () => {
+  const sources = Object.fromEntries(stateLanes(true).map((lane) => [lane.id, lane.source]));
+  assert.deepEqual(sources, { heat_state: "device", low_temp: "device", ac_input: "ems", winter_hold: "ems", derate: "device", error_flag: "device" });
+  for (const source of new Set(Object.values(sources))) {
+    assert.ok(`lanes.source.${source}` in STRINGS, source);
+    assert.ok(`lanes.sourceTitle.${source}` in STRINGS, source);
+  }
+  assert.equal(STRINGS["series.winter_hold"].de, "Akku zuerst");
 });
 
 test("a pack series names its pack", () => {

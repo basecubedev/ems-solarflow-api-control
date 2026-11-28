@@ -927,7 +927,9 @@ device reports it, a value it does not report left out: `heat_state`
 (`derateFlag`) and `input_limit_w` (`inputLimit`, the AC charge limit). Beside
 them the EMS writes what it decided for the device in that cycle:
 `winter_target`, the minimum SoC winter mode plans, only while winter mode is
-on, `winter_hold`, 1 while the export hold keeps the device's PV from export,
+on, `winter_hold`, 1 while winter mode keeps the device's PV for its battery
+([PV charges the battery first](../winter-mode.md#pv-charges-the-battery-first),
+shown as *Battery first*),
 and `ac_input`, 1 while its AC role is charging, as the EMS commands it or
 follows a charge the firmware started. A yes/no is written as 1 or 0, as the history serves no
 booleans.

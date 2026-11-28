@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import test from "node:test";
 import assert from "node:assert/strict";
-import { integrateKwh, hourlyKwh, gapRanges, shownSpan, withGapBreaks, sameTimeComparison, sampleSpacing, localDayStart, niceCeiling, zoomStep, zoomDiffers, zoomSpan, zoomCenter, panStep, wheelGesture, wheelZoomFactor, pinchWindow, ZOOM_STEP, escapeLeavesZoom, emptyKey, sourceKey, tickLabels, tickSpace, tickPad, atLeastAMinute, shownValue, batteryReading, axisPower } from "../src/lib/history.js";
+import { integrateKwh, hourlyKwh, gapRanges, shownSpan, withGapBreaks, sameTimeComparison, sampleSpacing, localDayStart, niceCeiling, zoomStep, zoomDiffers, zoomSpan, zoomCenter, panStep, wheelGesture, wheelZoomFactor, pinchWindow, ZOOM_STEP, escapeLeavesZoom, emptyKey, sourceKey, tickLabels, tickSpace, tickPad, atLeastAMinute, shownValue, plottedValue, plottedLists, batteryReading, axisPower } from "../src/lib/history.js";
 import { createFormat } from "../../shared/lib/format.js";
 
 const MIDNIGHT = localDayStart(new Date(1_800_000_000 * 1000));
@@ -389,4 +389,18 @@ test("a series answer names the span it covers in epoch seconds, and none it can
     globalThis.fetch = original;
   }
   assert.deepEqual(spans, [[1795820400, 1795906800], null, null, null]);
+});
+
+test("a series drawn as a floor under the charge is plotted at its size below zero, any other at its shown value", () => {
+  assert.equal(plottedValue({ id: "charge_avail", below: true }, 1200), -1200);
+  assert.equal(plottedValue({ id: "charge_avail", below: true }, -50), -50);
+  assert.equal(plottedValue({ id: "charge_avail", below: true }, null), null);
+  assert.equal(plottedValue({ id: "charge_avail" }, 1200), 1200);
+  assert.equal(plottedValue({ id: "battery" }, 300), -300);
+});
+
+test("a chart draws every series as plottedValue gives it, a series without values as an empty list", () => {
+  const series = [{ id: "charge_avail", below: true }, { id: "battery" }, { id: "pv" }, { id: "output" }];
+  assert.deepEqual(plottedLists(series, { charge_avail: [1200, null], battery: [300, -100], pv: [5] }), [[-1200, null], [-300, 100], [5], []]);
+  assert.deepEqual(plottedLists(series, null), [[], [], [], []]);
 });

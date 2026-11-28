@@ -981,16 +981,22 @@ energy KPI cards (no extra chart pages):
   `cell_min:<n>`/`cell_max:<n>` (KPIs Lowest cell, Highest cell, and Widest
   cell spread from the pack's `cell_spread:<n>`, which the request carries
   beside them), every pack's `pack_power:<n>`, drawn below zero while it
-  charges as the battery is (KPIs Strongest discharge, Strongest charge), or,
-  in Expert,
+  charges as the battery is (KPIs Strongest discharge, Strongest charge),
+  Winter, or, in Expert,
   every pack's `pack_voltage:<n>` with the device's `device_voltage` (KPIs
   Lowest and Highest pack voltage), every pack's `pack_current:<n>` drawn like
   its power on an amp axis through 0 A (KPIs Strongest discharge, Strongest
   charge), and
   `charge_avail`, `discharge_avail` and `input_limit`. Its overlays are
-  `soc`, and in Expert `min_soc` and `winter_target`. The same request carries the state lanes of the folded
-  **States** card: `heat_state` and `low_temp`, in Expert also `ac_input`,
-  `winter_hold`, `derate` and `error_flag`. Basic or Expert is kept in
+  `soc`, and in Expert `min_soc` and `winter_target`. Winter draws the
+  device's `pv`, `ac_charge`, `battery` (below zero while it charges),
+  `output` and `charge_avail` (drawn at its size below zero, a shaded room
+  under the charge) in watts with `soc`, `min_soc` and `winter_target` on the percent
+  axis and no overlays, and under it a second chart of every pack's
+  `pack_temp:<n>` with `device_temp`; the two share the cursor and the zoom,
+  and one request carries both. The same request carries the state lanes of the folded
+  **States** card: `heat_state` and `low_temp`, with Winter or in Expert also
+  `ac_input` and `winter_hold`, in Expert also `derate` and `error_flag`. Basic or Expert is kept in
   `localStorage` (`ems-modern.analyticsDetail`). See
   [Batteries](user/dashboard/energy.md#batteries).
 

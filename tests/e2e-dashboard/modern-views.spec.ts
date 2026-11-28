@@ -691,7 +691,7 @@ test.describe("Modern dashboard views: cell voltage @smoke", () => {
     await expect(temps.locator(".kpi-label")).toHaveText(["Coldest pack · 24 h", "Warmest pack · 24 h"]);
     await expect(temps.locator(".kpi-value")).toHaveText(["3.0 °C", "3.0 °C"]);
     const measures = page.getByRole("group", { name: "Measure" });
-    await expect(measures.getByRole("button")).toHaveText(["Temperature", "Pack state of charge", "Cell voltage", "Pack power"]);
+    await expect(measures.getByRole("button")).toHaveText(["Temperature", "Pack state of charge", "Cell voltage", "Pack power", "Winter"]);
     const [both] = await Promise.all([
       page.waitForRequest(batteryRead((params) => params.get("devices") === "WR2")),
       page.getByRole("combobox", { name: "Device" }).selectOption("WR2"),
@@ -787,10 +787,12 @@ test.describe("Modern dashboard views: cell voltage @smoke", () => {
       detail.getByRole("button", { name: "Expert", exact: true }).click(),
     ]);
     expect(new URL(expert.url()).searchParams.get("series")).toBe("pack_temp:1,device_temp,heat_state,low_temp,ac_input,winter_hold,derate,error_flag");
-    await expect(lanes).toHaveText([/1 min on$/, /2 min on$/, /^AC charging role.*never on$/, /^Export hold.*never on$/, /^Derating.*never on$/, /^Error flag.*not reported$/]);
+    await expect(lanes).toHaveText([/1 min on$/, /2 min on$/, /^AC charging role.*never on$/, /^Battery first.*never on$/, /^Derating.*never on$/, /^Error flag.*not reported$/]);
+    await expect(lanes.locator(".source")).toHaveText(["Device", "Device", "EMS", "EMS", "Device", "Device"]);
+    await expect(lanes.filter({ hasText: "Battery first" }).locator(".source")).toHaveAttribute("title", "Decided by the EMS");
     await expect(page.getByRole("group", { name: "Overlays" }).getByRole("button")).toHaveText(["State of charge", "Minimum SoC", "Winter target"]);
     const measures = page.getByRole("group", { name: "Measure" });
-    await expect(measures.getByRole("button")).toHaveText(["Temperature", "Pack state of charge", "Cell voltage", "Pack power", "Voltage", "Current", "Limits"]);
+    await expect(measures.getByRole("button")).toHaveText(["Temperature", "Pack state of charge", "Cell voltage", "Pack power", "Winter", "Voltage", "Current", "Limits"]);
     const [limits] = await Promise.all([
       page.waitForRequest(batteryRead((params) => (params.get("series") || "").startsWith("charge_avail"))),
       measures.getByRole("button", { name: "Limits", exact: true }).click(),
@@ -810,7 +812,72 @@ test.describe("Modern dashboard views: cell voltage @smoke", () => {
       })(),
     ]);
     expect(new URL(basic.url()).searchParams.get("devices")).toBe("WR1");
-    await expect(page.getByRole("group", { name: "Measure" }).getByRole("button")).toHaveText(["Temperature", "Pack state of charge", "Cell voltage", "Pack power"]);
+    await expect(page.getByRole("group", { name: "Measure" }).getByRole("button")).toHaveText(["Temperature", "Pack state of charge", "Cell voltage", "Pack power", "Winter"]);
+  });
+
+  test("the batteries view's winter measure draws what charged the battery and where its power went over the packs' temperatures, both charts at one moment and one zoom", async ({ page }) => {
+    await shapeLive(page, withCells);
+    await openModern(page, "#/analytics");
+    await expect(page.locator(".chart .u-over")).toBeVisible();
+    await Promise.all([
+      page.waitForRequest(batteryRead()),
+      page.getByTestId("analytics-view-block").locator(".seg").first().getByRole("button", { name: "Batteries", exact: true }).click(),
+    ]);
+    const [winter] = await Promise.all([
+      page.waitForRequest(batteryRead((params) => (params.get("series") || "").startsWith("pv,"))),
+      page.getByRole("group", { name: "Measure" }).getByRole("button", { name: "Winter", exact: true }).click(),
+    ]);
+    expect(new URL(winter.url()).searchParams.get("series")).toBe("pv,ac_charge,battery,output,charge_avail,soc,min_soc,winter_target,pack_temp:1,device_temp,heat_state,low_temp,ac_input,winter_hold");
+    expect(new URL(winter.url()).searchParams.get("devices")).toBe("WR1");
+    const power = page.getByRole("region", { name: "Batteries", exact: true });
+    const temperature = page.getByRole("region", { name: "Temperature", exact: true });
+    await expect(power.locator(".legend-item")).toHaveText([/^Solar\d/, /^AC charging0\sW$/, /^Battery(Charge \d|Discharge \d|0\sW)/, /^Output\d/, /^Charge accepted\d/, /^State of charge\d+%$/, /^Minimum SoC15%$/, /^Winter target25%$/]);
+    await expect(power.locator(".legend-item").filter({ hasText: "Charge accepted" }).locator("i")).toHaveClass(/dash/);
+    await expect(power.locator(".card-sub")).toHaveText("From InfluxDB · what charged the battery, where its power went, and its charge");
+    await expect(temperature.locator(".legend-item")).toHaveText([/^Pack 1.*°C$/, /^Inverter.*°C$/]);
+    await expect(page.getByRole("group", { name: "Overlays" })).toHaveCount(0);
+    const states = page.getByTestId("battery-states");
+    await expect(states.locator(".card-sub").first()).toHaveText("As the device reports them, and what the EMS decided");
+    await states.getByRole("button", { name: "States" }).click();
+    await expect(states.locator("[data-lane] .source")).toHaveText(["Device", "Device", "EMS", "EMS"]);
+    await expect(states.getByTestId("state-lanes")).toMatchAriaSnapshot(`
+      - list "States":
+        - listitem: /^Heating \\(Reported by the device\\) (up to|never|\\d)/
+        - listitem: /^Too cold \\(Reported by the device\\) (up to|never|\\d)/
+        - listitem: /^AC charging role \\(Decided by the EMS\\) (up to|never|\\d)/
+        - listitem: /^Battery first \\(Decided by the EMS\\) (up to|never|\\d)/
+    `);
+
+    const latest = await power.locator(".legend-time").textContent();
+    await power.locator(".u-over").scrollIntoViewIfNeeded();
+    const box = await power.locator(".u-over").boundingBox();
+    const under = await temperature.locator(".u-over").boundingBox();
+    expect(Math.abs(under.x - box.x)).toBeLessThan(1);
+    expect(Math.abs(under.width - box.width)).toBeLessThan(1);
+    await page.mouse.move(box.x + box.width * 0.25, box.y + box.height / 2);
+    const moment = power.locator(".legend-time");
+    await expect(moment).not.toHaveText(latest || "");
+    await expect(temperature.locator(".legend-time")).toHaveText((await moment.textContent()) || "");
+
+    await page.mouse.move(box.x + box.width * 0.3, box.y + box.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(box.x + box.width * 0.6, box.y + box.height / 2, { steps: 6 });
+    const selected = (chart) => chart.locator(".u-select").evaluate((node) => node.getBoundingClientRect().width);
+    await expect.poll(() => selected(power)).toBeGreaterThan(0);
+    await page.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))));
+    expect(await selected(temperature)).toBe(0);
+    await page.mouse.up();
+    await expect(power.getByTestId("chart-zoom-reset")).toBeVisible();
+    await expect(temperature.getByTestId("chart-zoom-reset")).toBeVisible();
+    await power.getByTestId("chart-zoom-reset").click();
+    await expect(page.getByTestId("chart-zoom-reset")).toHaveCount(0);
+
+    await page.mouse.move(box.x + box.width * 0.5, box.y - 40);
+    await power.getByTestId("chart-zoom-in").click();
+    await expect(power.getByTestId("chart-zoom-reset")).toBeVisible();
+    await expect(temperature.getByTestId("chart-zoom-reset")).toBeVisible();
+    await temperature.getByTestId("chart-zoom-reset").click();
+    await expect(page.getByTestId("chart-zoom-reset")).toHaveCount(0);
   });
 
   test("the batteries view draws each pack's power below zero while it charges, as the battery, and in Expert its voltage beside the device's and its current", async ({ page }) => {
@@ -1218,7 +1285,7 @@ test.describe("Modern dashboard views: labels fit @smoke", () => {
       await expect(controls).toBeVisible();
       await controls.locator(".detail").getByRole("button").last().click();
       const measures = controls.locator(".seg").first().getByRole("button");
-      await expect(measures).toHaveCount(7);
+      await expect(measures).toHaveCount(8);
       for (let measure = 0; measure < await measures.count(); measure += 1) {
         await measures.nth(measure).click();
         await expect(page.locator(".kpi-label").first()).toBeVisible();

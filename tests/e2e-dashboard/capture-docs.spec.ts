@@ -273,6 +273,21 @@ test.describe("EMS Dashboard documentation captures @docs", () => {
     await shoot(page, "dashboard-analytics-batteries");
   });
 
+  test("dashboard-analytics-batteries-winter", async ({ page, baseURL }) => {
+    await open(page, baseURL, "#/analytics", { scenario: "ac-charging", viewport: { width: DESKTOP.width, height: 1400 } });
+    await waitForChart(page);
+    await page.getByTestId("analytics-view-block").getByRole("button", { name: "Batteries", exact: true }).click();
+    await page.getByRole("group", { name: "Measure" }).getByRole("button", { name: "Winter", exact: true }).click();
+    await expect(page.getByRole("region", { name: "Batteries", exact: true }).locator(".legend-item")).toHaveCount(8);
+    await expect(page.getByRole("region", { name: "Temperature", exact: true }).locator(".legend-item")).toHaveCount(3);
+    await waitForChart(page);
+    const states = page.getByTestId("battery-states");
+    await states.getByRole("button", { name: "States" }).click();
+    await expect(states.getByTestId("state-lanes").locator("[data-lane]")).toHaveCount(4);
+    await scrollTo(page, page.getByTestId("analytics-view-block"), 12);
+    await shoot(page, "dashboard-analytics-batteries-winter");
+  });
+
   test("dashboard-control", async ({ page, baseURL }) => {
     await open(page, baseURL, "#/control", { scenario: "write-mode" });
     await expect(page.getByTestId("runtime-editor")).toBeVisible();

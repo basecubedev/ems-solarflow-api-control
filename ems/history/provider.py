@@ -72,7 +72,7 @@ SERIES_CATALOG = {
             ("low_temp", "Too cold"),
             ("error_flag", "Error flag"),
             ("derate", "Derating"),
-            ("winter_hold", "Export hold"),
+            ("winter_hold", "Battery first"),
             ("ac_input", "AC charging role"),
             ("charge_avail", "Charge accepted"),
             ("discharge_avail", "Discharge accepted"),
